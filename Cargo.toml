@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/vault", "crates/broker", "crates/cli"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/klarlabs/proctor"
+rust-version = "1.90"
+
+[profile.release]
+lto = true

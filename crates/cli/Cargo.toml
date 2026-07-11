@@ -1,0 +1,14 @@
+[package]
+name = "proctor-cli"
+description = "Proctor CLI — demonstrates the credential broker end-to-end."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "proctor"
+path = "src/main.rs"
+
+[dependencies]
+proctor-vault = { path = "../vault" }
+proctor-broker = { path = "../broker" }
