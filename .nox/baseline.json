@@ -88,6 +88,94 @@
       "severity": "medium",
       "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
       "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "28b6b6dac1feebaad5bb6d7f3163930f4db96141011bcc0deb4e2f21ebc7b486",
+      "rule_id": "DATA-001",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "56c61d887cd33b97a5cab5a0d9a4a23a2a46129406d052343093eeed2b3338bb",
+      "rule_id": "DATA-001",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "b01c89397770f396b228c1eaa61a0c919c9530bfbb326c9f670410218fbe2b20",
+      "rule_id": "DATA-001",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "2b22deb24924df5fab845c9e97afd2b25a1800611aa7e87932818f8246932247",
+      "rule_id": "DATA-001",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "a55bf889a83104ce1db71ec2c8f54899bb93f60e509d96d9216103b7cf6b37fa",
+      "rule_id": "SEC-080",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "e098aea6ac57e7af14253b5d534d33e4d2f97d66409d7036b2a53af24b9492c9",
+      "rule_id": "SEC-080",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "40bb643617b22d8d2413440b5e15c97b9e97b4de504727053924e775e2f22399",
+      "rule_id": "SEC-080",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "33751ba59184ff1f1d3d43552e021f2af84a14badb5db0bd11cceb7dae01aca0",
+      "rule_id": "SEC-080",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "bf2fea7d251f835022513eca8887ec6f830b8c99f185186d9f35c9cc63859fd8",
+      "rule_id": "SEC-080",
+      "file_path": "extension/popup.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "699091b7216d6532ccdea0728a1fabe631da5a48b25a724afa482e287122a3f1",
+      "rule_id": "SEC-163",
+      "file_path": "extension/content.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "a6a087dec6aeb878fbedf4d763455723d66be243b34ca819758af3c5a2f0301a",
+      "rule_id": "SEC-163",
+      "file_path": "extension/content.js",
+      "severity": "medium",
+      "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
+      "created_at": "2026-07-12T17:38:00.967175Z"
     }
   ]
 }

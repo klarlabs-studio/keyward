@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Proctor Passbook</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <div class="brand">
+          <span class="logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" role="img">
+              <path
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M7 10V7a5 5 0 0 1 10 0v3"
+              />
+              <rect
+                x="4.5"
+                y="10"
+                width="15"
+                height="10.5"
+                rx="2.2"
+                fill="currentColor"
+                opacity="0.18"
+                stroke="currentColor"
+                stroke-width="1.8"
+              />
+              <circle cx="12" cy="15" r="1.6" fill="currentColor" />
+              <path d="M12 16.4v2.1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+          </span>
+          <div class="brand-text">
+            <span class="brand-name">Proctor Passbook</span>
+            <span class="brand-sub" id="site-label">Reading current site…</span>
+          </div>
+        </div>
+      </header>
+
+      <div class="site-banner" id="site-banner" hidden>
+        <span class="dot"></span>
+        <span id="site-banner-text">Matches this site</span>
+      </div>
+
+      <div class="search">
+        <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8" />
+          <path d="M16.5 16.5 21 21" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </svg>
+        <input
+          id="search"
+          type="search"
+          placeholder="Search vault…"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+
+      <ul class="vault" id="vault-list" aria-label="Vault items"></ul>
+
+      <div class="empty" id="empty-state" hidden>
+        <p>No matching items.</p>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+      <footer class="footer">
+        <span class="proto-badge">Prototype · demo data</span>
+      </footer>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

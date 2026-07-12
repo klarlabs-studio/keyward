@@ -3,6 +3,50 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.12.0] — 2026-07-12
+
+**Phase A build-out — four surfaces in parallel.** Built by four isolated agents in
+their own file lanes, then integrated into one green workspace (all tests pass,
+clippy/fmt clean, `wasm32` build succeeds, warden gate passed).
+
+### Added — `passbook` CLI (`crates/passbook-cli`)
+- Manage the consumer vault from the terminal: `init` (generates + persists the
+  device Secret Key, prints the Emergency Kit), `add-login`, `list [category]`,
+  `show <id> [--reveal]`, `totp <id>` (live code + seconds remaining),
+  `watchtower` (weak/reused report + 0–100 score), `emergency-kit`.
+- Vault persisted as an encrypted `SealedVault` JSON; 2SKD transparently reused.
+  Config via `PROCTOR_PASSBOOK`, `PROCTOR_PASSBOOK_MASTER_FILE`,
+  `PROCTOR_PASSBOOK_SECRETKEY_FILE`. 4 tests (incl. a roundtrip that asserts the
+  on-disk file is ciphertext, not plaintext).
+
+### Added — family sharing (`crates/passbook/src/sharing.rs`)
+- **Per-recipient sealed-box key wrapping:** the 32-byte vault key is wrapped to
+  each member via ephemeral X25519 + HKDF-SHA256 + XChaCha20-Poly1305, so only a
+  member's private key can unwrap it. `Member`/`MemberPublic`/`SharedVault` with
+  `share_to`/`unwrap_for`/`revoke`.
+- **Account recovery is intrinsic:** any existing member can `grant_access` to a
+  new member without the original key-holder. Secrets held in `Zeroizing`/zeroize
+  on drop. 6 tests (member unwraps, non-member rejected, recovery re-grants).
+
+### Added — WebAssembly bindings (`crates/passbook-wasm`)
+- `wasm-bindgen` surface so the tested Rust crypto runs client-side:
+  `password_strength`, `totp_code`, `totp_seconds_remaining`, `watchtower_json`,
+  `seal_vault`, `open_vault`. Target-gated `getrandom` `js` feature for browser
+  entropy; builds clean for `wasm32-unknown-unknown`. README with a full HTML
+  usage example and `wasm-pack build --target web` instructions.
+
+### Added — browser extension (`extension/`)
+- Manifest V3 autofill extension for Proctor Passbook: content script detects
+  username/password fields and fills them through the native value setter with
+  proper `input`/`change` events (SPA-safe); `background.js` service worker relays
+  popup→tab messages; a branded, theme-aware popup lists items with a
+  "matches this site" indicator. Prototype uses demo data; README documents the
+  native-messaging bridge a production build would use so secrets are never bundled.
+
+### Notes
+- Prototype crypto throughout `proctor-passbook`; a formal external review remains
+  before any real use (tracked in the threat model).
+
 ## [1.11.0] — 2026-07-12
 
 **Phase A kickoff — the consumer credential manager (the "1Password equivalent").**

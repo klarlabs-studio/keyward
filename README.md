@@ -42,10 +42,20 @@ crates/
   profiles/ proctor-profiles external, pluggable provider profiles (TOML) — add a
                             provider by dropping a file; no recompile
   passbook/ proctor-passbook consumer credential manager (Phase A): rich item model,
-                            TOTP (RFC 6238), Secret Key (2SKD), Watchtower — PROTOTYPE
+                            TOTP (RFC 6238), Secret Key (2SKD), Watchtower,
+                            family sharing (X25519 sealed-box) — PROTOTYPE
+  passbook-cli/ passbook    manage the consumer vault from the terminal
+                            (init/add-login/list/show/totp/watchtower/emergency-kit)
+  passbook-wasm/ passbook-wasm  wasm-bindgen surface so the vault crypto/TOTP/Watchtower
+                            runs client-side in the browser
   mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
   cli/      proctor         manage the vault (init/add/list) + list profiles + demo
 ```
+
+The consumer product (**Phase A**, the 1Password equivalent) also ships a
+Manifest V3 browser extension for autofill under [`extension/`](extension/) and a
+polished web-vault UX prototype. The vault crypto core (`proctor-passbook`)
+compiles to WebAssembly so the same tested Rust runs in the browser.
 
 New providers are **external config**, not code. Drop a `<id>.toml` into
 `$PROCTOR_PROFILES` (see [`profiles/`](profiles/)) and `proctor profiles` picks it
