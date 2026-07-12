@@ -1,0 +1,55 @@
+<script setup lang="ts">
+// The search bar, on-device vault pill, theme toggle, lock button, and the
+// "New item" action (which asks the shell to open the add dialog).
+
+import { computed } from 'vue';
+import { useVaultStore } from '@/stores/vault';
+
+const vault = useVaultStore();
+const emit = defineEmits<{ (e: 'new-item'): void }>();
+
+const placeholder = computed(() => `Search ${vault.counts.all} items…`);
+
+function toggleTheme(): void {
+  const root = document.documentElement;
+  const current =
+    root.dataset.theme ??
+    (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  root.dataset.theme = current === 'dark' ? 'light' : 'dark';
+}
+</script>
+
+<template>
+  <div class="top">
+    <label class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
+      </svg>
+      <input
+        type="search"
+        :placeholder="placeholder"
+        aria-label="Search vault"
+        :value="vault.query"
+        @input="vault.setQuery(($event.target as HTMLInputElement).value)"
+      />
+    </label>
+    <div class="spacer"></div>
+    <div class="vault-pill"><span class="dot"></span>Family vault · on-device</div>
+    <button class="icon-btn" title="Toggle theme" aria-label="Toggle theme" @click="toggleTheme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z" />
+      </svg>
+    </button>
+    <button class="icon-btn" title="Lock vault" aria-label="Lock vault" @click="vault.lock()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+      </svg>
+    </button>
+    <button class="btn-add" @click="emit('new-item')">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
+        <path d="M12 5v14M5 12h14" />
+      </svg>
+      New item
+    </button>
+  </div>
+</template>

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+# WASM build output — regenerate with `npm run build:wasm`.
+src/wasm/pkg/
+*.local
+.DS_Store

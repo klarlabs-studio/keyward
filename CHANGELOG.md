@@ -3,6 +3,31 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.13.0] — 2026-07-12
+
+**The web vault — a real Vue app on the WASM crypto core.** The polished UX
+prototype is now a working application: unlock, browse, reveal, copy, live 2FA,
+and a security dashboard, all backed by the same tested Rust that ships in the
+CLI and MCP server. Verified running headless (real seal → open round-trip; a
+117-bit strength read and a live RFC-6238 code rendered from WASM).
+
+### Added — `app/` (Vue 3 + Vite + TypeScript + Pinia)
+- **WASM-backed core:** `app/src/lib/passbook.ts` instantiates `passbook-wasm`
+  once and routes all crypto through it (`seal_vault`/`open_vault`/`totp_code`/
+  `watchtower_json`/`password_strength`). The vault persists as a single
+  **encrypted blob in localStorage**; the master password never leaves the module.
+- **Pinia store** (`app/src/stores/vault.ts`): unlock/lock, filtered category
+  views, favourites, add-login, delete — every mutation reseals + repersists and
+  recomputes Watchtower.
+- **Component layer** (faithful port of the design prototype): unlock screen,
+  3-pane shell (brand / nav with live counts / list / detail), item detail with
+  password strength bar + reveal + copy, a live TOTP field with a countdown ring,
+  the Watchtower score gauge + issue cards, an add-item dialog, and a copy toast.
+  Teal/emerald "Passbook" identity, theme-aware.
+- Build: `npm run build:wasm` (wasm-pack → `app/src/wasm/pkg/`, gitignored) then
+  `npm run build` (`vue-tsc --noEmit && vite build`); the `.wasm` (97 KB gzipped)
+  is bundled as a Vite asset. `npm run dev` for local development.
+
 ## [1.12.0] — 2026-07-12
 
 **Phase A build-out — four surfaces in parallel.** Built by four isolated agents in
