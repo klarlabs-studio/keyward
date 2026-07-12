@@ -3,7 +3,30 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.5.0] — 2026-07-12
+## [1.6.0] — 2026-07-12
+
+Security review artifact + the first hardening it surfaced.
+
+### Added
+- **[Threat Model & Security Posture](docs/security/THREAT-MODEL.md)** — a rigorous
+  self-review (STRIDE by component, trust boundaries, assumptions, prioritized
+  residual risks R1–R7, recommendations, reviewer checklist). Frames an external
+  review; explicitly not a substitute for one.
+
+### Changed / hardened
+- **Shell interpreters are blocked by default on `run_command`** (R3). A profile
+  that authorizes `sh`/`bash`/`python`/… as the run program is refused unless it
+  sets `allow_shell = true`, because a shell runs arbitrary work past
+  command-binding. Allowed shells still carry a `shell_warning` in the response.
+- Profiles gained an `allow_shell` field (default false) and `is_shell_interpreter`
+  in `proctor-profiles`.
+
+### Top open items for the auditor (from the threat model)
+- R1 secrets not zeroized in memory · R2 `isolation=none` default · R4 audit log
+  unsigned · R5 minimal STS XML parse. **A formal external security review + fuzzing
+  remains required before any real use.**
+
+
 
 Multi-field minted credentials + per-provider minter routing — the two edges
 left open by v1.4.0.

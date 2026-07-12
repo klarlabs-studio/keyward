@@ -59,6 +59,10 @@ pub struct Profile {
     /// CLI binaries this profile is typically used with (informational).
     #[serde(default)]
     pub commands: Vec<String>,
+    /// Permit shell interpreters (sh/python/…) as the run program. Off by
+    /// default because a shell can run arbitrary work past command-binding.
+    #[serde(default)]
+    pub allow_shell: bool,
     /// Regexes matched against the joined argv → Read.
     #[serde(default)]
     pub read_patterns: Vec<String>,
@@ -135,6 +139,18 @@ impl Profile {
             RiskClass::Unknown
         }
     }
+}
+
+/// Programs that can execute arbitrary further commands, so argv risk patterns
+/// can't see the real work (e.g. `sh -c '…'`). Authorizing one in a profile
+/// effectively disables command-binding — the run surface flags it.
+pub fn is_shell_interpreter(program: &str) -> bool {
+    let base = program.rsplit('/').next().unwrap_or(program);
+    matches!(
+        base,
+        "sh" | "bash" | "zsh" | "dash" | "ash" | "fish" | "ksh"
+            | "python" | "python3" | "node" | "ruby" | "perl" | "php" | "env" | "xargs" | "eval"
+    )
 }
 
 /// A loaded set of profiles, keyed by id.
@@ -292,5 +308,14 @@ mod tests {
     fn missing_dir_is_empty_not_error() {
         let reg = Registry::load_dir(Path::new("/no/such/proctor/dir")).unwrap();
         assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn shell_interpreters_are_flagged() {
+        assert!(is_shell_interpreter("sh"));
+        assert!(is_shell_interpreter("/bin/bash"));
+        assert!(is_shell_interpreter("python3"));
+        assert!(!is_shell_interpreter("aws"));
+        assert!(!is_shell_interpreter("terraform"));
     }
 }

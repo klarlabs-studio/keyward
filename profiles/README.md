@@ -47,8 +47,10 @@ session_token = "AWS_SESSION_TOKEN"
 | `env_var` | one of | Single env var the secret is injected into. |
 | `env_map` | one of | JSON-field → env-var map for multi-field credentials. |
 | `commands` | no | CLI binaries this profile is typically used with (informational). |
+| `mint` | no | Minter kind for short-lived creds: `github-app`, `token-exchange`, `aws-sts`. Omit → vault-read only. |
 | `read_patterns` | no | Regexes on the joined argv → **Read** (auto-allow, subject to policy). |
 | `mutate_patterns` | no | Regexes on the joined argv → **Mutate** (gated: step-up / propose-not-commit). |
+| `allow_shell` | no | Permit a shell interpreter (`sh`, `python`, …) as the run program. **Default false** — a shell runs arbitrary work past command-binding, so it must be opted in explicitly. |
 
 ## Safe when incomplete
 

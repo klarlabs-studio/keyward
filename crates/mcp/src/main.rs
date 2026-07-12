@@ -501,6 +501,14 @@ impl ProctorServer {
                 "reason": format!("'{}' is not authorized for credential '{}' — confused-deputy blocked", args.program, args.item_id)
             });
         }
+        // Shells run arbitrary work past command-binding — blocked unless opted in.
+        if proctor_profiles::is_shell_interpreter(&args.program) && !profile.allow_shell {
+            self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:shell-not-permitted").await;
+            return json!({
+                "decision": "deny",
+                "reason": format!("'{}' is a shell interpreter and is not permitted for this credential; set allow_shell = true on the profile to override", args.program)
+            });
+        }
 
         // (2) Command-risk gate.
         let mut argv = vec![args.program.clone()];
@@ -570,7 +578,7 @@ impl ProctorServer {
         match run {
             Ok(Ok(r)) => {
                 self.audit(&args.item_id, &provider_id, &args.program, &format!("RUN-ALLOW:exit={:?}", r.code)).await;
-                json!({
+                let mut out = json!({
                     "decision": "allow",
                     "ran": true,
                     "provider": provider_id,
@@ -582,7 +590,15 @@ impl ProctorServer {
                     "stderr": redact(r.stderr),
                     "truncated": r.truncated,
                     "note": "the credential was injected into the subprocess environment and never returned to the model; any occurrences were redacted from the output."
-                })
+                });
+                if proctor_profiles::is_shell_interpreter(&args.program) {
+                    if let Some(o) = out.as_object_mut() {
+                        o.insert("shell_warning".into(), json!(
+                            "authorized program is a shell interpreter; command-binding and argv risk classification cannot inspect the actual work — prefer authorizing specific tools (aws, terraform), not shells."
+                        ));
+                    }
+                }
+                out
             }
             Ok(Err(e)) => json!({ "decision": "error", "reason": format!("could not run '{}': {e}", args.program) }),
             Err(e) => json!({ "decision": "error", "reason": format!("run task failed: {e}") }),
@@ -866,6 +882,7 @@ mod tests {
                 id = "demo"
                 env_var = "DEMO_TOKEN"
                 commands = ["sh"]
+                allow_shell = true
                 read_patterns = ['\becho\b', '\blist\b']
                 mutate_patterns = ['\brm\b', '\bdelete\b']
             "#,
@@ -1039,6 +1056,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_blocks_shell_without_allow_shell() {
+        // A profile that lists `sh` but does NOT set allow_shell must refuse it.
+        let items = vec![ItemRef { id: "itm".into(), label: "x".into(), bound_origins: vec![], mintable: false }];
+        let mut secrets = HashMap::new();
+        secrets.insert("itm".to_string(), "s".to_string());
+        let mut providers = HashMap::new();
+        providers.insert("itm".to_string(), "p".to_string());
+        let mut reg = Registry::new();
+        reg.insert(toml::from_str(r#"id="p"
+            env_var="T"
+            commands=["sh"]"#).unwrap()).unwrap(); // allow_shell defaults false
+        let server = ProctorServer::with(
+            items, secrets, providers, Arc::new(MockMinter), HashMap::new(),
+            Arc::new(MockExecutor), Arc::new(reg), Isolation::None, &[], None,
+        );
+        let v = server.handle_run(run_args_for("itm", "sh", &["-c", "echo hi"], true), &no_approve()).await;
+        assert_eq!(v["decision"], "deny");
+        assert!(v["reason"].as_str().unwrap().contains("shell interpreter"));
+    }
+
+    fn run_args_for(item: &str, program: &str, args: &[&str], unattended: bool) -> RunCommandArgs {
+        RunCommandArgs {
+            item_id: item.into(),
+            program: program.into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            unattended,
+        }
+    }
+
+    #[tokio::test]
     async fn run_blocks_unauthorized_program() {
         // `curl` is not in the profile's commands → confused-deputy blocked.
         let v = run_server()
@@ -1089,6 +1136,7 @@ mod tests {
                 id = "aws"
                 mint = "aws-sts"
                 commands = ["sh"]
+                allow_shell = true
                 read_patterns = ['\becho\b']
                 [env_map]
                 access_key_id = "AWS_ACCESS_KEY_ID"
