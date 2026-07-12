@@ -21,51 +21,62 @@ Built open-core: fully open-source clients + server, **self-host free forever**;
 - 📐 **[Product Specification (PRD)](docs/product/product-spec.md)** — vision, personas, differentiation, architecture, the AI credential broker, feature set, pricing, roadmap, and GTM.
 - 🏛️ **[ADR-0001 — Broker security model](docs/architecture/ADR-0001-broker-security-model.md)** — the design the prototype implements.
 
-## Prototype (Phase B wedge)
+## v0.1.0 — the Phase B wedge, working
 
-A runnable Rust workspace implementing the **credential broker security model** —
-the riskiest, most-differentiating piece — validating it with real tests before
-building outward.
+A runnable Rust workspace: a real encrypted vault, the credential-broker security
+model, minting ("mint, don't inject"), and an MCP server an agent can drive — all
+tested end-to-end.
 
 ```
 crates/
-  vault/    proctor-vault   encrypted vault core (Argon2id + XChaCha20-Poly1305) — PROTOTYPE
+  vault/    proctor-vault   encrypted vault (Argon2id + XChaCha20-Poly1305), file-backed — PROTOTYPE
   broker/   proctor-broker  the security model: capabilities, origin-binding,
                             propose-not-commit, risk-tiered policy, hash-chained audit
-  cli/      proctor         end-to-end demo
-  mcp/      proctor-mcp     the broker exposed as an MCP server (stdio) via rmcp
+  mint/     proctor-mint    mint short-lived scoped tokens; MockMinter + real GitHub App minter
+  mcp/      proctor-mcp     the broker+vault+minting exposed as an MCP server (stdio) via rmcp
+  cli/      proctor         manage the vault (init/add/list) + broker demo
 ```
 
 ```bash
-cargo test --workspace          # 15 tests: origin-binding, propose-not-commit, TTL, audit chain…
-cargo run -p proctor-cli -- demo  # watch the model block a confused-deputy attack, etc.
+cargo test --workspace              # 24 tests: origin-binding, propose-not-commit, mint no-leak, audit chain…
+cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 
-The demo shows a manipulated agent being refused when it tries to use GitHub
-creds on `evil.example.com`, a ship-to-prod request downgraded to a pull request,
-unattended money-movement denied, and a tamper-evident audit trail.
-
-### Use it from Claude Code (the wedge, live)
-
-`proctor-mcp` is a real MCP server. Build and register it:
+### Quickstart — dogfood it in Claude Code
 
 ```bash
-cargo install --path crates/mcp     # installs the `proctor-mcp` binary
+# 1. Build & create a vault
+cargo install --path crates/cli --path crates/mcp
+export PROCTOR_VAULT=~/.proctor/vault.json PROCTOR_MASTER='your master secret'
+mkdir -p ~/.proctor && proctor init
+proctor add itm_github "GitHub App key" github.com true "$(cat github-app.pem)" apikey
+
+# 2. Register the MCP server (it reads the same env)
 claude mcp add proctor -- proctor-mcp
+
+# 3. (optional) real GitHub App minting instead of the mock:
+#    export PROCTOR_GH_APP_ID=... PROCTOR_GH_INSTALLATION_ID=...
 ```
 
-It exposes three tools — `list_credentials`, `use_credential`, `audit_log` — and
-returns **scoped actions/handles, never plaintext**. Ask your agent to use a
-credential against the wrong origin and watch the broker refuse it.
+The server exposes `list_credentials`, `use_credential`, `audit_log`. On an
+allowed, mintable item it **mints a fresh, scoped, short-TTL token held
+server-side** and returns only a `token_ref` + masked view — the base secret and
+the minted value never reach the model. Ask your agent to use a credential
+against the wrong origin, or to ship to prod unattended, and watch the broker
+refuse or downgrade it.
 
-> **Security note:** this is a prototype of the *shape*, not an audited build. Real
-> minting integrations, MCP transport, and a formal review come before any real use.
+> **Security note:** this is a prototype. The vault, minting, and broker are real
+> and tested, but a **formal security review is required before any real use**.
+> A secretless "perform the action" execution surface is the next step (today a
+> minted token is held server-side, not yet used on the agent's behalf).
 
 ## Status
 
-Research + spec complete; the broker security model is prototyped and tested.
-Next: real minting (GitHub/STS/OAuth token-exchange), MCP transport wiring, and
-the vault/sync surfaces. Implementation follows the roadmap in the PRD.
+**v0.1.0** delivers the wedge end-to-end: file-backed vault + CLI, the broker
+security model, minting (mock + real GitHub App), and a vault-backed MCP server —
+24 passing tests. Next: secretless execution (`perform`), `elicitation`-based
+step-up approval, and the vault/sync surfaces. See the [CHANGELOG](CHANGELOG.md)
+and the roadmap in the PRD.
 
 ## License
 

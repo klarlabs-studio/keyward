@@ -78,15 +78,21 @@ entry breaks `verify()`.
 
 ## Implementation status
 
-Implemented in `crates/broker` (`action`, `capability`, `policy`, `audit`,
-`broker`) with 11 unit tests + a `crates/vault` prototype (Argon2id +
-XChaCha20-Poly1305, 4 tests). `cargo run -p proctor-cli -- demo` shows all paths
-end-to-end. **MCP transport is wired** in `crates/mcp` (`proctor-mcp`, an `rmcp`
-stdio server exposing `list_credentials` / `use_credential` / `audit_log`) —
-verified end-to-end over real JSON-RPC. **Not yet built:** real minting
-integrations (GitHub/STS/RFC 8693), vault-backed item loading in the MCP server,
+As of **v0.1.0** the wedge is implemented end-to-end (24 workspace tests):
+- `crates/broker` — the model (`action`, `capability`, `policy`, `audit`, `broker`).
+- `crates/vault` — file-backed Argon2id + XChaCha20-Poly1305 vault.
+- `crates/mint` — minting: `MockMinter` + a real `GitHubAppMinter` (RS256 JWT +
+  installation access-token flow), signer/HTTP injected for offline tests.
+- `crates/mcp` — an `rmcp` stdio MCP server (`list_credentials` / `use_credential`
+  / `audit_log`) backed by the real vault + minter; verified over real JSON-RPC.
+  On an allowed mintable item it mints a token held server-side and returns only a
+  reference + masked view.
+
+**Not yet built:** secretless **execution** (perform the action with the minted
+token on the agent's behalf — today it is held server-side, unused), OAuth Token
+Exchange (RFC 8693) / cloud STS minters, `elicitation`-based step-up approval,
 unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and
-a formal security review before any real use.
+a **formal security review before any real use**.
 
 ## Consequences
 

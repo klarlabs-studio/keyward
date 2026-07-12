@@ -192,6 +192,8 @@ Principles: **no free-tier removal games** (learn from Dashlane) · **transparen
 | **3 — Family engine (A)** | Mainstream crossing | Sharing/recovery, bulk family setup + onboarding, invite loop, aliases, Windows/Linux/Android, Firefox/Safari |
 | **4 — Depth** | Retention & moat | Breached-password fixing/rotation, broader broker service coverage, anomaly detection, travel mode |
 
+**Status:** **v0.1.0 shipped** the Phase-1 core end-to-end — file-backed vault + CLI, the broker security model, minting (mock + real GitHub App), and a vault-backed MCP server (24 tests). Remaining Phase-1 items: secretless execution, step-up via MCP `elicitation`, browser/native surfaces. See [CHANGELOG](../../CHANGELOG.md).
+
 ---
 
 ## 11. GTM
