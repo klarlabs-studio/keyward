@@ -52,6 +52,10 @@ pub struct Profile {
     /// to an env var. (e.g. AWS access_key_id -> AWS_ACCESS_KEY_ID)
     #[serde(default)]
     pub env_map: Option<BTreeMap<String, String>>,
+    /// Which minter kind produces short-lived creds for this provider
+    /// (e.g. "github-app", "token-exchange", "aws-sts"). None → vault-read only.
+    #[serde(default)]
+    pub mint: Option<String>,
     /// CLI binaries this profile is typically used with (informational).
     #[serde(default)]
     pub commands: Vec<String>,

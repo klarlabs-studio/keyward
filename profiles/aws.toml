@@ -1,5 +1,7 @@
 id = "aws"
 description = "Amazon Web Services — access key (+ optional session token)"
+# aws-sts: mint a short-lived role credential trio via AssumeRoleWithWebIdentity.
+mint = "aws-sts"
 commands = ["aws", "terraform", "pulumi", "opentofu"]
 read_patterns = ['\b(describe|list|get|ls|head|lookup)\b']
 mutate_patterns = ['\b(create|delete|terminate|put|update|remove|rm|attach|detach|modify)\b']

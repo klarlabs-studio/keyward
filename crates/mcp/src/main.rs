@@ -38,6 +38,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
+use proctor_mint::aws::{AwsWebIdentityMinter, ReqwestRawHttp};
 use proctor_mint::exchange::{ReqwestFormHttp, TokenExchangeMinter};
 use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
@@ -60,6 +61,9 @@ struct AppState {
 struct ProctorServer {
     state: Arc<Mutex<AppState>>,
     minter: Arc<dyn Minter>,
+    /// Per-mint-kind minters (e.g. "aws-sts", "token-exchange"); routed by the
+    /// item's provider profile. Falls back to `minter` (the default).
+    minters: HashMap<String, Arc<dyn Minter>>,
     executor: Arc<dyn Executor>,
     profiles: Arc<Registry>,
     isolation: Isolation,
@@ -190,6 +194,7 @@ impl ProctorServer {
         secrets: HashMap<String, String>,
         providers: HashMap<String, String>,
         minter: Arc<dyn Minter>,
+        minters: HashMap<String, Arc<dyn Minter>>,
         executor: Arc<dyn Executor>,
         profiles: Arc<Registry>,
         isolation: Isolation,
@@ -211,11 +216,23 @@ impl ProctorServer {
                 minted: HashMap::new(),
             })),
             minter,
+            minters,
             executor,
             profiles,
             isolation,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// The minter for an item's provider (by its profile's `mint` kind), or the
+    /// default. Returns None only if there is genuinely no minter to use.
+    fn minter_for(&self, provider_id: &str) -> Arc<dyn Minter> {
+        if let Some(kind) = self.profiles.get(provider_id).and_then(|p| p.mint.clone()) {
+            if let Some(m) = self.minters.get(&kind) {
+                return m.clone();
+            }
+        }
+        self.minter.clone()
     }
 
     #[tool(
@@ -520,7 +537,11 @@ impl ProctorServer {
         let mut cred_source = "stored";
         let mut inject = secret.clone();
         if mintable {
-            if let Ok(tok) = self.minter.mint(&args.item_id, &secret, &MintScope::read_only()).await {
+            // Route to the minter declared by the provider profile (mint kind).
+            let minter = self.minter_for(&provider_id);
+            if let Ok(tok) = minter.mint(&args.item_id, &secret, &MintScope::read_only()).await {
+                // Use the minted credential only if it composes for this profile —
+                // single tokens fill `env_var`, JSON trios fill `env_map`.
                 if profile.compose_env(tok.expose()).is_ok() {
                     inject = tok.expose().to_string();
                     cred_source = "minted";
@@ -601,6 +622,30 @@ fn build_server() -> ProctorServer {
         _ => None,
     };
 
+    // Per-mint-kind minter map for run_command routing (by provider profile).
+    let mut minters: HashMap<String, Arc<dyn Minter>> = HashMap::new();
+    minters.insert("mock".into(), Arc::new(MockMinter));
+    if let Some((app, inst)) = &gh {
+        minters.insert(
+            "github-app".into(),
+            Arc::new(GitHubAppMinter::new(app.clone(), inst.clone(), RealSigner, ReqwestHttp::new())),
+        );
+    }
+    if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
+        if !ep.is_empty() {
+            let mut m = TokenExchangeMinter::new(ep, ReqwestFormHttp::new());
+            m.audience = std::env::var("PROCTOR_STS_AUDIENCE").ok();
+            m.scope = std::env::var("PROCTOR_STS_SCOPE").ok();
+            minters.insert("token-exchange".into(), Arc::new(m));
+        }
+    }
+    if let Ok(arn) = std::env::var("PROCTOR_AWS_ROLE_ARN") {
+        if !arn.is_empty() {
+            eprintln!("proctor-mcp: aws-sts minter enabled (role {arn})");
+            minters.insert("aws-sts".into(), Arc::new(AwsWebIdentityMinter::new(arn, ReqwestRawHttp::new())));
+        }
+    }
+
     // Executor: GitHub HTTP-perform if configured, else mock.
     let executor: Arc<dyn Executor> = if gh.is_some() {
         Arc::new(GitHubExecutor::new(ReqwestClient::new()))
@@ -668,7 +713,7 @@ fn build_server() -> ProctorServer {
                     }
                     let approved = approved_origins(&refs);
                     eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, providers, minter, executor, profiles, isolation, &approved, audit_path);
+                    return ProctorServer::with(refs, secrets, providers, minter, minters, executor, profiles, isolation, &approved, audit_path);
                 }
                 Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
             }
@@ -685,7 +730,7 @@ fn build_server() -> ProctorServer {
         ItemRef { id: "itm_bank".into(), label: "Bank".into(), bound_origins: vec!["bank.com".into()], mintable: false },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, executor, profiles, isolation, &approved, audit_path)
+    ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, minters, executor, profiles, isolation, &approved, audit_path)
 }
 
 /// Parse run_command isolation from $PROCTOR_ISOLATION:
@@ -787,6 +832,7 @@ mod tests {
             secrets,
             HashMap::new(),
             Arc::new(MockMinter),
+            HashMap::new(),
             Arc::new(MockExecutor),
             Arc::new(Registry::new()),
             Isolation::None,
@@ -833,6 +879,7 @@ mod tests {
             secrets,
             providers,
             Arc::new(MockMinter),
+            HashMap::new(),
             Arc::new(MockExecutor),
             Arc::new(reg),
             Isolation::None,
@@ -1007,6 +1054,86 @@ mod tests {
             .handle_run(run_args("sh", &["-c", "echo delete"], true), &no_approve())
             .await;
         assert_eq!(v["decision"], "deny");
+    }
+
+    // Multi-field minted credential (AWS STS trio) routed by profile.mint.
+    struct FakeSts;
+    #[async_trait::async_trait]
+    impl proctor_mint::aws::RawHttp for FakeSts {
+        async fn post_form_raw(
+            &self,
+            _url: &str,
+            _form: &[(String, String)],
+        ) -> Result<String, proctor_mint::MintError> {
+            Ok(r#"<r><Credentials><AccessKeyId>ASIA_LIVE</AccessKeyId><SecretAccessKey>sk_live</SecretAccessKey><SessionToken>st_live</SessionToken><Expiration>2026-07-12T12:00:00Z</Expiration></Credentials></r>"#.to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn run_routes_to_aws_minter_and_composes_multifield() {
+        let items = vec![ItemRef {
+            id: "itm_aws".into(),
+            label: "AWS".into(),
+            bound_origins: vec![],
+            mintable: true,
+        }];
+        let mut secrets = HashMap::new();
+        secrets.insert("itm_aws".to_string(), "held-oidc-jwt".to_string());
+        let mut providers = HashMap::new();
+        providers.insert("itm_aws".to_string(), "aws".to_string());
+
+        let mut reg = Registry::new();
+        reg.insert(
+            toml::from_str(
+                r#"
+                id = "aws"
+                mint = "aws-sts"
+                commands = ["sh"]
+                read_patterns = ['\becho\b']
+                [env_map]
+                access_key_id = "AWS_ACCESS_KEY_ID"
+                secret_access_key = "AWS_SECRET_ACCESS_KEY"
+                session_token = "AWS_SESSION_TOKEN"
+            "#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut minters: HashMap<String, Arc<dyn Minter>> = HashMap::new();
+        minters.insert(
+            "aws-sts".into(),
+            Arc::new(AwsWebIdentityMinter::new("arn:aws:iam::1:role/x", FakeSts)),
+        );
+
+        let server = ProctorServer::with(
+            items,
+            secrets,
+            providers,
+            Arc::new(MockMinter),
+            minters,
+            Arc::new(MockExecutor),
+            Arc::new(reg),
+            Isolation::None,
+            &[],
+            None,
+        );
+
+        let args = RunCommandArgs {
+            item_id: "itm_aws".into(),
+            program: "sh".into(),
+            args: vec!["-c".into(), "echo key=$AWS_ACCESS_KEY_ID sess=$AWS_SESSION_TOKEN".into()],
+            unattended: true,
+        };
+        let v = server.handle_run(args, &no_approve()).await;
+        assert_eq!(v["decision"], "allow");
+        // Routed to the AWS minter, whose JSON trio composed into the env_map.
+        assert_eq!(v["credential_source"], "minted");
+        let s = v.to_string();
+        // The minted AWS creds reached the env (echoed), then were redacted.
+        assert!(s.contains("REDACTED"), "expected redaction: {s}");
+        assert!(!s.contains("ASIA_LIVE"), "minted access key leaked!");
+        assert!(!s.contains("st_live"), "minted session token leaked!");
     }
 
     #[tokio::test]

@@ -1,6 +1,8 @@
 id = "github"
 description = "GitHub — personal access token or App installation token"
 env_var = "GITHUB_TOKEN"
+# github-app: mint a short-lived installation token (only if an App is configured).
+mint = "github-app"
 commands = ["gh", "terraform"]
 read_patterns = ['\b(list|view|status|get|ls)\b']
 mutate_patterns = ['\b(create|delete|merge|close|edit|rename|transfer)\b']

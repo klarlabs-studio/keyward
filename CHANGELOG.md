@@ -3,7 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.4.0] — 2026-07-12
+## [1.5.0] — 2026-07-12
+
+Multi-field minted credentials + per-provider minter routing — the two edges
+left open by v1.4.0.
+
+### Added
+- **`proctor-mint::aws` — AWS STS `AssumeRoleWithWebIdentity` minter.** Exchanges a
+  held OIDC web-identity token for short-lived role credentials and emits the
+  **trio** (access key id / secret / session token) as JSON, so a minted cred
+  composes directly into a multi-field (`env_map`) profile. HTTP injected for
+  offline tests; real reqwest behind `net`; wired via `PROCTOR_AWS_ROLE_ARN`.
+- **Per-provider minter routing.** Provider profiles declare their minter with a
+  `mint` field (`"github-app"`, `"token-exchange"`, `"aws-sts"`). The server keeps
+  a minter map keyed by kind and routes each item's mint through
+  `minter_for(provider)` — so an `aws` item mints via STS while a `github` item
+  mints via the App, data-driven from the profile. Seed profiles updated (aws →
+  `aws-sts`, github → `github-app`).
+
+### Result
+- Minted credentials now fill both single-token (`env_var`) and multi-field
+  (`env_map`) profiles, and the minter is chosen per provider from external config.
+  Verified end-to-end: an AWS item routes to the STS minter, the JSON trio composes
+  into `AWS_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`/`_SESSION_TOKEN`, redacted in output.
+
+### Still deferred
+- Per-item role/audience overrides (single global role/endpoint per kind today),
+  Azure/GCP-specific minters, and a **formal security review before real use**.
+
+
 
 Protocol minters + prefer-minted on the exec path (ADR-0002 Phase 3) — the last
 unbuilt axis. ADR-0002 is now fully implemented.
