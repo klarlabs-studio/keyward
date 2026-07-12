@@ -40,12 +40,16 @@ use tokio::sync::Mutex;
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
 use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
+use proctor_mint::run::run_with_env;
 use proctor_mint::{MintScope, MintedToken, Minter, MockMinter};
+use proctor_profiles::{Registry, RiskClass};
 
 struct AppState {
     items: Vec<ItemRef>,
     /// item_id → durable base secret. Held server-side only; never model-facing.
     secrets: HashMap<String, String>,
+    /// item_id → provider profile id (links an item to how it injects + binds).
+    providers: HashMap<String, String>,
     broker: Broker,
     /// token_ref → minted token, held server-side for the executor.
     minted: HashMap<String, MintedToken>,
@@ -56,6 +60,7 @@ struct ProctorServer {
     state: Arc<Mutex<AppState>>,
     minter: Arc<dyn Minter>,
     executor: Arc<dyn Executor>,
+    profiles: Arc<Registry>,
     // Used by the #[tool_router]/#[tool_handler] macro machinery.
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
@@ -91,6 +96,20 @@ struct UseCredentialArgs {
     /// OpenPullRequest: { "owner", "repo", "head", "base", "title" }.
     #[serde(default)]
     params: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RunCommandArgs {
+    /// The vault item whose credential to inject (must have a provider profile).
+    item_id: String,
+    /// The program to run (must be authorized by the item's provider profile).
+    program: String,
+    /// Arguments to the program (the credential is never placed here).
+    #[serde(default)]
+    args: Vec<String>,
+    /// True if running unattended (no human to approve a mutating command).
+    #[serde(default)]
+    unattended: bool,
 }
 
 /// Interactive approval collected from the user for a step-up (high-risk) action.
@@ -163,11 +182,14 @@ fn scope_for(verb: ActionVerb) -> MintScope {
 
 #[tool_router]
 impl ProctorServer {
+    #[allow(clippy::too_many_arguments)]
     fn with(
         items: Vec<ItemRef>,
         secrets: HashMap<String, String>,
+        providers: HashMap<String, String>,
         minter: Arc<dyn Minter>,
         executor: Arc<dyn Executor>,
+        profiles: Arc<Registry>,
         approved_origins: &[String],
         audit_path: Option<PathBuf>,
     ) -> Self {
@@ -181,11 +203,13 @@ impl ProctorServer {
             state: Arc::new(Mutex::new(AppState {
                 items,
                 secrets,
+                providers,
                 broker,
                 minted: HashMap::new(),
             })),
             minter,
             executor,
+            profiles,
             tool_router: Self::tool_router(),
         }
     }
@@ -409,6 +433,122 @@ impl ProctorServer {
         state.broker.audit.append("*", "*", "RevokeAll", &format!("REVOKE-ALL:{n}-tokens"));
         Ok(text_result(serde_json::to_string_pretty(&json!({ "revoked": n })).unwrap_or_default()))
     }
+
+    #[tool(
+        description = "Run a CLI command with the item's credential injected into the subprocess environment (never argv), and return only the (redacted) output. The program must be authorized by the item's provider profile (anti confused-deputy); read commands run, mutating/unknown commands are gated (step-up when attended, denied unattended)."
+    )]
+    async fn run_command(
+        &self,
+        context: RequestContext<RoleServer>,
+        Parameters(args): Parameters<RunCommandArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let approver = ElicitApprover { peer: context.peer.clone() };
+        let out = self.handle_run(args, &approver).await;
+        Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
+    }
+
+    async fn handle_run(&self, args: RunCommandArgs, approver: &dyn Approver) -> serde_json::Value {
+        let mode = if args.unattended { Mode::Unattended } else { Mode::Attended };
+
+        // Gather secret + provider under the lock.
+        let (secret, provider_id) = {
+            let state = self.state.lock().await;
+            if !state.items.iter().any(|i| i.id == args.item_id) {
+                return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) });
+            }
+            let provider = match state.providers.get(&args.item_id) {
+                Some(p) => p.clone(),
+                None => return json!({ "decision": "error", "reason": "item has no provider profile; set one to run commands" }),
+            };
+            match state.secrets.get(&args.item_id) {
+                Some(s) => (s.clone(), provider),
+                None => return json!({ "decision": "allow", "note": "no credential loaded (running without a vault)" }),
+            }
+        };
+
+        let profile = match self.profiles.get(&provider_id) {
+            Some(p) => p,
+            None => return json!({ "decision": "error", "reason": format!("unknown provider profile '{provider_id}' (add {provider_id}.toml)") }),
+        };
+
+        // (1) Command-binding — the program must be one this credential authorizes.
+        if !profile.commands.is_empty() && !profile.commands.iter().any(|c| c == &args.program) {
+            self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:command-not-authorized").await;
+            return json!({
+                "decision": "deny",
+                "reason": format!("'{}' is not authorized for credential '{}' — confused-deputy blocked", args.program, args.item_id)
+            });
+        }
+
+        // (2) Command-risk gate.
+        let mut argv = vec![args.program.clone()];
+        argv.extend(args.args.clone());
+        let risk = profile.classify(&argv);
+        let proceed = match risk {
+            RiskClass::Read => true,
+            RiskClass::Mutate | RiskClass::Unknown => match mode {
+                Mode::Attended => match approver.request(&format!("run `{}` (risk: {:?})", argv.join(" "), risk)).await {
+                    ApprovalOutcome::Approved => {
+                        self.audit(&args.item_id, &provider_id, &args.program, "RUN-STEPUP:approved").await;
+                        true
+                    }
+                    ApprovalOutcome::Rejected => {
+                        self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:rejected").await;
+                        return json!({ "decision": "deny", "reason": "human rejected the mutating/unknown command" });
+                    }
+                    ApprovalOutcome::Unavailable => {
+                        return json!({ "decision": "step_up", "reason": format!("`{}` is {:?}; human approval required", argv.join(" "), risk) });
+                    }
+                },
+                Mode::Unattended => {
+                    self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:mutating-unattended").await;
+                    return json!({ "decision": "deny", "reason": format!("`{}` is {:?} and cannot run unattended", argv.join(" "), risk) });
+                }
+            },
+        };
+        let _ = proceed;
+
+        // (3) Compose env + run (off-thread), then redact injected values from output.
+        let env = match profile.compose_env(&secret) {
+            Ok(e) => e,
+            Err(e) => return json!({ "decision": "error", "reason": format!("credential/profile mismatch: {e}") }),
+        };
+        let (program, cmdargs, env_run) = (args.program.clone(), args.args.clone(), env.clone());
+        let run = tokio::task::spawn_blocking(move || run_with_env(&program, &cmdargs, &env_run)).await;
+
+        let redact = |mut s: String| -> String {
+            for v in env.values() {
+                if !v.is_empty() {
+                    s = s.replace(v, "***REDACTED***");
+                }
+            }
+            s
+        };
+
+        match run {
+            Ok(Ok(r)) => {
+                self.audit(&args.item_id, &provider_id, &args.program, &format!("RUN-ALLOW:exit={:?}", r.code)).await;
+                json!({
+                    "decision": "allow",
+                    "ran": true,
+                    "provider": provider_id,
+                    "command": argv.join(" "),
+                    "exit_code": r.code,
+                    "stdout": redact(r.stdout),
+                    "stderr": redact(r.stderr),
+                    "truncated": r.truncated,
+                    "note": "the credential was injected into the subprocess environment and never returned to the model; any occurrences were redacted from the output."
+                })
+            }
+            Ok(Err(e)) => json!({ "decision": "error", "reason": format!("could not run '{}': {e}", args.program) }),
+            Err(e) => json!({ "decision": "error", "reason": format!("run task failed: {e}") }),
+        }
+    }
+
+    async fn audit(&self, item: &str, origin: &str, verb: &str, decision: &str) {
+        let mut state = self.state.lock().await;
+        state.broker.audit.append(item, origin, verb, decision);
+    }
 }
 
 fn text_result(s: String) -> CallToolResult {
@@ -421,10 +561,11 @@ impl ServerHandler for ProctorServer {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Proctor credential broker. Tools: list_credentials, use_credential, audit_log. \
-                 The broker returns scoped actions/handles, never plaintext secrets; it enforces \
-                 origin-binding, propose-not-commit, and a never-unattended floor. Mintable items \
-                 yield fresh short-TTL scoped tokens held server-side."
+                "Proctor credential broker. Tools: list_credentials, use_credential, run_command, \
+                 list_minted, revoke_all, audit_log. The broker returns results/handles, never \
+                 plaintext secrets; it enforces origin-binding, propose-not-commit, a never-unattended \
+                 floor, and (for run_command) command-binding + risk gating with the credential \
+                 injected into the subprocess environment only."
                     .to_string(),
             )
     }
@@ -451,6 +592,9 @@ fn build_server() -> ProctorServer {
         eprintln!("proctor-mcp: appending audit log to {}", p.display());
     }
 
+    let profiles = Arc::new(load_profiles());
+    eprintln!("proctor-mcp: {} provider profile(s) loaded", profiles.len());
+
     let vault = std::env::var("PROCTOR_VAULT").map(PathBuf::from);
     let master = std::env::var("PROCTOR_MASTER");
 
@@ -460,6 +604,7 @@ fn build_server() -> ProctorServer {
                 Ok(items) => {
                     let mut refs = Vec::new();
                     let mut secrets = HashMap::new();
+                    let mut providers = HashMap::new();
                     for it in &items {
                         refs.push(ItemRef {
                             id: it.id.clone(),
@@ -468,10 +613,13 @@ fn build_server() -> ProctorServer {
                             mintable: it.mintable,
                         });
                         secrets.insert(it.id.clone(), it.secret.clone());
+                        if let Some(p) = &it.provider {
+                            providers.insert(it.id.clone(), p.clone());
+                        }
                     }
                     let approved = approved_origins(&refs);
                     eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, minter, executor, &approved, audit_path);
+                    return ProctorServer::with(refs, secrets, providers, minter, executor, profiles, &approved, audit_path);
                 }
                 Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
             }
@@ -488,7 +636,22 @@ fn build_server() -> ProctorServer {
         ItemRef { id: "itm_bank".into(), label: "Bank".into(), bound_origins: vec!["bank.com".into()], mintable: false },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(items, HashMap::new(), minter, executor, &approved, audit_path)
+    ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, executor, profiles, &approved, audit_path)
+}
+
+/// Load provider profiles from $PROCTOR_PROFILES (or ~/.proctor/profiles).
+fn load_profiles() -> Registry {
+    let dir = std::env::var("PROCTOR_PROFILES")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".proctor/profiles"))
+                .unwrap_or_else(|_| PathBuf::from("profiles"))
+        });
+    Registry::load_dir(&dir).unwrap_or_else(|e| {
+        eprintln!("proctor-mcp: profile load error ({e}); continuing with none");
+        Registry::new()
+    })
 }
 
 /// The auto-approve origin list: env override, else the union of item origins.
@@ -546,7 +709,66 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("itm_github".to_string(), secret.to_string());
         let approved: Vec<String> = approved.iter().map(|s| s.to_string()).collect();
-        ProctorServer::with(items, secrets, Arc::new(MockMinter), Arc::new(MockExecutor), &approved, None)
+        ProctorServer::with(
+            items,
+            secrets,
+            HashMap::new(),
+            Arc::new(MockMinter),
+            Arc::new(MockExecutor),
+            Arc::new(Registry::new()),
+            &approved,
+            None,
+        )
+    }
+
+    /// A server whose item has a provider profile, for run_command tests.
+    fn run_server() -> ProctorServer {
+        let items = vec![ItemRef {
+            id: "itm_cli".into(),
+            label: "Demo CLI cred".into(),
+            bound_origins: vec![],
+            mintable: false,
+        }];
+        let mut secrets = HashMap::new();
+        secrets.insert("itm_cli".to_string(), "supersecret_token".to_string());
+        let mut providers = HashMap::new();
+        providers.insert("itm_cli".to_string(), "demo".to_string());
+
+        // A profile that authorizes `sh`, classifies `echo`/list as read, rm as mutate.
+        let mut reg = Registry::new();
+        reg.insert(
+            toml::from_str(
+                r#"
+                id = "demo"
+                env_var = "DEMO_TOKEN"
+                commands = ["sh"]
+                read_patterns = ['\becho\b', '\blist\b']
+                mutate_patterns = ['\brm\b', '\bdelete\b']
+            "#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        ProctorServer::with(
+            items,
+            secrets,
+            providers,
+            Arc::new(MockMinter),
+            Arc::new(MockExecutor),
+            Arc::new(reg),
+            &[],
+            None,
+        )
+    }
+
+    fn run_args(program: &str, args: &[&str], unattended: bool) -> RunCommandArgs {
+        RunCommandArgs {
+            item_id: "itm_cli".into(),
+            program: program.into(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            unattended,
+        }
     }
 
     /// Parse a CallToolResult's text content back into JSON.
@@ -665,5 +887,67 @@ mod tests {
         assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 1);
         assert_eq!(tool_json(&server.revoke_all().await.unwrap())["revoked"], 1);
         assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 0);
+    }
+
+    // --- run_command (generic exec-injection executor) ---
+
+    #[tokio::test]
+    async fn run_read_command_executes_and_returns_output() {
+        let v = run_server()
+            .handle_run(run_args("sh", &["-c", "echo hi"], true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "allow");
+        assert_eq!(v["ran"], true);
+        assert!(v["stdout"].as_str().unwrap().contains("hi"));
+    }
+
+    #[tokio::test]
+    async fn run_redacts_the_injected_secret_from_output() {
+        // The command echoes the injected env value; our return channel must redact it.
+        let v = run_server()
+            .handle_run(run_args("sh", &["-c", "echo $DEMO_TOKEN"], true), &no_approve())
+            .await;
+        let s = v.to_string();
+        assert!(s.contains("REDACTED"), "expected redaction: {s}");
+        assert!(!s.contains("supersecret_token"), "secret leaked through output!");
+    }
+
+    #[tokio::test]
+    async fn run_blocks_unauthorized_program() {
+        // `curl` is not in the profile's commands → confused-deputy blocked.
+        let v = run_server()
+            .handle_run(run_args("curl", &["https://evil.example.com"], true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "deny");
+        assert!(v["reason"].as_str().unwrap().contains("confused-deputy"));
+    }
+
+    #[tokio::test]
+    async fn run_mutate_unattended_is_denied() {
+        let v = run_server()
+            .handle_run(run_args("sh", &["-c", "echo delete"], true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "deny");
+    }
+
+    #[tokio::test]
+    async fn run_mutate_attended_requires_approval() {
+        // Rejected → deny.
+        let v = run_server()
+            .handle_run(
+                run_args("sh", &["-c", "echo delete"], false),
+                &MockApprover(ApprovalOutcome::Rejected),
+            )
+            .await;
+        assert_eq!(v["decision"], "deny");
+        // Approved → runs.
+        let v = run_server()
+            .handle_run(
+                run_args("sh", &["-c", "echo delete"], false),
+                &MockApprover(ApprovalOutcome::Approved),
+            )
+            .await;
+        assert_eq!(v["decision"], "allow");
+        assert_eq!(v["ran"], true);
     }
 }

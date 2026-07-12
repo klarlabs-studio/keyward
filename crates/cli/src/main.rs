@@ -103,8 +103,9 @@ fn cmd_init() {
 
 fn cmd_add(rest: &[String]) {
     if rest.len() < 4 {
-        eprintln!("usage: proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind]");
+        eprintln!("usage: proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind] [provider]");
         eprintln!("  mintable defaults to false — Proctor stores and uses the token directly (no minting).");
+        eprintln!("  provider links the item to a profile (e.g. aws, github) for run_command.");
         exit(2);
     }
     let (id, label, origins_csv, secret) = (&rest[0], &rest[1], &rest[2], &rest[3]);
@@ -113,6 +114,7 @@ fn cmd_add(rest: &[String]) {
         .map(|m| matches!(m.to_lowercase().as_str(), "true" | "yes" | "1"))
         .unwrap_or(false);
     let kind = rest.get(5).map(|s| parse_kind(s)).unwrap_or(ItemKind::Password);
+    let provider = rest.get(6).map(|s| s.to_string());
     let origins: Vec<String> = origins_csv
         .split(',')
         .map(|s| s.trim().to_lowercase())
@@ -129,7 +131,7 @@ fn cmd_add(rest: &[String]) {
         eprintln!("item '{id}' already exists");
         exit(1);
     }
-    items.push(Item::new(id.clone(), label.clone(), kind, origins, mintable, secret.clone()));
+    items.push(Item::new(id.clone(), label.clone(), kind, origins, mintable, secret.clone()).with_provider(provider));
     save_to_file(&path, &items, &m).unwrap_or_else(|e| {
         eprintln!("failed to save vault: {e}");
         exit(1);

@@ -3,7 +3,33 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.1.0] — 2026-07-12
+## [1.2.0] — 2026-07-12
+
+The generic exec-injection executor (ADR-0002 Phase 1) — one engine covers the
+CLI long tail via the external profiles.
+
+### Added
+- **`run_command` MCP tool** — runs a CLI command with the item's credential
+  injected into the subprocess **environment (never argv)**, and returns only the
+  (redacted) output. The credential never reaches the model.
+  - **Command-binding** (anti-confused-deputy): the program must be authorized by
+    the item's provider profile (`commands`); e.g. an AWS credential can't run
+    `curl`.
+  - **Risk gate**: profile classification decides — read commands run; mutating /
+    unknown commands step-up (attended) or are denied (unattended).
+  - **Output redaction**: injected credential values are stripped from
+    stdout/stderr before returning (so even `echo $TOKEN` yields `***REDACTED***`).
+- **`proctor-mint::run`** — the generic subprocess runner (`run_with_env`).
+- Vault items gain an optional **`provider`** field linking them to a profile;
+  `proctor add`'s new trailing `[provider]` arg sets it.
+
+### Security (see ADR-0002)
+- Env injection is hygiene, not an isolation boundary (`/proc/environ`, `ps`,
+  child inheritance). This build injects via env only (never argv) and redacts the
+  return channel; **OS-level isolation and short-TTL creds remain required for
+  untrusted-content-driven autonomy** and are not yet implemented.
+
+
 
 Providers become **external config** (ADR-0002 registry, made concrete).
 

@@ -914,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-broker"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-cli"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "proctor-broker",
  "proctor-profiles",
@@ -933,22 +933,24 @@ dependencies = [
 
 [[package]]
 name = "proctor-mcp"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "proctor-broker",
  "proctor-mint",
+ "proctor-profiles",
  "proctor-vault",
  "rmcp",
  "serde",
  "serde_json",
  "tokio",
+ "toml",
 ]
 
 [[package]]
 name = "proctor-mint"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -962,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-profiles"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "regex",
  "serde",
@@ -973,7 +975,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-vault"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",

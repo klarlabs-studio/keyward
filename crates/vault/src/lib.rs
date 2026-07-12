@@ -53,6 +53,10 @@ pub struct Item {
     /// Whether the broker may mint a short-lived scoped token from this item
     /// instead of ever handing over the durable secret.
     pub mintable: bool,
+    /// Provider profile id (e.g. "aws", "github") linking this item to how its
+    /// credential is injected and which commands it authorizes. Optional.
+    #[serde(default)]
+    pub provider: Option<String>,
     /// The durable secret. Never exposed to the broker or any agent by default.
     pub secret: String,
 }
@@ -82,8 +86,15 @@ impl Item {
             kind,
             bound_origins,
             mintable,
+            provider: None,
             secret: secret.into(),
         }
+    }
+
+    /// Set the provider profile id (builder style).
+    pub fn with_provider(mut self, provider: Option<String>) -> Item {
+        self.provider = provider;
+        self
     }
 
     /// Project to a secret-free reference for the broker.
@@ -168,6 +179,7 @@ mod tests {
             kind: ItemKind::ApiKey,
             bound_origins: vec!["github.com".into()],
             mintable: true,
+            provider: Some("github".into()),
             secret: "ghp_supersecret".into(),
         }]
     }

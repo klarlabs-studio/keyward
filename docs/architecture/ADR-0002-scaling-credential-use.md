@@ -149,15 +149,19 @@ this explicit per credential/context, not paper over it.
 
 ## Implementation sketch (phased)
 
-1. **Generic exec-injection executor** — `run_with_credential(command, argv)`:
-   env-inject via a provider profile, spawn, capture stdout/stderr, return
-   sanitized. Default-gate unknown argv; support user allowlist patterns.
-2. **Seed profiles** — AWS, Hetzner, GitHub (`GITHUB_TOKEN`); each ~5 lines.
+1. ✅ **Generic exec-injection executor** (v1.2.0) — `run_command` env-injects via a
+   provider profile, spawns, captures, redacts injected values, returns sanitized.
+   Command-binding (program must be profile-authorized) + risk gate (read runs;
+   mutate/unknown step-up or deny). Injects via env only, never argv.
+2. ✅ **Seed profiles** (v1.1.0) — external TOML: aws, azure, github, gitlab,
+   hetzner; add a provider by dropping a file.
 3. **Standard protocol minters** — RFC 8693 token exchange + OIDC WIF (covers the
-   big clouds), reusing the existing `Minter` trait.
-4. **OS isolation backend** — optional namespace/container execution for untrusted
-   contexts.
-5. **Profile registry format** + community contribution path.
+   big clouds), reusing the existing `Minter` trait. *(Not yet built.)*
+4. **OS isolation backend** — namespace/container execution for untrusted contexts;
+   prefer minted short-TTL creds on the exec path. *(Not yet built — required
+   before untrusted-content-driven autonomy.)*
+5. ✅ **Profile registry format** (v1.1.0) + community contribution path
+   ([`profiles/README.md`](../../profiles/README.md)).
 
 ## Sources
 

@@ -11,6 +11,7 @@
 
 pub mod exec;
 pub mod github;
+pub mod run;
 
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
