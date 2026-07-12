@@ -9,6 +9,7 @@
 //! returned to a model/agent context — only to the local executor that performs
 //! the action. See `MintedToken::expose` vs `MintedToken::masked`.
 
+pub mod exec;
 pub mod github;
 
 use std::collections::BTreeMap;

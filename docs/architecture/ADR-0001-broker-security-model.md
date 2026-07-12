@@ -88,8 +88,13 @@ As of **v0.1.0** the wedge is implemented end-to-end (24 workspace tests):
   On an allowed mintable item it mints a token held server-side and returns only a
   reference + masked view.
 
-**Not yet built:** secretless **execution** (perform the action with the minted
-token on the agent's behalf — today it is held server-side, unused), OAuth Token
+As of **v0.2.0**, **secretless execution** is implemented (`crates/mint/exec.rs`):
+on an allowed read the broker mints a scoped token, performs the action itself
+(GitHub: list installation repositories), and returns only a sanitized result —
+neither the base secret nor the minted token reaches the model (verified
+end-to-end).
+
+**Not yet built:** write operations via propose-not-commit artifacts, OAuth Token
 Exchange (RFC 8693) / cloud STS minters, `elicitation`-based step-up approval,
 unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and
 a **formal security review before any real use**.

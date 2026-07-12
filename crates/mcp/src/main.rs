@@ -35,6 +35,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
+use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestGet};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
 use proctor_mint::{MintScope, MintedToken, Minter, MockMinter};
 
@@ -51,9 +52,15 @@ struct AppState {
 struct ProctorServer {
     state: Arc<Mutex<AppState>>,
     minter: Arc<dyn Minter>,
+    executor: Arc<dyn Executor>,
     // Used by the #[tool_router]/#[tool_handler] macro machinery.
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
+}
+
+/// Verbs that map to a read we can perform secretlessly on the agent's behalf.
+fn is_read(v: ActionVerb) -> bool {
+    matches!(v, ActionVerb::Read | ActionVerb::FetchData)
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -85,6 +92,7 @@ impl ProctorServer {
         items: Vec<ItemRef>,
         secrets: HashMap<String, String>,
         minter: Arc<dyn Minter>,
+        executor: Arc<dyn Executor>,
         approved_origins: &[String],
     ) -> Self {
         let approved: Vec<&str> = approved_origins.iter().map(|s| s.as_str()).collect();
@@ -96,6 +104,7 @@ impl ProctorServer {
                 minted: HashMap::new(),
             })),
             minter,
+            executor,
             tool_router: Self::tool_router(),
         }
     }
@@ -149,6 +158,8 @@ impl ProctorServer {
                 item_id: String,
                 base: Option<String>,
                 scope: MintScope,
+                verb: ActionVerb,
+                origin: String,
             },
         }
 
@@ -172,6 +183,8 @@ impl ProctorServer {
                             item_id: item.id.clone(),
                             base,
                             scope: scope_for(verb),
+                            verb,
+                            origin: action.target.0.clone(),
                         }
                     }
                     Primitive::Secretless => Next::Respond(json!({
@@ -206,27 +219,47 @@ impl ProctorServer {
         // Phase 2: mint outside the lock (network I/O), then store server-side.
         let out = match next {
             Next::Respond(v) => v,
-            Next::Mint { item_id, base, scope } => match base {
+            Next::Mint { item_id, base, scope, verb, origin } => match base {
                 None => json!({
                     "decision": "allow", "primitive": "minted",
                     "note": "decision allows minting, but no base secret is loaded (running without a vault). Load a vault (PROCTOR_VAULT/PROCTOR_MASTER) to mint."
                 }),
                 Some(secret) => match self.minter.mint(&item_id, &secret, &scope).await {
                     Ok(token) => {
-                        let mut state = self.state.lock().await;
-                        let token_ref = format!("mint_{}", state.minted.len() + 1);
-                        let resp = json!({
-                            "decision": "allow",
-                            "primitive": "minted",
-                            "provider": token.provider,
-                            "token_ref": token_ref,
-                            "masked": token.masked(),
-                            "scope": token.scope_desc,
-                            "provider_expires_at": token.provider_expires_at,
-                            "note": "a fresh, scoped, short-TTL token was minted and is held server-side; it is NOT returned to the model. Blast radius is bounded by scope + short TTL."
-                        });
-                        state.minted.insert(token_ref, token);
-                        resp
+                        if is_read(verb) {
+                            // Secretless execution: use the minted token to perform the
+                            // action ourselves and return only the sanitized result. The
+                            // token never reaches the model.
+                            let exec_action = ExecAction { kind: ExecKind::Read, target: origin };
+                            match self.executor.perform(&token, &exec_action).await {
+                                Ok(r) => json!({
+                                    "decision": "allow",
+                                    "primitive": "secretless_exec",
+                                    "provider": self.executor.provider(),
+                                    "performed": true,
+                                    "result_summary": r.summary,
+                                    "result": r.data,
+                                    "note": "the broker minted a scoped short-TTL token and performed the action itself; neither the base secret nor the minted token was returned to the model."
+                                }),
+                                Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
+                            }
+                        } else {
+                            // Non-read: mint and hold server-side; return a reference only.
+                            let mut state = self.state.lock().await;
+                            let token_ref = format!("mint_{}", state.minted.len() + 1);
+                            let resp = json!({
+                                "decision": "allow",
+                                "primitive": "minted",
+                                "provider": token.provider,
+                                "token_ref": token_ref,
+                                "masked": token.masked(),
+                                "scope": token.scope_desc,
+                                "provider_expires_at": token.provider_expires_at,
+                                "note": "a fresh, scoped, short-TTL token was minted and is held server-side; it is NOT returned to the model. Blast radius is bounded by scope + short TTL."
+                            });
+                            state.minted.insert(token_ref, token);
+                            resp
+                        }
                     }
                     Err(e) => json!({ "decision": "error", "reason": format!("mint failed: {e}") }),
                 },
@@ -279,15 +312,18 @@ impl ServerHandler for ProctorServer {
 
 /// Build the server from the environment: a real vault if configured, else demo.
 fn build_server() -> ProctorServer {
-    let minter: Arc<dyn Minter> = match (
+    let (minter, executor): (Arc<dyn Minter>, Arc<dyn Executor>) = match (
         std::env::var("PROCTOR_GH_APP_ID"),
         std::env::var("PROCTOR_GH_INSTALLATION_ID"),
     ) {
         (Ok(app), Ok(inst)) if !app.is_empty() && !inst.is_empty() => {
-            eprintln!("proctor-mcp: using GitHub App minter (app {app})");
-            Arc::new(GitHubAppMinter::new(app, inst, RealSigner, ReqwestHttp::new()))
+            eprintln!("proctor-mcp: using GitHub App minter + executor (app {app})");
+            (
+                Arc::new(GitHubAppMinter::new(app, inst, RealSigner, ReqwestHttp::new())),
+                Arc::new(GitHubExecutor::new(ReqwestGet::new())),
+            )
         }
-        _ => Arc::new(MockMinter),
+        _ => (Arc::new(MockMinter), Arc::new(MockExecutor)),
     };
 
     let vault = std::env::var("PROCTOR_VAULT").map(PathBuf::from);
@@ -310,7 +346,7 @@ fn build_server() -> ProctorServer {
                     }
                     let approved = approved_origins(&refs);
                     eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, minter, &approved);
+                    return ProctorServer::with(refs, secrets, minter, executor, &approved);
                 }
                 Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
             }
@@ -327,7 +363,7 @@ fn build_server() -> ProctorServer {
         ItemRef { id: "itm_bank".into(), label: "Bank".into(), bound_origins: vec!["bank.com".into()], mintable: false },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(items, HashMap::new(), minter, &approved)
+    ProctorServer::with(items, HashMap::new(), minter, executor, &approved)
 }
 
 /// The auto-approve origin list: env override, else the union of item origins.
@@ -362,7 +398,13 @@ mod tests {
         }];
         let mut secrets = HashMap::new();
         secrets.insert("itm_github".to_string(), "SUPER_SECRET_BASE_PEM".to_string());
-        ProctorServer::with(items, secrets, Arc::new(MockMinter), &["github.com".to_string()])
+        ProctorServer::with(
+            items,
+            secrets,
+            Arc::new(MockMinter),
+            Arc::new(MockExecutor),
+            &["github.com".to_string()],
+        )
     }
 
     fn body(res: &CallToolResult) -> String {
@@ -370,7 +412,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn minted_response_never_leaks_the_secret() {
+    async fn secretless_read_returns_result_not_secret() {
+        // Read → mint + perform the action; the model gets the result, not the token.
         let server = server_with_secret();
         let args = UseCredentialArgs {
             item_id: "itm_github".into(),
@@ -381,11 +424,31 @@ mod tests {
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         let s = body(&res);
-        assert!(s.contains("minted"), "expected a minted decision: {s}");
-        assert!(s.contains("masked"));
+        assert!(s.contains("secretless_exec"), "expected secretless execution: {s}");
+        assert!(s.contains("octo/demo"), "expected the sanitized result: {s}");
         // The invariant: neither the base secret nor the minted token value appears.
         assert!(!s.contains("SUPER_SECRET_BASE_PEM"), "base secret leaked!");
         assert!(!s.contains("ephemeral_token"), "minted token value leaked!");
+    }
+
+    #[tokio::test]
+    async fn non_read_mint_holds_token_and_masks_it() {
+        // A non-executing verb mints and holds the token server-side, returning
+        // only a reference + masked view.
+        let server = server_with_secret();
+        let args = UseCredentialArgs {
+            item_id: "itm_github".into(),
+            origin: "github.com".into(),
+            verb: "MintReadToken".into(),
+            unattended: true,
+            want_raw_secret: false,
+        };
+        let res = server.use_credential(Parameters(args)).await.unwrap();
+        let s = body(&res);
+        assert!(s.contains("token_ref"), "expected a held token ref: {s}");
+        assert!(s.contains("masked"));
+        assert!(!s.contains("SUPER_SECRET_BASE_PEM"));
+        assert!(!s.contains("ephemeral_token"));
     }
 
     #[tokio::test]

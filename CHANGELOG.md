@@ -3,6 +3,34 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [0.2.0] — 2026-07-12
+
+Closes the loop: **secretless execution**. The broker mints a scoped token,
+*performs the action itself*, and returns only a sanitized result — the model
+gets a result, not a value.
+
+### Added
+- **`proctor-mint::exec`** — an `Executor` layer:
+  - `Executor` trait + `ExecAction`/`ExecResult`; HTTP GET injected as `GetHttp`
+    for offline tests.
+  - `GitHubExecutor` — uses a minted installation token to list the repositories
+    the installation can access (real read), returning only repo names/count.
+  - `MockExecutor` for offline demos/tests.
+- **`proctor-mcp`** — `use_credential` on a `Read`/`FetchData` verb now **mints +
+  performs** the action and returns `primitive: "secretless_exec"` with a
+  sanitized `result` — the base secret and the minted token never reach the model.
+  Non-executing verbs still mint-and-hold. GitHub executor wired when configured,
+  else mock.
+
+### Security invariants (tested)
+- On a secretless read, the response carries the *result* but never the base
+  secret or the minted token value (verified end-to-end).
+
+### Still not built
+- More execution operations (writes via propose-not-commit artifacts), OAuth
+  Token Exchange / cloud STS minters, `elicitation` step-up, sync/self-host,
+  anomaly detection — and a **formal security review before any real use**.
+
 ## [0.1.0] — 2026-07-12
 
 First working version of the **Phase B wedge**: the AI credential broker, backed

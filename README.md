@@ -32,13 +32,14 @@ crates/
   vault/    proctor-vault   encrypted vault (Argon2id + XChaCha20-Poly1305), file-backed — PROTOTYPE
   broker/   proctor-broker  the security model: capabilities, origin-binding,
                             propose-not-commit, risk-tiered policy, hash-chained audit
-  mint/     proctor-mint    mint short-lived scoped tokens; MockMinter + real GitHub App minter
-  mcp/      proctor-mcp     the broker+vault+minting exposed as an MCP server (stdio) via rmcp
+  mint/     proctor-mint    mint short-lived scoped tokens + secretless execution
+                            (MockMinter/MockExecutor + real GitHub App minter & executor)
+  mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
   cli/      proctor         manage the vault (init/add/list) + broker demo
 ```
 
 ```bash
-cargo test --workspace              # 24 tests: origin-binding, propose-not-commit, mint no-leak, audit chain…
+cargo test --workspace              # 27 tests: origin-binding, propose-not-commit, secretless no-leak, audit chain…
 cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 
@@ -59,24 +60,25 @@ claude mcp add proctor -- proctor-mcp
 ```
 
 The server exposes `list_credentials`, `use_credential`, `audit_log`. On an
-allowed, mintable item it **mints a fresh, scoped, short-TTL token held
-server-side** and returns only a `token_ref` + masked view — the base secret and
-the minted value never reach the model. Ask your agent to use a credential
-against the wrong origin, or to ship to prod unattended, and watch the broker
-refuse or downgrade it.
+allowed **read**, the broker mints a scoped short-TTL token, **performs the action
+itself, and returns only the sanitized result** — the base secret *and* the minted
+token never reach the model (*secretless execution*). Other allowed mintable
+verbs mint-and-hold the token server-side, returning a reference + masked view.
+Ask your agent to use a credential against the wrong origin, or to ship to prod
+unattended, and watch the broker refuse or downgrade it.
 
-> **Security note:** this is a prototype. The vault, minting, and broker are real
-> and tested, but a **formal security review is required before any real use**.
-> A secretless "perform the action" execution surface is the next step (today a
-> minted token is held server-side, not yet used on the agent's behalf).
+> **Security note:** this is a prototype. The vault, minting, broker, and
+> secretless read execution are real and tested, but a **formal security review
+> is required before any real use**.
 
 ## Status
 
-**v0.1.0** delivers the wedge end-to-end: file-backed vault + CLI, the broker
-security model, minting (mock + real GitHub App), and a vault-backed MCP server —
-24 passing tests. Next: secretless execution (`perform`), `elicitation`-based
-step-up approval, and the vault/sync surfaces. See the [CHANGELOG](CHANGELOG.md)
-and the roadmap in the PRD.
+**v0.2.0** closes the loop with **secretless execution**: the broker mints a
+scoped token, performs a read on the agent's behalf, and returns the result — not
+the token. On top of v0.1.0's file-backed vault + CLI, broker security model,
+minting (mock + real GitHub App), and vault-backed MCP server. 27 passing tests.
+Next: write operations via propose-not-commit artifacts, `elicitation` step-up,
+and the vault/sync surfaces. See the [CHANGELOG](CHANGELOG.md) and the PRD roadmap.
 
 ## License
 
