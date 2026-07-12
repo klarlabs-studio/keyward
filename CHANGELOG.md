@@ -3,6 +3,21 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.9.1] — 2026-07-12
+
+Supply-chain gate + lint hygiene.
+
+### Added
+- **Warden commit/push gate** (`.warden.yaml`): pre-commit runs `fmt --check` +
+  `clippy -D warnings`; pre-push additionally runs the full test suite and a
+  **nox security scan** (fails on active high findings). Provides commit
+  provenance/attestation (SLSA/Sigstore-style). Every commit is now gated on a
+  clean build, clean lint, green tests, and a clean security scan.
+
+### Changed
+- Codebase is now `cargo fmt`-clean and `clippy -D warnings`-clean; refreshed the
+  `proctor-mcp` module docs to list the current tool + config surface.
+
 ## [1.9.0] — 2026-07-12
 
 External security-expert review — all seven findings fixed — plus nox scanning.

@@ -49,7 +49,11 @@ pub enum Isolation {
     /// A container runtime (`docker`/`podman`): separate /proc + filesystem, torn
     /// down after (`--rm`). The credential is passed with `--env NAME` (value from
     /// the runtime's own env), never in argv. `network` = "none" denies egress.
-    Container { runtime: String, image: String, network: String },
+    Container {
+        runtime: String,
+        image: String,
+        network: String,
+    },
 }
 
 /// The concrete command to spawn after applying an isolation strategy.
@@ -67,7 +71,11 @@ impl Isolation {
         match self {
             Isolation::None => "none".into(),
             Isolation::Bubblewrap { deny_net } => {
-                if *deny_net { "bwrap(no-net)".into() } else { "bwrap".into() }
+                if *deny_net {
+                    "bwrap(no-net)".into()
+                } else {
+                    "bwrap".into()
+                }
             }
             Isolation::Container { runtime, image, .. } => format!("{runtime}:{image}"),
         }
@@ -77,7 +85,13 @@ impl Isolation {
     pub fn egress(&self) -> &str {
         match self {
             Isolation::None => "host (unisolated)",
-            Isolation::Bubblewrap { deny_net } => if *deny_net { "none" } else { "host" },
+            Isolation::Bubblewrap { deny_net } => {
+                if *deny_net {
+                    "none"
+                } else {
+                    "host"
+                }
+            }
             Isolation::Container { network, .. } => network,
         }
     }
@@ -93,8 +107,17 @@ impl Isolation {
             },
             Isolation::Bubblewrap { deny_net } => {
                 let mut a: Vec<String> = vec![
-                    "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-                    "--proc", "/proc", "--dev", "/dev", "--ro-bind", "/", "/",
+                    "--unshare-user",
+                    "--unshare-pid",
+                    "--unshare-ipc",
+                    "--unshare-uts",
+                    "--proc",
+                    "/proc",
+                    "--dev",
+                    "/dev",
+                    "--ro-bind",
+                    "/",
+                    "/",
                 ]
                 .into_iter()
                 .map(String::from)
@@ -105,11 +128,23 @@ impl Isolation {
                 a.push("--".into());
                 a.push(program.to_string());
                 a.extend(args.iter().cloned());
-                Plan { program: "bwrap".into(), args: a, env: env.clone() }
+                Plan {
+                    program: "bwrap".into(),
+                    args: a,
+                    env: env.clone(),
+                }
             }
-            Isolation::Container { runtime, image, network } => {
-                let mut a: Vec<String> =
-                    vec!["run".into(), "--rm".into(), "--network".into(), network.clone()];
+            Isolation::Container {
+                runtime,
+                image,
+                network,
+            } => {
+                let mut a: Vec<String> = vec![
+                    "run".into(),
+                    "--rm".into(),
+                    "--network".into(),
+                    network.clone(),
+                ];
                 // `--env NAME` (name only) → value taken from the runtime's env,
                 // so the secret never appears in argv (/proc/cmdline is public).
                 for k in env.keys() {
@@ -119,7 +154,11 @@ impl Isolation {
                 a.push(image.clone());
                 a.push(program.to_string());
                 a.extend(args.iter().cloned());
-                Plan { program: runtime.clone(), args: a, env: env.clone() }
+                Plan {
+                    program: runtime.clone(),
+                    args: a,
+                    env: env.clone(),
+                }
             }
         }
     }
@@ -149,7 +188,9 @@ pub fn run_with_env(
     // (which holds PROCTOR_MASTER, endpoints, other secrets). Re-add only a
     // minimal safe baseline, then the injected credential(s).
     cmd.env_clear();
-    for key in ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ"] {
+    for key in [
+        "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ",
+    ] {
         if let Ok(v) = std::env::var(key) {
             cmd.env(key, v);
         }
@@ -186,7 +227,10 @@ mod tests {
         // Prove the var reached the process, without echoing its value.
         let r = run_with_env(
             "sh",
-            &["-c".into(), "test -n \"$SECRET_TOK\" && echo present".into()],
+            &[
+                "-c".into(),
+                "test -n \"$SECRET_TOK\" && echo present".into(),
+            ],
             &env,
         )
         .unwrap();
@@ -227,14 +271,18 @@ mod tests {
         assert!(argv.contains("--env DEMO_TOKEN"));
         assert!(argv.contains("alpine aws s3 ls"));
         // The invariant: the secret VALUE never appears in argv (/proc/cmdline is public).
-        assert!(!argv.contains("supersecret"), "secret leaked into argv: {argv}");
+        assert!(
+            !argv.contains("supersecret"),
+            "secret leaked into argv: {argv}"
+        );
         // But it is set on the runtime process's env so --env NAME picks it up.
         assert_eq!(plan.env.get("DEMO_TOKEN").unwrap(), "supersecret");
     }
 
     #[test]
     fn bubblewrap_remounts_proc_cuts_net_and_keeps_secret_out_of_argv() {
-        let plan = Isolation::Bubblewrap { deny_net: true }.wrap("aws", &["s3".into()], &secret_env());
+        let plan =
+            Isolation::Bubblewrap { deny_net: true }.wrap("aws", &["s3".into()], &secret_env());
         assert_eq!(plan.program, "bwrap");
         let argv = plan.args.join(" ");
         assert!(argv.contains("--proc /proc"));
@@ -247,8 +295,20 @@ mod tests {
     fn env_baseline_excludes_broker_secrets() {
         // The child gets PATH etc. + injected creds, but NOT arbitrary parent env.
         std::env::set_var("PROCTOR_TEST_SENTINEL", "should_not_be_inherited");
-        let r = run_with_env("sh", &["-c".into(), "echo [${PROCTOR_TEST_SENTINEL:-absent}]".into()], &BTreeMap::new()).unwrap();
-        assert!(r.stdout.contains("[absent]"), "parent env leaked to child: {}", r.stdout);
+        let r = run_with_env(
+            "sh",
+            &[
+                "-c".into(),
+                "echo [${PROCTOR_TEST_SENTINEL:-absent}]".into(),
+            ],
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(
+            r.stdout.contains("[absent]"),
+            "parent env leaked to child: {}",
+            r.stdout
+        );
         std::env::remove_var("PROCTOR_TEST_SENTINEL");
     }
 

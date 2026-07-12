@@ -28,7 +28,10 @@ pub struct Claims {
 /// Build the JWT claims for `app_id` at `now`. `iat` is backdated to tolerate
 /// clock skew; `exp` stays within GitHub's 10-minute ceiling.
 pub fn build_claims(app_id: &str, now: SystemTime) -> Claims {
-    let secs = now.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = now
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     Claims {
         iat: secs.saturating_sub(JWT_BACKDATE_SECS),
         exp: secs + JWT_LIFETIME_SECS,
@@ -82,7 +85,12 @@ pub struct GitHubAppMinter<S: JwtSigner, H: TokenHttp> {
 }
 
 impl<S: JwtSigner, H: TokenHttp> GitHubAppMinter<S, H> {
-    pub fn new(app_id: impl Into<String>, installation_id: impl Into<String>, signer: S, http: H) -> Self {
+    pub fn new(
+        app_id: impl Into<String>,
+        installation_id: impl Into<String>,
+        signer: S,
+        http: H,
+    ) -> Self {
         GitHubAppMinter {
             app_id: app_id.into(),
             installation_id: installation_id.into(),
@@ -185,7 +193,10 @@ impl TokenHttp for ReqwestHttp {
             .await
             .map_err(|e| MintError::Http(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(MintError::Provider(format!("github returned {}", resp.status())));
+            return Err(MintError::Provider(format!(
+                "github returned {}",
+                resp.status()
+            )));
         }
         resp.json::<TokenHttpResponse>()
             .await
@@ -254,12 +265,19 @@ mod tests {
             },
         );
         let token = minter
-            .mint("itm_github", "TEST-KEY-PLACEHOLDER\n...pem...", &MintScope::read_only())
+            .mint(
+                "itm_github",
+                "TEST-KEY-PLACEHOLDER\n...pem...",
+                &MintScope::read_only(),
+            )
             .await
             .unwrap();
         assert_eq!(token.provider, "github");
         assert_eq!(token.expose(), "tk_installationtoken");
-        assert_eq!(token.provider_expires_at.as_deref(), Some("2026-07-12T12:00:00Z"));
+        assert_eq!(
+            token.provider_expires_at.as_deref(),
+            Some("2026-07-12T12:00:00Z")
+        );
         // The masked form never leaks the value.
         assert!(!token.masked().contains("installationtoken"));
     }

@@ -61,13 +61,12 @@ impl Policy {
         }
 
         // 3. Novel origin (bound to the item, but not on the auto-approve list).
-        let novel = !self
-            .approved_origins
-            .iter()
-            .any(|o| o == &action.target.0);
+        let novel = !self.approved_origins.iter().any(|o| o == &action.target.0);
         if novel {
             return match mode {
-                Mode::Attended => Decision::StepUp("novel origin not on the auto-approve list".into()),
+                Mode::Attended => {
+                    Decision::StepUp("novel origin not on the auto-approve list".into())
+                }
                 Mode::Unattended => {
                     Decision::Deny("novel origin cannot be auto-approved unattended".into())
                 }

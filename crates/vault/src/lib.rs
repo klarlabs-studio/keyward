@@ -139,23 +139,32 @@ pub fn seal(items: &[Item], secret: &[u8]) -> Result<SealedVault, VaultError> {
     OsRng.fill_bytes(&mut nonce);
 
     let key = derive_key(secret, &salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
 
     let plaintext = Zeroizing::new(serde_json::to_vec(items)?);
     let ciphertext = cipher
         .encrypt(XNonce::from_slice(&nonce), plaintext.as_slice())
         .map_err(|_| VaultError::Decrypt)?;
 
-    Ok(SealedVault { salt, nonce, ciphertext })
+    Ok(SealedVault {
+        salt,
+        nonce,
+        ciphertext,
+    })
 }
 
 /// Open a sealed vault. Fails on wrong secret or any tampering (AEAD auth).
 pub fn open(sealed: &SealedVault, secret: &[u8]) -> Result<Vec<Item>, VaultError> {
     let key = derive_key(secret, &sealed.salt)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
     let plaintext = Zeroizing::new(
         cipher
-            .decrypt(XNonce::from_slice(&sealed.nonce), sealed.ciphertext.as_ref())
+            .decrypt(
+                XNonce::from_slice(&sealed.nonce),
+                sealed.ciphertext.as_ref(),
+            )
             .map_err(|_| VaultError::Decrypt)?,
     );
     let items = serde_json::from_slice(&plaintext)?;
@@ -163,7 +172,11 @@ pub fn open(sealed: &SealedVault, secret: &[u8]) -> Result<Vec<Item>, VaultError
 }
 
 /// Seal `items` and write the sealed blob to `path` as JSON.
-pub fn save_to_file(path: &std::path::Path, items: &[Item], secret: &[u8]) -> Result<(), VaultError> {
+pub fn save_to_file(
+    path: &std::path::Path,
+    items: &[Item],
+    secret: &[u8],
+) -> Result<(), VaultError> {
     let sealed = seal(items, secret)?;
     let json = serde_json::to_vec_pretty(&sealed)?;
     std::fs::write(path, json)?;

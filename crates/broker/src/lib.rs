@@ -57,7 +57,13 @@ mod tests {
         let r = b.request_use(&github(), &action, Mode::Attended, false, SystemTime::now());
         assert_eq!(r.unwrap_err(), Denied::OriginMismatch);
         // And it was audited.
-        assert!(b.audit.entries().last().unwrap().decision.contains("origin-mismatch"));
+        assert!(b
+            .audit
+            .entries()
+            .last()
+            .unwrap()
+            .decision
+            .contains("origin-mismatch"));
     }
 
     /// A reversible, bound, pre-approved read auto-allows and issues a MINTED
@@ -66,7 +72,13 @@ mod tests {
     fn reversible_bound_read_auto_allows_minted() {
         let mut b = broker();
         let action = Action::new(ActionVerb::Read, "github.com");
-        match b.request_use(&github(), &action, Mode::Unattended, false, SystemTime::now()) {
+        match b.request_use(
+            &github(),
+            &action,
+            Mode::Unattended,
+            false,
+            SystemTime::now(),
+        ) {
             Ok(Grant::Capability(cap)) => assert_eq!(cap.primitive, Primitive::Minted),
             other => panic!("expected minted capability, got {other:?}"),
         }
@@ -100,7 +112,13 @@ mod tests {
     fn ship_to_prod_unattended_becomes_propose() {
         let mut b = broker();
         let action = Action::new(ActionVerb::ShipToProduction, "github.com");
-        match b.request_use(&github(), &action, Mode::Unattended, false, SystemTime::now()) {
+        match b.request_use(
+            &github(),
+            &action,
+            Mode::Unattended,
+            false,
+            SystemTime::now(),
+        ) {
             Ok(Grant::Proposed(v)) => assert_eq!(v, ActionVerb::OpenPullRequest),
             other => panic!("expected propose-instead, got {other:?}"),
         }
@@ -153,7 +171,10 @@ mod tests {
         let mut b = broker();
         let action = Action::new(ActionVerb::Read, "github.com");
         let now = SystemTime::now();
-        let cap = match b.request_use(&github(), &action, Mode::Unattended, false, now).unwrap() {
+        let cap = match b
+            .request_use(&github(), &action, Mode::Unattended, false, now)
+            .unwrap()
+        {
             Grant::Capability(c) => c,
             other => panic!("expected capability, got {other:?}"),
         };
@@ -172,9 +193,27 @@ mod tests {
     fn audit_chain_detects_tampering() {
         let mut b = broker();
         let now = SystemTime::now();
-        let _ = b.request_use(&github(), &Action::new(ActionVerb::Read, "github.com"), Mode::Unattended, false, now);
-        let _ = b.request_use(&github(), &Action::new(ActionVerb::Read, "evil.com"), Mode::Attended, false, now);
-        let _ = b.request_use(&bank(), &Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Attended, false, now);
+        let _ = b.request_use(
+            &github(),
+            &Action::new(ActionVerb::Read, "github.com"),
+            Mode::Unattended,
+            false,
+            now,
+        );
+        let _ = b.request_use(
+            &github(),
+            &Action::new(ActionVerb::Read, "evil.com"),
+            Mode::Attended,
+            false,
+            now,
+        );
+        let _ = b.request_use(
+            &bank(),
+            &Action::new(ActionVerb::MoveMoney, "bank.com"),
+            Mode::Attended,
+            false,
+            now,
+        );
         assert!(b.audit.verify());
         assert_eq!(b.audit.entries().len(), 3);
         // (Tamper detection of the private Vec is covered in the audit module's

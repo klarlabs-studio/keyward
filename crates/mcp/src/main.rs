@@ -1,23 +1,17 @@
 //! proctor-mcp — the Proctor credential broker exposed as an MCP server over
-//! stdio, backed by a real vault and a minting layer.
+//! stdio, backed by a real vault, minting, and generic subprocess execution.
 //!
-//! Tools:
-//!   - `list_credentials`  — secret-free item metadata
-//!   - `use_credential`    — request a scoped action/handle (never plaintext).
-//!                           On an allowed, mintable item it MINTS a fresh,
-//!                           scoped, short-TTL token held server-side and
-//!                           returns only a reference + masked view.
-//!   - `audit_log`         — the tamper-evident decision trail
+//! Tools: list_credentials, use_credential, run_command, list_minted,
+//! revoke_all, audit_log. The broker returns results/handles, never plaintext
+//! secrets; it enforces origin/command-binding, propose-not-commit, a
+//! never-unattended floor, and (for run_command) OS isolation + risk gating.
 //!
-//! Config via env:
-//!   PROCTOR_VAULT / PROCTOR_MASTER      load a real vault (else demo items)
-//!   PROCTOR_APPROVED_ORIGINS            csv override for the auto-approve list
-//!   PROCTOR_GH_APP_ID / PROCTOR_GH_INSTALLATION_ID
-//!                                       use the real GitHub App minter (else mock)
+//! Config via env: PROCTOR_VAULT + PROCTOR_MASTER_FILE (or PROCTOR_MASTER),
+//! PROCTOR_PROFILES, PROCTOR_ISOLATION, PROCTOR_TRUST, PROCTOR_AUDIT,
+//! PROCTOR_APPROVED_ORIGINS, and minter config (PROCTOR_GH_*, PROCTOR_STS_*,
+//! PROCTOR_AWS_ROLE_ARN).
 //!
-//! NOTE: prototype. The minted token is held server-side and never returned to
-//! the model; a follow-up execution surface (secretless "perform") is the next
-//! step. Formal security review required before real use.
+//! NOTE: prototype — a formal security review is required before real use.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,8 +22,9 @@ use rmcp::{
     elicit_safe,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
-    schemars, tool, tool_handler, tool_router,
+    schemars,
     service::{Peer, RequestContext, RoleServer},
+    tool, tool_handler, tool_router,
     transport::stdio,
     ErrorData as McpError, ServerHandler, ServiceExt,
 };
@@ -41,7 +36,9 @@ use zeroize::Zeroizing;
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
 use proctor_mint::aws::{AwsWebIdentityMinter, ReqwestRawHttp};
 use proctor_mint::exchange::{ReqwestFormHttp, TokenExchangeMinter};
-use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient};
+use proctor_mint::exec::{
+    ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient,
+};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
 use proctor_mint::run::{run_isolated, Isolation};
 use proctor_mint::{MintScope, MintedToken, Minter, MockMinter};
@@ -183,7 +180,10 @@ fn scope_for(verb: ActionVerb) -> MintScope {
             let mut permissions = std::collections::BTreeMap::new();
             permissions.insert("contents".to_string(), "read".to_string());
             permissions.insert("pull_requests".to_string(), "write".to_string());
-            MintScope { permissions, resources: Vec::new() }
+            MintScope {
+                permissions,
+                resources: Vec::new(),
+            }
         }
         _ => MintScope::read_only(),
     }
@@ -214,7 +214,10 @@ impl ProctorServer {
             state: Arc::new(Mutex::new(AppState {
                 items,
                 // Wrap secrets so they are wiped from memory when dropped.
-                secrets: secrets.into_iter().map(|(k, v)| (k, Zeroizing::new(v))).collect(),
+                secrets: secrets
+                    .into_iter()
+                    .map(|(k, v)| (k, Zeroizing::new(v)))
+                    .collect(),
                 providers,
                 broker,
                 minted: HashMap::new(),
@@ -263,7 +266,9 @@ impl ProctorServer {
                 })
             })
             .collect();
-        Ok(text_result(serde_json::to_string_pretty(&list).unwrap_or_default()))
+        Ok(text_result(
+            serde_json::to_string_pretty(&list).unwrap_or_default(),
+        ))
     }
 
     #[tool(
@@ -274,25 +279,54 @@ impl ProctorServer {
         context: RequestContext<RoleServer>,
         Parameters(args): Parameters<UseCredentialArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let approver = ElicitApprover { peer: context.peer.clone() };
+        let approver = ElicitApprover {
+            peer: context.peer.clone(),
+        };
         let out = self.handle_use(args, &approver).await;
-        Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
+        Ok(text_result(
+            serde_json::to_string_pretty(&out).unwrap_or_default(),
+        ))
     }
 
     /// Core decision + execution logic, independent of the MCP transport so it is
     /// unit-testable. On a step-up decision it asks `approver` (real elicitation
     /// in production, a mock in tests).
-    async fn handle_use(&self, args: UseCredentialArgs, approver: &dyn Approver) -> serde_json::Value {
+    async fn handle_use(
+        &self,
+        args: UseCredentialArgs,
+        approver: &dyn Approver,
+    ) -> serde_json::Value {
         let verb = match ActionVerb::parse(&args.verb) {
             Some(v) => v,
-            None => return json!({ "decision": "error", "reason": format!("unknown verb '{}'", args.verb) }),
+            None => {
+                return json!({ "decision": "error", "reason": format!("unknown verb '{}'", args.verb) })
+            }
         };
-        let mode = if args.unattended { Mode::Unattended } else { Mode::Attended };
+        let mode = if args.unattended {
+            Mode::Unattended
+        } else {
+            Mode::Attended
+        };
 
         enum Plan {
             Value(serde_json::Value),
-            Exec { mintable: bool, item_id: String, base: Option<Zeroizing<String>>, verb: ActionVerb, origin: String, params: serde_json::Value },
-            StepUp { reason: String, mintable: bool, item_id: String, base: Option<Zeroizing<String>>, verb: ActionVerb, origin: String, params: serde_json::Value },
+            Exec {
+                mintable: bool,
+                item_id: String,
+                base: Option<Zeroizing<String>>,
+                verb: ActionVerb,
+                origin: String,
+                params: serde_json::Value,
+            },
+            StepUp {
+                reason: String,
+                mintable: bool,
+                item_id: String,
+                base: Option<Zeroizing<String>>,
+                verb: ActionVerb,
+                origin: String,
+                params: serde_json::Value,
+            },
         }
 
         // Decide under the lock (broker is sync); execute/elicit after releasing it.
@@ -300,54 +334,116 @@ impl ProctorServer {
             let mut state = self.state.lock().await;
             let item = match state.items.iter().find(|i| i.id == args.item_id).cloned() {
                 Some(i) => i,
-                None => return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) }),
+                None => {
+                    return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) })
+                }
             };
             let action = Action::new(verb, &args.origin);
-            match state.broker.request_use(&item, &action, mode, args.want_raw_secret, SystemTime::now()) {
+            match state.broker.request_use(
+                &item,
+                &action,
+                mode,
+                args.want_raw_secret,
+                SystemTime::now(),
+            ) {
                 Ok(Grant::Capability(cap)) => {
                     let base = state.secrets.get(&item.id).cloned();
                     match cap.primitive {
-                        Primitive::Minted => Plan::Exec { mintable: true, item_id: item.id.clone(), base, verb, origin: action.target.0.clone(), params: args.params.clone() },
-                        Primitive::Secretless => Plan::Exec { mintable: false, item_id: item.id.clone(), base, verb, origin: action.target.0.clone(), params: args.params.clone() },
-                        Primitive::RawSecret => Plan::Value(json!({ "decision": "allow", "primitive": "raw", "note": "raw path (disabled by default)" })),
+                        Primitive::Minted => Plan::Exec {
+                            mintable: true,
+                            item_id: item.id.clone(),
+                            base,
+                            verb,
+                            origin: action.target.0.clone(),
+                            params: args.params.clone(),
+                        },
+                        Primitive::Secretless => Plan::Exec {
+                            mintable: false,
+                            item_id: item.id.clone(),
+                            base,
+                            verb,
+                            origin: action.target.0.clone(),
+                            params: args.params.clone(),
+                        },
+                        Primitive::RawSecret => Plan::Value(
+                            json!({ "decision": "allow", "primitive": "raw", "note": "raw path (disabled by default)" }),
+                        ),
                     }
                 }
                 Ok(Grant::NeedsHumanApproval(reason)) => {
                     if exec_kind_for(verb).is_some() {
-                        Plan::StepUp { reason, mintable: item.mintable, item_id: item.id.clone(), base: state.secrets.get(&item.id).cloned(), verb, origin: action.target.0.clone(), params: args.params.clone() }
+                        Plan::StepUp {
+                            reason,
+                            mintable: item.mintable,
+                            item_id: item.id.clone(),
+                            base: state.secrets.get(&item.id).cloned(),
+                            verb,
+                            origin: action.target.0.clone(),
+                            params: args.params.clone(),
+                        }
                     } else {
-                        Plan::Value(json!({ "decision": "step_up", "reason": reason, "note": "requires a human to approve; no automated execution is wired for this verb." }))
+                        Plan::Value(
+                            json!({ "decision": "step_up", "reason": reason, "note": "requires a human to approve; no automated execution is wired for this verb." }),
+                        )
                     }
                 }
-                Ok(Grant::Proposed(v)) => Plan::Value(json!({ "decision": "propose_not_commit", "proposed_verb": v.as_str(), "note": "irreversible action offered as a reviewable artifact instead of executing" })),
-                Err(Denied::OriginMismatch) => Plan::Value(json!({ "decision": "deny", "reason": "origin mismatch — confused-deputy blocked (credential not bound to this origin)" })),
-                Err(Denied::Policy(reason)) => Plan::Value(json!({ "decision": "deny", "reason": reason })),
+                Ok(Grant::Proposed(v)) => Plan::Value(
+                    json!({ "decision": "propose_not_commit", "proposed_verb": v.as_str(), "note": "irreversible action offered as a reviewable artifact instead of executing" }),
+                ),
+                Err(Denied::OriginMismatch) => Plan::Value(
+                    json!({ "decision": "deny", "reason": "origin mismatch — confused-deputy blocked (credential not bound to this origin)" }),
+                ),
+                Err(Denied::Policy(reason)) => {
+                    Plan::Value(json!({ "decision": "deny", "reason": reason }))
+                }
             }
         };
 
         match plan {
             Plan::Value(v) => v,
-            Plan::Exec { mintable, item_id, base, verb, origin, params } => {
-                self.execute(mintable, item_id, base, verb, origin, params, false).await
+            Plan::Exec {
+                mintable,
+                item_id,
+                base,
+                verb,
+                origin,
+                params,
+            } => {
+                self.execute(mintable, item_id, base, verb, origin, params, false)
+                    .await
             }
-            Plan::StepUp { reason, mintable, item_id, base, verb, origin, params } => {
-                match approver.request(&reason).await {
-                    ApprovalOutcome::Approved => {
-                        {
-                            let mut s = self.state.lock().await;
-                            s.broker.audit.append(&item_id, &origin, verb.as_str(), "STEPUP:approved");
-                        }
-                        self.execute(mintable, item_id, base, verb, origin, params, true).await
+            Plan::StepUp {
+                reason,
+                mintable,
+                item_id,
+                base,
+                verb,
+                origin,
+                params,
+            } => match approver.request(&reason).await {
+                ApprovalOutcome::Approved => {
+                    {
+                        let mut s = self.state.lock().await;
+                        s.broker
+                            .audit
+                            .append(&item_id, &origin, verb.as_str(), "STEPUP:approved");
                     }
-                    ApprovalOutcome::Rejected => json!({ "decision": "deny", "reason": format!("human rejected step-up: {reason}") }),
-                    ApprovalOutcome::Unavailable => json!({ "decision": "step_up", "reason": reason, "note": "human approval required; interactive elicitation is unavailable on this client." }),
+                    self.execute(mintable, item_id, base, verb, origin, params, true)
+                        .await
                 }
-            }
+                ApprovalOutcome::Rejected => {
+                    json!({ "decision": "deny", "reason": format!("human rejected step-up: {reason}") })
+                }
+                ApprovalOutcome::Unavailable => {
+                    json!({ "decision": "step_up", "reason": reason, "note": "human approval required; interactive elicitation is unavailable on this client." })
+                }
+            },
         }
     }
 
     /// Perform an allowed action: mint (mintable) or read the stored token
     /// (vault), then execute via the executor. The credential is never returned.
+    #[allow(clippy::too_many_arguments)]
     async fn execute(
         &self,
         mintable: bool,
@@ -360,41 +456,53 @@ impl ProctorServer {
     ) -> serde_json::Value {
         let secret = match base {
             Some(s) => s,
-            None => return json!({
-                "decision": "allow",
-                "primitive": if mintable { "minted" } else { "secretless" },
-                "note": "decision allows the action, but no credential is loaded (running without a vault). Load a vault via PROCTOR_VAULT/PROCTOR_MASTER."
-            }),
+            None => {
+                return json!({
+                    "decision": "allow",
+                    "primitive": if mintable { "minted" } else { "secretless" },
+                    "note": "decision allows the action, but no credential is loaded (running without a vault). Load a vault via PROCTOR_VAULT/PROCTOR_MASTER."
+                })
+            }
         };
         let kind = exec_kind_for(verb);
 
         if mintable {
             let token = match self.minter.mint(&item_id, &secret, &scope_for(verb)).await {
                 Ok(t) => t,
-                Err(e) => return json!({ "decision": "error", "reason": format!("mint failed: {e}") }),
+                Err(e) => {
+                    return json!({ "decision": "error", "reason": format!("mint failed: {e}") })
+                }
             };
             match kind {
                 Some(k) => {
                     let ea = ExecAction::with_params(k, origin, params);
                     match self.executor.perform(token.expose(), &ea).await {
-                        Ok(r) => with_approved(json!({
-                            "decision": "allow", "primitive": "secretless_exec", "source": "minted",
-                            "provider": self.executor.provider(), "performed": true,
-                            "result_summary": r.summary, "result": r.data,
-                            "note": "the broker minted a scoped short-TTL token and performed the action itself; neither the base secret nor the minted token was returned to the model."
-                        }), approved),
-                        Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
+                        Ok(r) => with_approved(
+                            json!({
+                                "decision": "allow", "primitive": "secretless_exec", "source": "minted",
+                                "provider": self.executor.provider(), "performed": true,
+                                "result_summary": r.summary, "result": r.data,
+                                "note": "the broker minted a scoped short-TTL token and performed the action itself; neither the base secret nor the minted token was returned to the model."
+                            }),
+                            approved,
+                        ),
+                        Err(e) => {
+                            json!({ "decision": "error", "reason": format!("execution failed: {e}") })
+                        }
                     }
                 }
                 None => {
                     let mut state = self.state.lock().await;
                     let token_ref = format!("mint_{}", state.minted.len() + 1);
-                    let resp = with_approved(json!({
-                        "decision": "allow", "primitive": "minted", "provider": token.provider,
-                        "token_ref": token_ref, "masked": token.masked(), "scope": token.scope_desc,
-                        "provider_expires_at": token.provider_expires_at,
-                        "note": "a fresh, scoped, short-TTL token was minted and is held server-side; it is NOT returned to the model."
-                    }), approved);
+                    let resp = with_approved(
+                        json!({
+                            "decision": "allow", "primitive": "minted", "provider": token.provider,
+                            "token_ref": token_ref, "masked": token.masked(), "scope": token.scope_desc,
+                            "provider_expires_at": token.provider_expires_at,
+                            "note": "a fresh, scoped, short-TTL token was minted and is held server-side; it is NOT returned to the model."
+                        }),
+                        approved,
+                    );
                     state.minted.insert(token_ref, token);
                     resp
                 }
@@ -404,13 +512,18 @@ impl ProctorServer {
                 Some(k) => {
                     let ea = ExecAction::with_params(k, origin, params);
                     match self.executor.perform(&secret, &ea).await {
-                        Ok(r) => with_approved(json!({
-                            "decision": "allow", "primitive": "secretless_exec", "source": "vault",
-                            "provider": self.executor.provider(), "performed": true,
-                            "result_summary": r.summary, "result": r.data,
-                            "note": "the broker read the stored credential from the vault and performed the action itself; the credential was never returned to the model."
-                        }), approved),
-                        Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
+                        Ok(r) => with_approved(
+                            json!({
+                                "decision": "allow", "primitive": "secretless_exec", "source": "vault",
+                                "provider": self.executor.provider(), "performed": true,
+                                "result_summary": r.summary, "result": r.data,
+                                "note": "the broker read the stored credential from the vault and performed the action itself; the credential was never returned to the model."
+                            }),
+                            approved,
+                        ),
+                        Err(e) => {
+                            json!({ "decision": "error", "reason": format!("execution failed: {e}") })
+                        }
                     }
                 }
                 None => json!({
@@ -439,7 +552,9 @@ impl ProctorServer {
             })
             .collect();
         let out = json!({ "verified": state.broker.audit.verify(), "entries": entries });
-        Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
+        Ok(text_result(
+            serde_json::to_string_pretty(&out).unwrap_or_default(),
+        ))
     }
 
     #[tool(
@@ -452,18 +567,24 @@ impl ProctorServer {
             .iter()
             .map(|(r, t)| json!({ "token_ref": r, "provider": t.provider, "masked": t.masked(), "scope": t.scope_desc }))
             .collect();
-        Ok(text_result(serde_json::to_string_pretty(&json!({ "count": list.len(), "minted": list })).unwrap_or_default()))
+        Ok(text_result(
+            serde_json::to_string_pretty(&json!({ "count": list.len(), "minted": list }))
+                .unwrap_or_default(),
+        ))
     }
 
-    #[tool(
-        description = "Kill switch: revoke all server-held minted tokens immediately. Audited."
-    )]
+    #[tool(description = "Kill switch: revoke all server-held minted tokens immediately. Audited.")]
     async fn revoke_all(&self) -> Result<CallToolResult, McpError> {
         let mut state = self.state.lock().await;
         let n = state.minted.len();
         state.minted.clear();
-        state.broker.audit.append("*", "*", "RevokeAll", &format!("REVOKE-ALL:{n}-tokens"));
-        Ok(text_result(serde_json::to_string_pretty(&json!({ "revoked": n })).unwrap_or_default()))
+        state
+            .broker
+            .audit
+            .append("*", "*", "RevokeAll", &format!("REVOKE-ALL:{n}-tokens"));
+        Ok(text_result(
+            serde_json::to_string_pretty(&json!({ "revoked": n })).unwrap_or_default(),
+        ))
     }
 
     #[tool(
@@ -474,13 +595,21 @@ impl ProctorServer {
         context: RequestContext<RoleServer>,
         Parameters(args): Parameters<RunCommandArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let approver = ElicitApprover { peer: context.peer.clone() };
+        let approver = ElicitApprover {
+            peer: context.peer.clone(),
+        };
         let out = self.handle_run(args, &approver).await;
-        Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
+        Ok(text_result(
+            serde_json::to_string_pretty(&out).unwrap_or_default(),
+        ))
     }
 
     async fn handle_run(&self, args: RunCommandArgs, approver: &dyn Approver) -> serde_json::Value {
-        let mode = if args.unattended { Mode::Unattended } else { Mode::Attended };
+        let mode = if args.unattended {
+            Mode::Unattended
+        } else {
+            Mode::Attended
+        };
 
         // (0) Trust gate — in untrusted mode, refuse to inject a credential into a
         // subprocess without OS isolation (env injection is not a boundary).
@@ -496,26 +625,40 @@ impl ProctorServer {
             let state = self.state.lock().await;
             let mintable = match state.items.iter().find(|i| i.id == args.item_id) {
                 Some(i) => i.mintable,
-                None => return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) }),
+                None => {
+                    return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) })
+                }
             };
             let provider = match state.providers.get(&args.item_id) {
                 Some(p) => p.clone(),
-                None => return json!({ "decision": "error", "reason": "item has no provider profile; set one to run commands" }),
+                None => {
+                    return json!({ "decision": "error", "reason": "item has no provider profile; set one to run commands" })
+                }
             };
             match state.secrets.get(&args.item_id) {
                 Some(s) => (s.clone(), provider, mintable),
-                None => return json!({ "decision": "allow", "note": "no credential loaded (running without a vault)" }),
+                None => {
+                    return json!({ "decision": "allow", "note": "no credential loaded (running without a vault)" })
+                }
             }
         };
 
         let profile = match self.profiles.get(&provider_id) {
             Some(p) => p,
-            None => return json!({ "decision": "error", "reason": format!("unknown provider profile '{provider_id}' (add {provider_id}.toml)") }),
+            None => {
+                return json!({ "decision": "error", "reason": format!("unknown provider profile '{provider_id}' (add {provider_id}.toml)") })
+            }
         };
 
         // (1) Command-binding — the program must be one this credential authorizes.
         if !profile.commands.is_empty() && !profile.commands.iter().any(|c| c == &args.program) {
-            self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:command-not-authorized").await;
+            self.audit(
+                &args.item_id,
+                &provider_id,
+                &args.program,
+                "RUN-DENY:command-not-authorized",
+            )
+            .await;
             return json!({
                 "decision": "deny",
                 "reason": format!("'{}' is not authorized for credential '{}' — confused-deputy blocked", args.program, args.item_id)
@@ -523,7 +666,13 @@ impl ProctorServer {
         }
         // Shells run arbitrary work past command-binding — blocked unless opted in.
         if proctor_profiles::is_shell_interpreter(&args.program) && !profile.allow_shell {
-            self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:shell-not-permitted").await;
+            self.audit(
+                &args.item_id,
+                &provider_id,
+                &args.program,
+                "RUN-DENY:shell-not-permitted",
+            )
+            .await;
             return json!({
                 "decision": "deny",
                 "reason": format!("'{}' is a shell interpreter and is not permitted for this credential; set allow_shell = true on the profile to override", args.program)
@@ -537,13 +686,28 @@ impl ProctorServer {
         let proceed = match risk {
             RiskClass::Read => true,
             RiskClass::Mutate | RiskClass::Unknown => match mode {
-                Mode::Attended => match approver.request(&format!("run `{}` (risk: {:?})", argv.join(" "), risk)).await {
+                Mode::Attended => match approver
+                    .request(&format!("run `{}` (risk: {:?})", argv.join(" "), risk))
+                    .await
+                {
                     ApprovalOutcome::Approved => {
-                        self.audit(&args.item_id, &provider_id, &args.program, "RUN-STEPUP:approved").await;
+                        self.audit(
+                            &args.item_id,
+                            &provider_id,
+                            &args.program,
+                            "RUN-STEPUP:approved",
+                        )
+                        .await;
                         true
                     }
                     ApprovalOutcome::Rejected => {
-                        self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:rejected").await;
+                        self.audit(
+                            &args.item_id,
+                            &provider_id,
+                            &args.program,
+                            "RUN-DENY:rejected",
+                        )
+                        .await;
                         return json!({ "decision": "deny", "reason": "human rejected the mutating/unknown command" });
                     }
                     ApprovalOutcome::Unavailable => {
@@ -551,7 +715,13 @@ impl ProctorServer {
                     }
                 },
                 Mode::Unattended => {
-                    self.audit(&args.item_id, &provider_id, &args.program, "RUN-DENY:mutating-unattended").await;
+                    self.audit(
+                        &args.item_id,
+                        &provider_id,
+                        &args.program,
+                        "RUN-DENY:mutating-unattended",
+                    )
+                    .await;
                     return json!({ "decision": "deny", "reason": format!("`{}` is {:?} and cannot run unattended", argv.join(" "), risk) });
                 }
             },
@@ -567,7 +737,10 @@ impl ProctorServer {
         if mintable {
             // Route to the minter declared by the provider profile (mint kind).
             let minter = self.minter_for(&provider_id);
-            if let Ok(tok) = minter.mint(&args.item_id, &secret, &MintScope::read_only()).await {
+            if let Ok(tok) = minter
+                .mint(&args.item_id, &secret, &MintScope::read_only())
+                .await
+            {
                 // Use the minted credential only if it composes for this profile —
                 // single tokens fill `env_var`, JSON trios fill `env_map`.
                 if profile.compose_env(tok.expose()).is_ok() {
@@ -580,11 +753,19 @@ impl ProctorServer {
         // Compose env + run (off-thread), then redact injected values from output.
         let env = match profile.compose_env(&inject) {
             Ok(e) => e,
-            Err(e) => return json!({ "decision": "error", "reason": format!("credential/profile mismatch: {e}") }),
+            Err(e) => {
+                return json!({ "decision": "error", "reason": format!("credential/profile mismatch: {e}") })
+            }
         };
-        let (program, cmdargs, env_run, iso) =
-            (args.program.clone(), args.args.clone(), env.clone(), self.isolation.clone());
-        let run = tokio::task::spawn_blocking(move || run_isolated(&iso, &program, &cmdargs, &env_run)).await;
+        let (program, cmdargs, env_run, iso) = (
+            args.program.clone(),
+            args.args.clone(),
+            env.clone(),
+            self.isolation.clone(),
+        );
+        let run =
+            tokio::task::spawn_blocking(move || run_isolated(&iso, &program, &cmdargs, &env_run))
+                .await;
 
         let redact = |mut s: String| -> String {
             for v in env.values() {
@@ -597,7 +778,13 @@ impl ProctorServer {
 
         match run {
             Ok(Ok(r)) => {
-                self.audit(&args.item_id, &provider_id, &args.program, &format!("RUN-ALLOW:exit={:?}", r.code)).await;
+                self.audit(
+                    &args.item_id,
+                    &provider_id,
+                    &args.program,
+                    &format!("RUN-ALLOW:exit={:?}", r.code),
+                )
+                .await;
                 let mut out = json!({
                     "decision": "allow",
                     "ran": true,
@@ -621,14 +808,19 @@ impl ProctorServer {
                 }
                 if self.state.lock().await.broker.audit.write_failed() {
                     if let Some(o) = out.as_object_mut() {
-                        o.insert("audit_warning".into(), json!(
+                        o.insert(
+                            "audit_warning".into(),
+                            json!(
                             "persistent audit write has failed — the on-disk trail is incomplete."
-                        ));
+                        ),
+                        );
                     }
                 }
                 out
             }
-            Ok(Err(e)) => json!({ "decision": "error", "reason": format!("could not run '{}': {e}", args.program) }),
+            Ok(Err(e)) => {
+                json!({ "decision": "error", "reason": format!("could not run '{}': {e}", args.program) })
+            }
             Err(e) => json!({ "decision": "error", "reason": format!("run task failed: {e}") }),
         }
     }
@@ -661,7 +853,10 @@ impl ServerHandler for ProctorServer {
 
 /// Build the server from the environment: a real vault if configured, else demo.
 fn build_server() -> ProctorServer {
-    let gh = match (std::env::var("PROCTOR_GH_APP_ID"), std::env::var("PROCTOR_GH_INSTALLATION_ID")) {
+    let gh = match (
+        std::env::var("PROCTOR_GH_APP_ID"),
+        std::env::var("PROCTOR_GH_INSTALLATION_ID"),
+    ) {
         (Ok(a), Ok(i)) if !a.is_empty() && !i.is_empty() => Some((a, i)),
         _ => None,
     };
@@ -672,7 +867,12 @@ fn build_server() -> ProctorServer {
     if let Some((app, inst)) = &gh {
         minters.insert(
             "github-app".into(),
-            Arc::new(GitHubAppMinter::new(app.clone(), inst.clone(), RealSigner, ReqwestHttp::new())),
+            Arc::new(GitHubAppMinter::new(
+                app.clone(),
+                inst.clone(),
+                RealSigner,
+                ReqwestHttp::new(),
+            )),
         );
     }
     if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
@@ -687,7 +887,10 @@ fn build_server() -> ProctorServer {
     if let Ok(arn) = std::env::var("PROCTOR_AWS_ROLE_ARN") {
         if !arn.is_empty() {
             eprintln!("proctor-mcp: aws-sts minter enabled (role {arn})");
-            minters.insert("aws-sts".into(), Arc::new(AwsWebIdentityMinter::new(arn, ReqwestRawHttp::new())));
+            minters.insert(
+                "aws-sts".into(),
+                Arc::new(AwsWebIdentityMinter::new(arn, ReqwestRawHttp::new())),
+            );
         }
     }
 
@@ -714,7 +917,12 @@ fn build_server() -> ProctorServer {
         }
     } else if let Some((app, inst)) = gh {
         eprintln!("proctor-mcp: using GitHub App minter (app {app})");
-        Arc::new(GitHubAppMinter::new(app, inst, RealSigner, ReqwestHttp::new()))
+        Arc::new(GitHubAppMinter::new(
+            app,
+            inst,
+            RealSigner,
+            ReqwestHttp::new(),
+        ))
     } else {
         Arc::new(MockMinter)
     };
@@ -765,14 +973,26 @@ fn build_server() -> ProctorServer {
                         }
                     }
                     let approved = approved_origins(&refs);
-                    eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, providers, minter, minters, executor, profiles, isolation, &approved, audit_path)
-                        .with_require_isolation(require_isolation);
+                    eprintln!(
+                        "proctor-mcp: loaded vault {} ({} items)",
+                        path.display(),
+                        refs.len()
+                    );
+                    return ProctorServer::with(
+                        refs, secrets, providers, minter, minters, executor, profiles, isolation,
+                        &approved, audit_path,
+                    )
+                    .with_require_isolation(require_isolation);
                 }
-                Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
+                Err(e) => {
+                    eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items")
+                }
             }
         } else {
-            eprintln!("proctor-mcp: vault {} not found; using demo items", path.display());
+            eprintln!(
+                "proctor-mcp: vault {} not found; using demo items",
+                path.display()
+            );
         }
     } else {
         eprintln!("proctor-mcp: PROCTOR_VAULT/PROCTOR_MASTER not set; using demo items");
@@ -780,12 +1000,33 @@ fn build_server() -> ProctorServer {
 
     // Demo fallback: metadata only, no secrets (minting reports "no base secret").
     let items = vec![
-        ItemRef { id: "itm_github".into(), label: "GitHub".into(), bound_origins: vec!["github.com".into()], mintable: true },
-        ItemRef { id: "itm_bank".into(), label: "Bank".into(), bound_origins: vec!["bank.com".into()], mintable: false },
+        ItemRef {
+            id: "itm_github".into(),
+            label: "GitHub".into(),
+            bound_origins: vec!["github.com".into()],
+            mintable: true,
+        },
+        ItemRef {
+            id: "itm_bank".into(),
+            label: "Bank".into(),
+            bound_origins: vec!["bank.com".into()],
+            mintable: false,
+        },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, minters, executor, profiles, isolation, &approved, audit_path)
-        .with_require_isolation(require_isolation)
+    ProctorServer::with(
+        items,
+        HashMap::new(),
+        HashMap::new(),
+        minter,
+        minters,
+        executor,
+        profiles,
+        isolation,
+        &approved,
+        audit_path,
+    )
+    .with_require_isolation(require_isolation)
 }
 
 /// Parse run_command isolation from $PROCTOR_ISOLATION:
@@ -801,7 +1042,8 @@ fn isolation_from_env() -> Isolation {
         "untrusted" | "untrust"
     );
     let net_default = if untrusted { "none" } else { "bridge" };
-    let network = std::env::var("PROCTOR_ISOLATION_NETWORK").unwrap_or_else(|_| net_default.to_string());
+    let network =
+        std::env::var("PROCTOR_ISOLATION_NETWORK").unwrap_or_else(|_| net_default.to_string());
     let deny_net = network == "none";
     match spec.as_str() {
         "" | "none" => Isolation::None,
@@ -869,7 +1111,11 @@ fn load_profiles() -> Registry {
 /// The auto-approve origin list: env override, else the union of item origins.
 fn approved_origins(items: &[ItemRef]) -> Vec<String> {
     if let Ok(csv) = std::env::var("PROCTOR_APPROVED_ORIGINS") {
-        return csv.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+        return csv
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
     let mut o: Vec<String> = items.iter().flat_map(|i| i.bound_origins.clone()).collect();
     o.sort();
@@ -1001,7 +1247,10 @@ mod tests {
     #[tokio::test]
     async fn minted_read_returns_result_not_secret() {
         let v = server(true, "SUPER_SECRET_BASE_PEM", &["github.com"])
-            .handle_use(args("itm_github", "github.com", "Read", true), &no_approve())
+            .handle_use(
+                args("itm_github", "github.com", "Read", true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(v["primitive"], "secretless_exec");
         assert_eq!(v["source"], "minted");
@@ -1013,7 +1262,10 @@ mod tests {
     #[tokio::test]
     async fn vault_read_uses_stored_token_without_leaking_it() {
         let v = server(false, "tk_STORED_TOKEN", &["github.com"])
-            .handle_use(args("itm_github", "github.com", "Read", true), &no_approve())
+            .handle_use(
+                args("itm_github", "github.com", "Read", true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(v["primitive"], "secretless_exec");
         assert_eq!(v["source"], "vault");
@@ -1023,7 +1275,10 @@ mod tests {
     #[tokio::test]
     async fn confused_deputy_is_blocked() {
         let v = server(true, "SEC", &["github.com"])
-            .handle_use(args("itm_github", "evil.example.com", "Read", true), &no_approve())
+            .handle_use(
+                args("itm_github", "evil.example.com", "Read", true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(v["decision"], "deny");
         assert!(v["reason"].as_str().unwrap().contains("origin mismatch"));
@@ -1032,7 +1287,10 @@ mod tests {
     #[tokio::test]
     async fn ship_to_prod_is_proposed_not_committed() {
         let v = server(false, "tk_x", &["github.com"])
-            .handle_use(args("itm_github", "github.com", "ShipToProduction", true), &no_approve())
+            .handle_use(
+                args("itm_github", "github.com", "ShipToProduction", true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(v["decision"], "propose_not_commit");
         assert_eq!(v["proposed_verb"], "OpenPullRequest");
@@ -1042,7 +1300,9 @@ mod tests {
     async fn open_pr_executes_as_reviewable_artifact_with_params() {
         let mut a = args("itm_github", "github.com", "OpenPullRequest", true);
         a.params = json!({ "repo": "octo/infra", "title": "Automated fix" });
-        let v = server(false, "tk_x", &["github.com"]).handle_use(a, &no_approve()).await;
+        let v = server(false, "tk_x", &["github.com"])
+            .handle_use(a, &no_approve())
+            .await;
         assert_eq!(v["primitive"], "secretless_exec");
         let s = v.to_string();
         assert!(s.contains("pull_request"));
@@ -1053,7 +1313,10 @@ mod tests {
     #[tokio::test]
     async fn non_executing_verb_mints_and_holds() {
         let v = server(true, "SEC", &["github.com"])
-            .handle_use(args("itm_github", "github.com", "MintReadToken", true), &no_approve())
+            .handle_use(
+                args("itm_github", "github.com", "MintReadToken", true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(v["primitive"], "minted");
         assert!(v["token_ref"].is_string());
@@ -1103,7 +1366,10 @@ mod tests {
     async fn kill_switch_revokes_held_tokens() {
         let server = server(true, "SEC", &["github.com"]);
         let _ = server
-            .handle_use(args("itm_github", "github.com", "MintReadToken", true), &no_approve())
+            .handle_use(
+                args("itm_github", "github.com", "MintReadToken", true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 1);
         assert_eq!(tool_json(&server.revoke_all().await.unwrap())["revoked"], 1);
@@ -1137,30 +1403,60 @@ mod tests {
     async fn run_redacts_the_injected_secret_from_output() {
         // The command echoes the injected env value; our return channel must redact it.
         let v = run_server()
-            .handle_run(run_args("sh", &["-c", "echo $DEMO_TOKEN"], true), &no_approve())
+            .handle_run(
+                run_args("sh", &["-c", "echo $DEMO_TOKEN"], true),
+                &no_approve(),
+            )
             .await;
         let s = v.to_string();
         assert!(s.contains("REDACTED"), "expected redaction: {s}");
-        assert!(!s.contains("supersecret_token"), "secret leaked through output!");
+        assert!(
+            !s.contains("supersecret_token"),
+            "secret leaked through output!"
+        );
     }
 
     #[tokio::test]
     async fn run_blocks_shell_without_allow_shell() {
         // A profile that lists `sh` but does NOT set allow_shell must refuse it.
-        let items = vec![ItemRef { id: "itm".into(), label: "x".into(), bound_origins: vec![], mintable: false }];
+        let items = vec![ItemRef {
+            id: "itm".into(),
+            label: "x".into(),
+            bound_origins: vec![],
+            mintable: false,
+        }];
         let mut secrets = HashMap::new();
         secrets.insert("itm".to_string(), "s".to_string());
         let mut providers = HashMap::new();
         providers.insert("itm".to_string(), "p".to_string());
         let mut reg = Registry::new();
-        reg.insert(toml::from_str(r#"id="p"
+        reg.insert(
+            toml::from_str(
+                r#"id="p"
             env_var="T"
-            commands=["sh"]"#).unwrap()).unwrap(); // allow_shell defaults false
+            commands=["sh"]"#,
+            )
+            .unwrap(),
+        )
+        .unwrap(); // allow_shell defaults false
         let server = ProctorServer::with(
-            items, secrets, providers, Arc::new(MockMinter), HashMap::new(),
-            Arc::new(MockExecutor), Arc::new(reg), Isolation::None, &[], None,
+            items,
+            secrets,
+            providers,
+            Arc::new(MockMinter),
+            HashMap::new(),
+            Arc::new(MockExecutor),
+            Arc::new(reg),
+            Isolation::None,
+            &[],
+            None,
         );
-        let v = server.handle_run(run_args_for("itm", "sh", &["-c", "echo hi"], true), &no_approve()).await;
+        let v = server
+            .handle_run(
+                run_args_for("itm", "sh", &["-c", "echo hi"], true),
+                &no_approve(),
+            )
+            .await;
         assert_eq!(v["decision"], "deny");
         assert!(v["reason"].as_str().unwrap().contains("shell interpreter"));
     }
@@ -1178,7 +1474,10 @@ mod tests {
     async fn run_blocks_unauthorized_program() {
         // `curl` is not in the profile's commands → confused-deputy blocked.
         let v = run_server()
-            .handle_run(run_args("curl", &["https://evil.example.com"], true), &no_approve())
+            .handle_run(
+                run_args("curl", &["https://evil.example.com"], true),
+                &no_approve(),
+            )
             .await;
         assert_eq!(v["decision"], "deny");
         assert!(v["reason"].as_str().unwrap().contains("confused-deputy"));
@@ -1259,7 +1558,10 @@ mod tests {
         let args = RunCommandArgs {
             item_id: "itm_aws".into(),
             program: "sh".into(),
-            args: vec!["-c".into(), "echo key=$AWS_ACCESS_KEY_ID sess=$AWS_SESSION_TOKEN".into()],
+            args: vec![
+                "-c".into(),
+                "echo key=$AWS_ACCESS_KEY_ID sess=$AWS_SESSION_TOKEN".into(),
+            ],
             unattended: true,
         };
         let v = server.handle_run(args, &no_approve()).await;
@@ -1270,7 +1572,10 @@ mod tests {
         // The minted AWS creds reached the env (echoed), then were redacted.
         assert!(s.contains("REDACTED"), "expected redaction: {s}");
         assert!(!s.contains("TKID_LIVE"), "minted access key leaked!");
-        assert!(!s.contains("testsessionval"), "minted session token leaked!");
+        assert!(
+            !s.contains("testsessionval"),
+            "minted session token leaked!"
+        );
     }
 
     #[tokio::test]

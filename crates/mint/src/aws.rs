@@ -18,7 +18,11 @@ const STS_VERSION: &str = "2011-06-15";
 /// Performs the form-encoded POST to STS and returns the raw (XML) body.
 #[async_trait::async_trait]
 pub trait RawHttp: Send + Sync {
-    async fn post_form_raw(&self, url: &str, form: &[(String, String)]) -> Result<String, MintError>;
+    async fn post_form_raw(
+        &self,
+        url: &str,
+        form: &[(String, String)],
+    ) -> Result<String, MintError>;
 }
 
 pub struct AwsWebIdentityMinter<H: RawHttp> {
@@ -64,7 +68,10 @@ impl<H: RawHttp> Minter for AwsWebIdentityMinter<H> {
             ("RoleArn".to_string(), self.role_arn.clone()),
             ("RoleSessionName".to_string(), self.session_name.clone()),
             ("WebIdentityToken".to_string(), base_secret.to_string()),
-            ("DurationSeconds".to_string(), self.duration_secs.to_string()),
+            (
+                "DurationSeconds".to_string(),
+                self.duration_secs.to_string(),
+            ),
         ];
         let xml = self.http.post_form_raw(&self.sts_endpoint, &form).await?;
         let ak = tag(&xml, "AccessKeyId")
@@ -104,7 +111,9 @@ pub struct ReqwestRawHttp {
 #[cfg(feature = "net")]
 impl ReqwestRawHttp {
     pub fn new() -> Self {
-        ReqwestRawHttp { client: reqwest::Client::new() }
+        ReqwestRawHttp {
+            client: reqwest::Client::new(),
+        }
     }
 }
 
@@ -118,7 +127,11 @@ impl Default for ReqwestRawHttp {
 #[cfg(feature = "net")]
 #[async_trait::async_trait]
 impl RawHttp for ReqwestRawHttp {
-    async fn post_form_raw(&self, url: &str, form: &[(String, String)]) -> Result<String, MintError> {
+    async fn post_form_raw(
+        &self,
+        url: &str,
+        form: &[(String, String)],
+    ) -> Result<String, MintError> {
         let resp = self
             .client
             .post(url)
@@ -127,9 +140,14 @@ impl RawHttp for ReqwestRawHttp {
             .await
             .map_err(|e| MintError::Http(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(MintError::Provider(format!("STS returned {}", resp.status())));
+            return Err(MintError::Provider(format!(
+                "STS returned {}",
+                resp.status()
+            )));
         }
-        resp.text().await.map_err(|e| MintError::Parse(e.to_string()))
+        resp.text()
+            .await
+            .map_err(|e| MintError::Parse(e.to_string()))
     }
 }
 
@@ -142,7 +160,11 @@ mod tests {
     struct MockRaw;
     #[async_trait::async_trait]
     impl RawHttp for MockRaw {
-        async fn post_form_raw(&self, _url: &str, form: &[(String, String)]) -> Result<String, MintError> {
+        async fn post_form_raw(
+            &self,
+            _url: &str,
+            form: &[(String, String)],
+        ) -> Result<String, MintError> {
             let get = |k: &str| form.iter().find(|(a, _)| a == k).map(|(_, v)| v.as_str());
             assert_eq!(get("Action"), Some(STS_ACTION));
             assert_eq!(get("WebIdentityToken"), Some("held-oidc-jwt"));
@@ -153,14 +175,20 @@ mod tests {
     #[tokio::test]
     async fn assume_role_returns_multifield_json_trio() {
         let minter = AwsWebIdentityMinter::new("arn:aws:iam::123:role/deploy", MockRaw);
-        let t = minter.mint("itm", "held-oidc-jwt", &MintScope::read_only()).await.unwrap();
+        let t = minter
+            .mint("itm", "held-oidc-jwt", &MintScope::read_only())
+            .await
+            .unwrap();
         assert_eq!(t.provider, "aws-sts");
         // The value is JSON composing into an env_map (AWS_* env vars).
         let v: serde_json::Value = serde_json::from_str(t.expose()).unwrap();
         assert_eq!(v["access_key_id"], "TKID_EXAMPLE");
         assert_eq!(v["secret_access_key"], "secret/key/value");
         assert_eq!(v["session_token"], "FwoGZXIvYXdz_session");
-        assert_eq!(t.provider_expires_at.as_deref(), Some("2026-07-12T12:00:00Z"));
+        assert_eq!(
+            t.provider_expires_at.as_deref(),
+            Some("2026-07-12T12:00:00Z")
+        );
         assert!(!t.masked().contains("TKID_EXAMPLE"));
     }
 

@@ -85,7 +85,8 @@ impl Broker {
             .iter()
             .any(|o| Origin::normalized(o) == action.target);
         if !bound {
-            self.audit.append(item_id, origin, verb, "DENY:origin-mismatch");
+            self.audit
+                .append(item_id, origin, verb, "DENY:origin-mismatch");
             return Err(Denied::OriginMismatch);
         }
 

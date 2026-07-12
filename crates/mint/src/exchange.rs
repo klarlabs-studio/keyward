@@ -56,8 +56,14 @@ pub fn build_exchange_form(
     let mut form = vec![
         ("grant_type".to_string(), GRANT_TOKEN_EXCHANGE.to_string()),
         ("subject_token".to_string(), subject_token.to_string()),
-        ("subject_token_type".to_string(), subject_token_type.to_string()),
-        ("requested_token_type".to_string(), TOKEN_TYPE_ACCESS.to_string()),
+        (
+            "subject_token_type".to_string(),
+            subject_token_type.to_string(),
+        ),
+        (
+            "requested_token_type".to_string(),
+            TOKEN_TYPE_ACCESS.to_string(),
+        ),
     ];
     if let Some(a) = audience {
         form.push(("audience".to_string(), a.clone()));
@@ -90,8 +96,13 @@ impl<H: FormHttp> Minter for TokenExchangeMinter<H> {
         let access = resp
             .get("access_token")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| MintError::Parse("token-exchange response missing access_token".into()))?;
-        let expires = resp.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(600);
+            .ok_or_else(|| {
+                MintError::Parse("token-exchange response missing access_token".into())
+            })?;
+        let expires = resp
+            .get("expires_in")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(600);
         Ok(MintedToken::new(
             access.to_string(),
             SystemTime::now() + Duration::from_secs(expires),
@@ -114,7 +125,9 @@ pub struct ReqwestFormHttp {
 #[cfg(feature = "net")]
 impl ReqwestFormHttp {
     pub fn new() -> Self {
-        ReqwestFormHttp { client: reqwest::Client::new() }
+        ReqwestFormHttp {
+            client: reqwest::Client::new(),
+        }
     }
 }
 
@@ -141,9 +154,14 @@ impl FormHttp for ReqwestFormHttp {
             .await
             .map_err(|e| MintError::Http(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(MintError::Provider(format!("STS returned {}", resp.status())));
+            return Err(MintError::Provider(format!(
+                "STS returned {}",
+                resp.status()
+            )));
         }
-        resp.json().await.map_err(|e| MintError::Parse(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| MintError::Parse(e.to_string()))
     }
 }
 
@@ -171,7 +189,12 @@ mod tests {
 
     #[test]
     fn form_has_required_rfc8693_params() {
-        let f = build_exchange_form("tok", DEFAULT_SUBJECT_TOKEN_TYPE, &Some("aud".into()), &Some("s".into()));
+        let f = build_exchange_form(
+            "tok",
+            DEFAULT_SUBJECT_TOKEN_TYPE,
+            &Some("aud".into()),
+            &Some("s".into()),
+        );
         let has = |k: &str| f.iter().any(|(a, _)| a == k);
         assert!(has("grant_type") && has("subject_token") && has("audience") && has("scope"));
     }
@@ -184,7 +207,10 @@ mod tests {
                 response: serde_json::json!({ "access_token": "st_shortlived", "expires_in": 600, "token_type": "Bearer" }),
             },
         );
-        let t = minter.mint("itm", "held-oidc-jwt", &MintScope::read_only()).await.unwrap();
+        let t = minter
+            .mint("itm", "held-oidc-jwt", &MintScope::read_only())
+            .await
+            .unwrap();
         assert_eq!(t.provider, "token-exchange");
         assert_eq!(t.expose(), "st_shortlived");
         assert!(t.is_valid(SystemTime::now()));

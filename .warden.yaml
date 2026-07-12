@@ -1,0 +1,46 @@
+extends: ""
+agent: auto
+hooks:
+    pre_commit: true
+    pre_push: true
+commands:
+    crates-broker-lint: cd crates/broker && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    crates-broker-test: cd crates/broker && cargo test
+    crates-cli-lint: cd crates/cli && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    crates-cli-test: cd crates/cli && cargo test
+    crates-mcp-lint: cd crates/mcp && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    crates-mcp-test: cd crates/mcp && cargo test
+    crates-mint-lint: cd crates/mint && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    crates-mint-test: cd crates/mint && cargo test
+    crates-profiles-lint: cd crates/profiles && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    crates-profiles-test: cd crates/profiles && cargo test
+    crates-vault-lint: cd crates/vault && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    crates-vault-test: cd crates/vault && cargo test
+    root-lint: cargo fmt --check && cargo clippy --all-targets -- -D warnings
+    root-test: cargo test
+    security-scan: nox scan . -severity-threshold high
+timeouts: {}
+cache: {}
+symlink_deps: null
+materialize_deps: []
+writes: []
+agent_commands: {}
+steps:
+    pre_commit:
+        - root-lint
+    pre_push:
+        - root-test
+        - root-lint
+        - security-scan
+parallel: null
+notify: null
+notify_after: ""
+risk:
+    diff_lines_high: 400
+    files_touched_high: 15
+pr:
+    enabled: false
+    base: ""
+    comment: null
+trusted_keys: []
+rules: []

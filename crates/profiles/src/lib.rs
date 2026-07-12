@@ -17,9 +17,15 @@ use std::path::Path;
 #[derive(Debug, thiserror::Error)]
 pub enum ProfileError {
     #[error("io error reading {path}: {source}")]
-    Io { path: String, source: std::io::Error },
+    Io {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("parse error in {path}: {source}")]
-    Parse { path: String, source: toml::de::Error },
+    Parse {
+        path: String,
+        source: toml::de::Error,
+    },
     #[error("invalid profile '{id}': {reason}")]
     Invalid { id: String, reason: String },
     #[error("duplicate profile id '{0}'")]
@@ -75,17 +81,24 @@ impl Profile {
     /// Validate structure + regex compilation. Called at load.
     pub fn validate(&self) -> Result<(), ProfileError> {
         if self.id.trim().is_empty() {
-            return Err(ProfileError::Invalid { id: self.id.clone(), reason: "empty id".into() });
+            return Err(ProfileError::Invalid {
+                id: self.id.clone(),
+                reason: "empty id".into(),
+            });
         }
         match (&self.env_var, &self.env_map) {
-            (Some(_), Some(_)) => return Err(ProfileError::Invalid {
-                id: self.id.clone(),
-                reason: "set exactly one of env_var or env_map, not both".into(),
-            }),
-            (None, None) => return Err(ProfileError::Invalid {
-                id: self.id.clone(),
-                reason: "set one of env_var or env_map".into(),
-            }),
+            (Some(_), Some(_)) => {
+                return Err(ProfileError::Invalid {
+                    id: self.id.clone(),
+                    reason: "set exactly one of env_var or env_map, not both".into(),
+                })
+            }
+            (None, None) => {
+                return Err(ProfileError::Invalid {
+                    id: self.id.clone(),
+                    reason: "set one of env_var or env_map".into(),
+                })
+            }
             _ => {}
         }
         for p in self.read_patterns.iter().chain(self.mutate_patterns.iter()) {
@@ -107,30 +120,39 @@ impl Profile {
             return Ok(out);
         }
         if let Some(map) = &self.env_map {
-            let v: serde_json::Value = serde_json::from_str(secret).map_err(|_| ProfileError::Compose {
-                id: self.id.clone(),
-                reason: "secret must be a JSON object for a multi-field profile".into(),
-            })?;
+            let v: serde_json::Value =
+                serde_json::from_str(secret).map_err(|_| ProfileError::Compose {
+                    id: self.id.clone(),
+                    reason: "secret must be a JSON object for a multi-field profile".into(),
+                })?;
             let obj = v.as_object().ok_or_else(|| ProfileError::Compose {
                 id: self.id.clone(),
                 reason: "secret must be a JSON object".into(),
             })?;
             for (field, var) in map {
-                let val = obj.get(field).and_then(|x| x.as_str()).ok_or_else(|| ProfileError::Compose {
-                    id: self.id.clone(),
-                    reason: format!("secret missing string field '{field}'"),
+                let val = obj.get(field).and_then(|x| x.as_str()).ok_or_else(|| {
+                    ProfileError::Compose {
+                        id: self.id.clone(),
+                        reason: format!("secret missing string field '{field}'"),
+                    }
                 })?;
                 out.insert(var.clone(), val.to_string());
             }
             return Ok(out);
         }
-        Err(ProfileError::Compose { id: self.id.clone(), reason: "no env mapping".into() })
+        Err(ProfileError::Compose {
+            id: self.id.clone(),
+            reason: "no env mapping".into(),
+        })
     }
 
     /// Classify an argv. Mutate wins over Read; no match → Unknown (gated).
     pub fn classify(&self, argv: &[String]) -> RiskClass {
         let joined = argv.join(" ");
-        let any = |pats: &[String]| pats.iter().any(|p| Regex::new(p).map(|r| r.is_match(&joined)).unwrap_or(false));
+        let any = |pats: &[String]| {
+            pats.iter()
+                .any(|p| Regex::new(p).map(|r| r.is_match(&joined)).unwrap_or(false))
+        };
         if any(&self.mutate_patterns) {
             RiskClass::Mutate
         } else if any(&self.read_patterns) {
@@ -173,8 +195,21 @@ pub fn is_shell_interpreter(program: &str) -> bool {
     let base = program.rsplit('/').next().unwrap_or(program);
     matches!(
         base,
-        "sh" | "bash" | "zsh" | "dash" | "ash" | "fish" | "ksh"
-            | "python" | "python3" | "node" | "ruby" | "perl" | "php" | "env" | "xargs" | "eval"
+        "sh" | "bash"
+            | "zsh"
+            | "dash"
+            | "ash"
+            | "fish"
+            | "ksh"
+            | "python"
+            | "python3"
+            | "node"
+            | "ruby"
+            | "perl"
+            | "php"
+            | "env"
+            | "xargs"
+            | "eval"
     )
 }
 
@@ -196,7 +231,12 @@ impl Registry {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(reg),
-            Err(e) => return Err(ProfileError::Io { path: dir.display().to_string(), source: e }),
+            Err(e) => {
+                return Err(ProfileError::Io {
+                    path: dir.display().to_string(),
+                    source: e,
+                })
+            }
         };
         let mut paths: Vec<_> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -303,7 +343,10 @@ mod tests {
     fn classify_reads_mutates_and_unknown() {
         let p = aws();
         assert_eq!(p.classify(&["s3".into(), "ls".into()]), RiskClass::Read);
-        assert_eq!(p.classify(&["s3".into(), "rm".into(), "x".into()]), RiskClass::Mutate);
+        assert_eq!(
+            p.classify(&["s3".into(), "rm".into(), "x".into()]),
+            RiskClass::Mutate
+        );
         assert_eq!(p.classify(&["whoami".into()]), RiskClass::Unknown);
     }
 
@@ -323,8 +366,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("proctor-prof-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("hetzner.toml"), "id=\"hetzner\"\nenv_var=\"HCLOUD_TOKEN\"\n").unwrap();
-        std::fs::write(dir.join("gitlab.toml"), "id=\"gitlab\"\nenv_var=\"GITLAB_TOKEN\"\n").unwrap();
+        std::fs::write(
+            dir.join("hetzner.toml"),
+            "id=\"hetzner\"\nenv_var=\"HCLOUD_TOKEN\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("gitlab.toml"),
+            "id=\"gitlab\"\nenv_var=\"GITLAB_TOKEN\"\n",
+        )
+        .unwrap();
         std::fs::write(dir.join("notes.txt"), "ignored").unwrap();
         let reg = Registry::load_dir(&dir).unwrap();
         assert_eq!(reg.len(), 2);

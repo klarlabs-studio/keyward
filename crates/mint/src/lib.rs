@@ -160,7 +160,10 @@ mod tests {
     #[tokio::test]
     async fn mock_minter_produces_scoped_short_lived_token() {
         let scope = MintScope::read_only();
-        let t = MockMinter.mint("itm_github", "unused-base-secret", &scope).await.unwrap();
+        let t = MockMinter
+            .mint("itm_github", "unused-base-secret", &scope)
+            .await
+            .unwrap();
         assert!(t.is_valid(SystemTime::now()));
         assert!(!t.is_valid(SystemTime::now() + Duration::from_secs(601)));
         assert_eq!(t.provider, "mock");

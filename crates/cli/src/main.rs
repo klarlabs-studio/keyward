@@ -38,7 +38,9 @@ fn master() -> Vec<u8> {
     }
     match std::env::var("PROCTOR_MASTER") {
         Ok(m) if !m.is_empty() => {
-            eprintln!("note: PROCTOR_MASTER via env is readable via /proc; prefer PROCTOR_MASTER_FILE.");
+            eprintln!(
+                "note: PROCTOR_MASTER via env is readable via /proc; prefer PROCTOR_MASTER_FILE."
+            );
             m.into_bytes()
         }
         _ => {
@@ -90,13 +92,20 @@ fn cmd_profiles() {
         exit(1);
     });
     if reg.is_empty() {
-        println!("no profiles in {} — drop <id>.toml files there to add providers", dir.display());
+        println!(
+            "no profiles in {} — drop <id>.toml files there to add providers",
+            dir.display()
+        );
         return;
     }
     println!("{} profile(s) from {}\n", reg.len(), dir.display());
-    println!("{:<12} {:<10} {}", "ID", "INJECT", "DESCRIPTION");
+    println!("{:<12} {:<10} DESCRIPTION", "ID", "INJECT");
     for p in reg.iter() {
-        let inject = if p.env_var.is_some() { "env_var" } else { "env_map" };
+        let inject = if p.env_var.is_some() {
+            "env_var"
+        } else {
+            "env_map"
+        };
         println!("{:<12} {:<10} {}", p.id, inject, p.description);
     }
 }
@@ -126,7 +135,10 @@ fn cmd_add(rest: &[String]) {
         .get(4)
         .map(|m| matches!(m.to_lowercase().as_str(), "true" | "yes" | "1"))
         .unwrap_or(false);
-    let kind = rest.get(5).map(|s| parse_kind(s)).unwrap_or(ItemKind::Password);
+    let kind = rest
+        .get(5)
+        .map(|s| parse_kind(s))
+        .unwrap_or(ItemKind::Password);
     let provider = rest.get(6).map(|s| s.to_string());
     let origins: Vec<String> = origins_csv
         .split(',')
@@ -144,7 +156,17 @@ fn cmd_add(rest: &[String]) {
         eprintln!("item '{id}' already exists");
         exit(1);
     }
-    items.push(Item::new(id.clone(), label.clone(), kind, origins, mintable, secret.clone()).with_provider(provider));
+    items.push(
+        Item::new(
+            id.clone(),
+            label.clone(),
+            kind,
+            origins,
+            mintable,
+            secret.clone(),
+        )
+        .with_provider(provider),
+    );
     save_to_file(&path, &items, &m).unwrap_or_else(|e| {
         eprintln!("failed to save vault: {e}");
         exit(1);
@@ -162,7 +184,7 @@ fn cmd_list() {
         println!("(vault is empty)");
         return;
     }
-    println!("{:<16} {:<20} {:<8} {}", "ID", "LABEL", "MINTABLE", "ORIGINS");
+    println!("{:<16} {:<20} {:<8} ORIGINS", "ID", "LABEL", "MINTABLE");
     for i in &items {
         println!(
             "{:<16} {:<20} {:<8} {}",
@@ -194,28 +216,79 @@ fn demo() {
     let now = SystemTime::now();
 
     let scenarios: Vec<(&str, &ItemRef, Action, Mode, bool)> = vec![
-        ("agent reads GitHub (bound, reversible, unattended)", &github, Action::new(ActionVerb::Read, "github.com"), Mode::Unattended, false),
-        ("INJECTED: use GitHub creds on evil.example.com", &github, Action::new(ActionVerb::Read, "evil.example.com"), Mode::Unattended, false),
-        ("agent wants to ship to prod, unattended", &github, Action::new(ActionVerb::ShipToProduction, "github.com"), Mode::Unattended, false),
-        ("agent wants to move money, unattended", &bank, Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Unattended, false),
-        ("agent wants to move money, human present", &bank, Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Attended, false),
-        ("agent demands the raw GitHub secret", &github, Action::new(ActionVerb::Read, "github.com"), Mode::Attended, true),
+        (
+            "agent reads GitHub (bound, reversible, unattended)",
+            &github,
+            Action::new(ActionVerb::Read, "github.com"),
+            Mode::Unattended,
+            false,
+        ),
+        (
+            "INJECTED: use GitHub creds on evil.example.com",
+            &github,
+            Action::new(ActionVerb::Read, "evil.example.com"),
+            Mode::Unattended,
+            false,
+        ),
+        (
+            "agent wants to ship to prod, unattended",
+            &github,
+            Action::new(ActionVerb::ShipToProduction, "github.com"),
+            Mode::Unattended,
+            false,
+        ),
+        (
+            "agent wants to move money, unattended",
+            &bank,
+            Action::new(ActionVerb::MoveMoney, "bank.com"),
+            Mode::Unattended,
+            false,
+        ),
+        (
+            "agent wants to move money, human present",
+            &bank,
+            Action::new(ActionVerb::MoveMoney, "bank.com"),
+            Mode::Attended,
+            false,
+        ),
+        (
+            "agent demands the raw GitHub secret",
+            &github,
+            Action::new(ActionVerb::Read, "github.com"),
+            Mode::Attended,
+            true,
+        ),
     ];
 
     for (desc, item, action, mode, raw) in scenarios {
         let verb = action.verb.as_str();
         let outcome = match broker.request_use(item, &action, mode, raw, now) {
-            Ok(Grant::Capability(c)) => format!("ALLOW — {:?} capability (expires, single-use)", c.primitive),
+            Ok(Grant::Capability(c)) => {
+                format!("ALLOW — {:?} capability (expires, single-use)", c.primitive)
+            }
             Ok(Grant::NeedsHumanApproval(r)) => format!("STEP-UP — human approval required ({r})"),
-            Ok(Grant::Proposed(v)) => format!("PROPOSE-NOT-COMMIT — offered `{}` instead", v.as_str()),
-            Err(Denied::OriginMismatch) => "DENY — origin mismatch (confused-deputy blocked)".to_string(),
+            Ok(Grant::Proposed(v)) => {
+                format!("PROPOSE-NOT-COMMIT — offered `{}` instead", v.as_str())
+            }
+            Err(Denied::OriginMismatch) => {
+                "DENY — origin mismatch (confused-deputy blocked)".to_string()
+            }
             Err(Denied::Policy(r)) => format!("DENY — {r}"),
         };
-        println!("• {desc}\n    [{verb} @ {}] -> {outcome}\n", action.target.0);
+        println!(
+            "• {desc}\n    [{verb} @ {}] -> {outcome}\n",
+            action.target.0
+        );
     }
 
-    println!("== audit trail (hash-chained, verify()={}) ==", broker.audit.verify());
+    println!(
+        "== audit trail (hash-chained, verify()={}) ==",
+        broker.audit.verify()
+    );
     for e in broker.audit.entries() {
-        println!("  #{} {:<16} {:<18} {}", e.seq, e.item_id, e.origin, e.decision);
+        println!(
+            "  #{} {:<16} {:<18} {}",
+            e.seq, e.item_id, e.origin, e.decision
+        );
     }
 }

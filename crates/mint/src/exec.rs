@@ -28,11 +28,23 @@ pub struct ExecAction {
 
 impl ExecAction {
     pub fn new(kind: ExecKind, target: impl Into<String>) -> Self {
-        ExecAction { kind, target: target.into(), params: serde_json::Value::Null }
+        ExecAction {
+            kind,
+            target: target.into(),
+            params: serde_json::Value::Null,
+        }
     }
 
-    pub fn with_params(kind: ExecKind, target: impl Into<String>, params: serde_json::Value) -> Self {
-        ExecAction { kind, target: target.into(), params }
+    pub fn with_params(
+        kind: ExecKind,
+        target: impl Into<String>,
+        params: serde_json::Value,
+    ) -> Self {
+        ExecAction {
+            kind,
+            target: target.into(),
+            params,
+        }
     }
 }
 
@@ -152,12 +164,19 @@ impl<H: HttpClient> Executor for GitHubExecutor<H> {
                     .and_then(|r| r.as_array())
                     .map(|a| {
                         a.iter()
-                            .filter_map(|x| x.get("full_name").and_then(|n| n.as_str()).map(String::from))
+                            .filter_map(|x| {
+                                x.get("full_name")
+                                    .and_then(|n| n.as_str())
+                                    .map(String::from)
+                            })
                             .collect()
                     })
                     .unwrap_or_default();
                 Ok(ExecResult {
-                    summary: format!("listed {} repositories accessible to the installation", repos.len()),
+                    summary: format!(
+                        "listed {} repositories accessible to the installation",
+                        repos.len()
+                    ),
                     data: serde_json::json!({ "repositories": repos }),
                 })
             }
@@ -182,9 +201,14 @@ impl<H: HttpClient> Executor for GitHubExecutor<H> {
                 // draft:true keeps it a reviewable artifact, never an auto-merge.
                 let body = serde_json::json!({ "title": title, "head": head, "base": base, "draft": true });
                 let resp = self.http.post_json(&url, bearer, &body).await?;
-                let pr_url = resp.get("html_url").and_then(|v| v.as_str()).unwrap_or("(unknown)");
+                let pr_url = resp
+                    .get("html_url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(unknown)");
                 Ok(ExecResult {
-                    summary: format!("opened a draft pull request {pr_url} — reviewable, not merged"),
+                    summary: format!(
+                        "opened a draft pull request {pr_url} — reviewable, not merged"
+                    ),
                     data: serde_json::json!({
                         "artifact": "pull_request",
                         "url": pr_url,
@@ -208,7 +232,9 @@ pub struct ReqwestClient {
 #[cfg(feature = "net")]
 impl ReqwestClient {
     pub fn new() -> Self {
-        ReqwestClient { client: reqwest::Client::new() }
+        ReqwestClient {
+            client: reqwest::Client::new(),
+        }
     }
 }
 
@@ -234,9 +260,14 @@ impl HttpClient for ReqwestClient {
             .await
             .map_err(|e| MintError::Http(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(MintError::Provider(format!("github returned {}", resp.status())));
+            return Err(MintError::Provider(format!(
+                "github returned {}",
+                resp.status()
+            )));
         }
-        resp.json().await.map_err(|e| MintError::Parse(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| MintError::Parse(e.to_string()))
     }
 
     async fn post_json(
@@ -257,9 +288,14 @@ impl HttpClient for ReqwestClient {
             .await
             .map_err(|e| MintError::Http(e.to_string()))?;
         if !resp.status().is_success() {
-            return Err(MintError::Provider(format!("github returned {}", resp.status())));
+            return Err(MintError::Provider(format!(
+                "github returned {}",
+                resp.status()
+            )));
         }
-        resp.json().await.map_err(|e| MintError::Parse(e.to_string()))
+        resp.json()
+            .await
+            .map_err(|e| MintError::Parse(e.to_string()))
     }
 }
 
@@ -305,7 +341,10 @@ mod tests {
     #[tokio::test]
     async fn github_read_returns_repos_without_leaking_the_credential() {
         let exec = GitHubExecutor::new(http());
-        let res = exec.perform(BEARER, &ExecAction::new(ExecKind::Read, "github.com")).await.unwrap();
+        let res = exec
+            .perform(BEARER, &ExecAction::new(ExecKind::Read, "github.com"))
+            .await
+            .unwrap();
         assert!(res.summary.contains("2 repositories"));
         assert_eq!(res.data["repositories"][0], "octo/demo");
         assert!(!format!("{} {}", res.summary, res.data).contains(BEARER));
@@ -329,13 +368,21 @@ mod tests {
     #[tokio::test]
     async fn open_pr_requires_params() {
         let exec = GitHubExecutor::new(http());
-        let res = exec.perform(BEARER, &ExecAction::new(ExecKind::OpenPullRequest, "github.com")).await;
+        let res = exec
+            .perform(
+                BEARER,
+                &ExecAction::new(ExecKind::OpenPullRequest, "github.com"),
+            )
+            .await;
         assert!(res.is_err());
     }
 
     #[tokio::test]
     async fn mock_executor_masks_the_credential() {
-        let res = MockExecutor.perform(BEARER, &ExecAction::new(ExecKind::Read, "github.com")).await.unwrap();
+        let res = MockExecutor
+            .perform(BEARER, &ExecAction::new(ExecKind::Read, "github.com"))
+            .await
+            .unwrap();
         assert!(!res.summary.contains(BEARER));
     }
 

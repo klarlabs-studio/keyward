@@ -85,7 +85,11 @@ impl AuditLog {
         if let Some(path) = &self.file {
             if let Ok(line) = serde_json::to_string(&entry) {
                 use std::io::Write;
-                match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
                     Ok(mut f) => {
                         let _ = writeln!(f, "{line}");
                     }

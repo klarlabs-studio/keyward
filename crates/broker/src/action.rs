@@ -47,7 +47,11 @@ impl ActionVerb {
         use ActionVerb::*;
         matches!(
             self,
-            DeleteData | MoveMoney | ShipToProduction | SendCommsAsUser | RotateOrRevokeOtherCredential
+            DeleteData
+                | MoveMoney
+                | ShipToProduction
+                | SendCommsAsUser
+                | RotateOrRevokeOtherCredential
         )
     }
 
