@@ -3,6 +3,22 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.16.0] — 2026-07-12
+
+**Export your vault — no lock-in.** The web vault exports to a portable file in
+three formats, and the native format round-trips back through the importer.
+
+### Added — web vault (`app/`)
+- **`app/src/lib/export.ts`:** export to **Proctor JSON** (full fidelity,
+  re-importable), **Bitwarden JSON** (unencrypted export shape, portable), and
+  **CSV** (universal, lossy). Export dialog with a format picker, item count, a
+  clear plaintext warning, and Copy / Download.
+- **Proctor-native import:** the importer now recognizes and ingests Proctor JSON
+  (entries re-id'd on import), completing the export→import round-trip.
+- **Round-trip test** (`npm test`, `app/scripts/roundtrip.test.ts`): exports each
+  format and re-imports, asserting counts, categories, and that a tricky password
+  (embedded comma, quote, and newline) survives every round-trip. All pass.
+
 ## [1.15.0] — 2026-07-12
 
 **Import your vault.** The web vault can now import from another manager, so a

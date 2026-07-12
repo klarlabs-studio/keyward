@@ -10,6 +10,7 @@ const emit = defineEmits<{
   (e: 'new-item'): void;
   (e: 'view-kit'): void;
   (e: 'import'): void;
+  (e: 'export'): void;
 }>();
 
 const placeholder = computed(() => `Search ${vault.counts.all} items…`);
@@ -60,6 +61,12 @@ function toggleTheme(): void {
       </svg>
     </button>
     <button class="icon-btn" title="Import vault" aria-label="Import vault" @click="emit('import')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 15V3m0 12-4-4m4 4 4-4" />
+        <path d="M4 21h16" />
+      </svg>
+    </button>
+    <button class="icon-btn" title="Export vault" aria-label="Export vault" @click="emit('export')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 3v12m0-12 4 4m-4-4-4 4" />
         <path d="M4 21h16" />

@@ -272,6 +272,22 @@
       "severity": "medium",
       "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
       "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "0910d1b2f29069dc2f54c014d61a20421f350f699c14ec749503cc005e63eb65",
+      "rule_id": "DATA-001",
+      "file_path": "app/scripts/roundtrip.test.ts",
+      "severity": "medium",
+      "reason": "Test fixtures in app/scripts/roundtrip.test.ts — a demo email (f@x.dev) and a demo TOTP secret in the round-trip test entries; not real credentials.",
+      "created_at": "2026-07-12T20:52:34.403793Z"
+    },
+    {
+      "fingerprint": "5dddc1bbd7628a77c5954fd8f9a7b2dd026afc23c51215d9fc3543ed8c18bbef",
+      "rule_id": "SEC-081",
+      "file_path": "app/scripts/roundtrip.test.ts",
+      "severity": "medium",
+      "reason": "Test fixtures in app/scripts/roundtrip.test.ts — a demo email (f@x.dev) and a demo TOTP secret in the round-trip test entries; not real credentials.",
+      "created_at": "2026-07-12T20:52:34.403793Z"
     }
   ]
 }

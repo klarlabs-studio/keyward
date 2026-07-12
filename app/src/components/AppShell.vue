@@ -13,17 +13,24 @@ import WatchtowerView from './WatchtowerView.vue';
 import AddItemDialog from './AddItemDialog.vue';
 import EmergencyKitDialog from './EmergencyKitDialog.vue';
 import ImportDialog from './ImportDialog.vue';
+import ExportDialog from './ExportDialog.vue';
 
 const vault = useVaultStore();
 const showAdd = ref(false);
 const showKit = ref(false);
 const showImport = ref(false);
+const showExport = ref(false);
 </script>
 
 <template>
   <div class="app">
     <BrandBar />
-    <TopBar @new-item="showAdd = true" @view-kit="showKit = true" @import="showImport = true" />
+    <TopBar
+      @new-item="showAdd = true"
+      @view-kit="showKit = true"
+      @import="showImport = true"
+      @export="showExport = true"
+    />
     <SideNav />
     <ItemList />
     <WatchtowerView v-if="vault.filter === 'watchtower'" />
@@ -31,6 +38,7 @@ const showImport = ref(false);
   </div>
   <AddItemDialog v-if="showAdd" @close="showAdd = false" />
   <ImportDialog v-if="showImport" @close="showImport = false" />
+  <ExportDialog v-if="showExport" @close="showExport = false" />
   <EmergencyKitDialog
     v-if="showKit && vault.secretKey"
     :secret-key="vault.secretKey"

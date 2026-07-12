@@ -59,7 +59,8 @@ The consumer product (**Phase A**, the 1Password equivalent) also ships:
   Watchtower security dashboard — the vault is stored as a single encrypted blob in
   the browser and all crypto runs in WebAssembly. Sealed with a device **Secret Key
   (2SKD)** + master password, with a one-time **Emergency Kit** and an add-a-device
-  flow. **Import** from Bitwarden (JSON) or LastPass/1Password/CSV.
+  flow. **Import** from Bitwarden (JSON) or LastPass/1Password/CSV and **export**
+  (Proctor/Bitwarden JSON, CSV) — no lock-in.
   `cd app && npm install && npm run build:wasm && npm run dev`.
 - **[`extension/`](extension/)** — a Manifest V3 browser extension for autofill.
 
