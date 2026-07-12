@@ -21,11 +21,12 @@ Built open-core: fully open-source clients + server, **self-host free forever**;
 - 📐 **[Product Specification (PRD)](docs/product/product-spec.md)** — vision, personas, differentiation, architecture, the AI credential broker, feature set, pricing, roadmap, and GTM.
 - 🏛️ **[ADR-0001 — Broker security model](docs/architecture/ADR-0001-broker-security-model.md)** — the design the prototype implements.
 
-## v0.1.0 — the Phase B wedge, working
+## v1.0.0 — the Phase B wedge, complete end-to-end
 
 A runnable Rust workspace: a real encrypted vault, the credential-broker security
-model, minting ("mint, don't inject"), and an MCP server an agent can drive — all
-tested end-to-end.
+model, minting and vault-read, secretless read/write execution, **interactive
+step-up approval**, propose-not-commit, a persistent audit log, and a kill
+switch — all driveable from Claude Code over MCP, all tested.
 
 ```
 crates/
@@ -39,7 +40,7 @@ crates/
 ```
 
 ```bash
-cargo test --workspace              # 34 tests: origin-binding, propose-not-commit exec, secretless no-leak, audit chain…
+cargo test --workspace              # 37 tests: origin-binding, step-up, propose-not-commit exec, secretless no-leak, audit chain…
 cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 
@@ -84,14 +85,15 @@ wrong origin and it's refused outright.
 
 ## Status
 
-**v0.5.0** threads real operation params (`use_credential`'s `params`) through to
-the performed action — the GitHub draft-PR write is now genuinely parameterized
-(`owner/repo/head/base/title`). On top of the closed **propose-not-commit** loop
-(unattended `ShipToProduction` → `OpenPullRequest` → reviewable draft), two
-credential-use models (vault-read *or* mint), secretless read/write execution, the
-file-backed vault + CLI, the broker security model, and the vault-backed MCP
-server. 32 passing tests. Next: `elicitation`-based step-up through MCP, more
-executable operations, and the vault/sync surfaces. See the
+**v1.0.0 — the wedge is complete end-to-end.** In one flow the broker: refuses a
+confused-deputy origin, **prompts for human approval** on a step-up (via MCP
+elicitation), downgrades an unattended `ShipToProduction` to a reviewable draft
+PR, performs reads/writes secretlessly (vault-read *or* mint), persists a
+tamper-evident audit log, and offers a kill switch — never exposing a credential
+to the model. 37 passing tests across 5 crates.
+
+Deferred (post-wedge): OAuth Token Exchange / cloud STS minters, more executable
+operations, unattended out-of-band alerts, sync/self-host surfaces. See the
 [CHANGELOG](CHANGELOG.md) and the PRD roadmap.
 
 > A **formal security review is required before any real use.** GitHub network

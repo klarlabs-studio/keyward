@@ -25,12 +25,15 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use rmcp::{
+    elicit_safe,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     schemars, tool, tool_handler, tool_router,
+    service::{Peer, RequestContext, RoleServer},
     transport::stdio,
     ErrorData as McpError, ServerHandler, ServiceExt,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -88,6 +91,60 @@ struct UseCredentialArgs {
     /// OpenPullRequest: { "owner", "repo", "head", "base", "title" }.
     #[serde(default)]
     params: serde_json::Value,
+}
+
+/// Interactive approval collected from the user for a step-up (high-risk) action.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(description = "Approve this step-up credential action?")]
+struct Approval {
+    #[schemars(description = "Set true to approve, false to reject")]
+    approved: bool,
+}
+elicit_safe!(Approval);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApprovalOutcome {
+    Approved,
+    Rejected,
+    /// The client can't collect approval (no elicitation support / errored).
+    Unavailable,
+}
+
+/// Asks a human to approve a step-up action.
+#[async_trait::async_trait]
+trait Approver: Send + Sync {
+    async fn request(&self, reason: &str) -> ApprovalOutcome;
+}
+
+/// Real approver: prompts the MCP client via elicitation.
+struct ElicitApprover {
+    peer: Peer<RoleServer>,
+}
+
+#[async_trait::async_trait]
+impl Approver for ElicitApprover {
+    async fn request(&self, reason: &str) -> ApprovalOutcome {
+        match self
+            .peer
+            .elicit::<Approval>(format!("Proctor step-up approval required: {reason}"))
+            .await
+        {
+            Ok(Some(a)) if a.approved => ApprovalOutcome::Approved,
+            Ok(Some(_)) => ApprovalOutcome::Rejected,
+            Ok(None) => ApprovalOutcome::Rejected,
+            Err(_) => ApprovalOutcome::Unavailable,
+        }
+    }
+}
+
+/// Tag a result as human-approved (for the step-up path).
+fn with_approved(mut v: serde_json::Value, approved: bool) -> serde_json::Value {
+    if approved {
+        if let Some(o) = v.as_object_mut() {
+            o.insert("approved_via".into(), json!("human elicitation"));
+        }
+    }
+    v
 }
 
 /// Which scope a minted token should carry for a given verb. Writes get a
@@ -158,185 +215,154 @@ impl ProctorServer {
     )]
     async fn use_credential(
         &self,
+        context: RequestContext<RoleServer>,
         Parameters(args): Parameters<UseCredentialArgs>,
     ) -> Result<CallToolResult, McpError> {
+        let approver = ElicitApprover { peer: context.peer.clone() };
+        let out = self.handle_use(args, &approver).await;
+        Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
+    }
+
+    /// Core decision + execution logic, independent of the MCP transport so it is
+    /// unit-testable. On a step-up decision it asks `approver` (real elicitation
+    /// in production, a mock in tests).
+    async fn handle_use(&self, args: UseCredentialArgs, approver: &dyn Approver) -> serde_json::Value {
         let verb = match ActionVerb::parse(&args.verb) {
             Some(v) => v,
-            None => {
-                return Ok(text_result(format!(
-                    "unknown verb '{}' — see the tool description for valid verbs.",
-                    args.verb
-                )))
-            }
+            None => return json!({ "decision": "error", "reason": format!("unknown verb '{}'", args.verb) }),
         };
-        let mode = if args.unattended {
-            Mode::Unattended
-        } else {
-            Mode::Attended
-        };
+        let mode = if args.unattended { Mode::Unattended } else { Mode::Attended };
 
-        // Phase 1: reach a decision under the lock (broker is sync).
-        enum Next {
-            Respond(serde_json::Value),
-            Mint {
-                item_id: String,
-                base: Option<String>,
-                scope: MintScope,
-                verb: ActionVerb,
-                origin: String,
-                params: serde_json::Value,
-            },
-            /// Use the durable token stored in the vault directly (mintable=false).
-            UseStored {
-                base: Option<String>,
-                verb: ActionVerb,
-                origin: String,
-                params: serde_json::Value,
-            },
+        enum Plan {
+            Value(serde_json::Value),
+            Exec { mintable: bool, item_id: String, base: Option<String>, verb: ActionVerb, origin: String, params: serde_json::Value },
+            StepUp { reason: String, mintable: bool, item_id: String, base: Option<String>, verb: ActionVerb, origin: String, params: serde_json::Value },
         }
 
-        let next = {
+        // Decide under the lock (broker is sync); execute/elicit after releasing it.
+        let plan = {
             let mut state = self.state.lock().await;
             let item = match state.items.iter().find(|i| i.id == args.item_id).cloned() {
                 Some(i) => i,
-                None => {
-                    return Ok(text_result(format!("no such item '{}'", args.item_id)))
-                }
+                None => return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) }),
             };
             let action = Action::new(verb, &args.origin);
-            match state
-                .broker
-                .request_use(&item, &action, mode, args.want_raw_secret, SystemTime::now())
-            {
-                Ok(Grant::Capability(cap)) => match cap.primitive {
-                    Primitive::Minted => {
-                        let base = state.secrets.get(&item.id).cloned();
-                        Next::Mint {
-                            item_id: item.id.clone(),
-                            base,
-                            scope: scope_for(verb),
-                            verb,
-                            origin: action.target.0.clone(),
-                            params: args.params.clone(),
-                        }
+            match state.broker.request_use(&item, &action, mode, args.want_raw_secret, SystemTime::now()) {
+                Ok(Grant::Capability(cap)) => {
+                    let base = state.secrets.get(&item.id).cloned();
+                    match cap.primitive {
+                        Primitive::Minted => Plan::Exec { mintable: true, item_id: item.id.clone(), base, verb, origin: action.target.0.clone(), params: args.params.clone() },
+                        Primitive::Secretless => Plan::Exec { mintable: false, item_id: item.id.clone(), base, verb, origin: action.target.0.clone(), params: args.params.clone() },
+                        Primitive::RawSecret => Plan::Value(json!({ "decision": "allow", "primitive": "raw", "note": "raw path (disabled by default)" })),
                     }
-                    Primitive::Secretless => {
-                        let base = state.secrets.get(&item.id).cloned();
-                        Next::UseStored {
-                            base,
-                            verb,
-                            origin: action.target.0.clone(),
-                            params: args.params.clone(),
-                        }
+                }
+                Ok(Grant::NeedsHumanApproval(reason)) => {
+                    if exec_kind_for(verb).is_some() {
+                        Plan::StepUp { reason, mintable: item.mintable, item_id: item.id.clone(), base: state.secrets.get(&item.id).cloned(), verb, origin: action.target.0.clone(), params: args.params.clone() }
+                    } else {
+                        Plan::Value(json!({ "decision": "step_up", "reason": reason, "note": "requires a human to approve; no automated execution is wired for this verb." }))
                     }
-                    Primitive::RawSecret => Next::Respond(json!({
-                        "decision": "allow",
-                        "primitive": "raw",
-                        "note": "raw path (disabled by default)"
-                    })),
-                },
-                Ok(Grant::NeedsHumanApproval(reason)) => Next::Respond(json!({
-                    "decision": "step_up", "reason": reason,
-                    "note": "requires a human to approve before it can proceed"
-                })),
-                Ok(Grant::Proposed(v)) => Next::Respond(json!({
-                    "decision": "propose_not_commit", "proposed_verb": v.as_str(),
-                    "note": "irreversible action offered as a reviewable artifact instead of executing"
-                })),
-                Err(Denied::OriginMismatch) => Next::Respond(json!({
-                    "decision": "deny",
-                    "reason": "origin mismatch — confused-deputy blocked (credential not bound to this origin)"
-                })),
-                Err(Denied::Policy(reason)) => Next::Respond(json!({
-                    "decision": "deny", "reason": reason
-                })),
+                }
+                Ok(Grant::Proposed(v)) => Plan::Value(json!({ "decision": "propose_not_commit", "proposed_verb": v.as_str(), "note": "irreversible action offered as a reviewable artifact instead of executing" })),
+                Err(Denied::OriginMismatch) => Plan::Value(json!({ "decision": "deny", "reason": "origin mismatch — confused-deputy blocked (credential not bound to this origin)" })),
+                Err(Denied::Policy(reason)) => Plan::Value(json!({ "decision": "deny", "reason": reason })),
             }
         };
 
-        // Phase 2: mint outside the lock (network I/O), then store server-side.
-        let out = match next {
-            Next::Respond(v) => v,
-            Next::Mint { item_id, base, scope, verb, origin, params } => match base {
-                None => json!({
-                    "decision": "allow", "primitive": "minted",
-                    "note": "decision allows minting, but no base secret is loaded (running without a vault). Load a vault (PROCTOR_VAULT/PROCTOR_MASTER) to mint."
-                }),
-                Some(secret) => match self.minter.mint(&item_id, &secret, &scope).await {
-                    Ok(token) => {
-                        if let Some(kind) = exec_kind_for(verb) {
-                            // Secretless execution: use the minted token to perform the
-                            // action ourselves and return only the sanitized result. The
-                            // token never reaches the model.
-                            let exec_action = ExecAction::with_params(kind, origin, params);
-                            match self.executor.perform(token.expose(), &exec_action).await {
-                                Ok(r) => json!({
-                                    "decision": "allow",
-                                    "primitive": "secretless_exec",
-                                    "source": "minted",
-                                    "provider": self.executor.provider(),
-                                    "performed": true,
-                                    "result_summary": r.summary,
-                                    "result": r.data,
-                                    "note": "the broker minted a scoped short-TTL token and performed the action itself; neither the base secret nor the minted token was returned to the model."
-                                }),
-                                Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
-                            }
-                        } else {
-                            // Non-read: mint and hold server-side; return a reference only.
-                            let mut state = self.state.lock().await;
-                            let token_ref = format!("mint_{}", state.minted.len() + 1);
-                            let resp = json!({
-                                "decision": "allow",
-                                "primitive": "minted",
-                                "provider": token.provider,
-                                "token_ref": token_ref,
-                                "masked": token.masked(),
-                                "scope": token.scope_desc,
-                                "provider_expires_at": token.provider_expires_at,
-                                "note": "a fresh, scoped, short-TTL token was minted and is held server-side; it is NOT returned to the model. Blast radius is bounded by scope + short TTL."
-                            });
-                            state.minted.insert(token_ref, token);
-                            resp
+        match plan {
+            Plan::Value(v) => v,
+            Plan::Exec { mintable, item_id, base, verb, origin, params } => {
+                self.execute(mintable, item_id, base, verb, origin, params, false).await
+            }
+            Plan::StepUp { reason, mintable, item_id, base, verb, origin, params } => {
+                match approver.request(&reason).await {
+                    ApprovalOutcome::Approved => {
+                        {
+                            let mut s = self.state.lock().await;
+                            s.broker.audit.append(&item_id, &origin, verb.as_str(), "STEPUP:approved");
                         }
+                        self.execute(mintable, item_id, base, verb, origin, params, true).await
                     }
-                    Err(e) => json!({ "decision": "error", "reason": format!("mint failed: {e}") }),
-                },
-            },
-            // Secretless: read the durable token from the vault and use it directly
-            // (no minting, nothing fetched/created). The token performs the action
-            // inside the broker and is never returned to the model.
-            Next::UseStored { base, verb, origin, params } => match base {
-                None => json!({
-                    "decision": "allow", "primitive": "secretless",
-                    "note": "decision allows a secretless action, but no stored credential is loaded (running without a vault)."
-                }),
-                Some(secret) => {
-                    if let Some(kind) = exec_kind_for(verb) {
-                        let exec_action = ExecAction::with_params(kind, origin, params);
-                        match self.executor.perform(&secret, &exec_action).await {
-                            Ok(r) => json!({
-                                "decision": "allow",
-                                "primitive": "secretless_exec",
-                                "source": "vault",
-                                "provider": self.executor.provider(),
-                                "performed": true,
-                                "result_summary": r.summary,
-                                "result": r.data,
-                                "note": "the broker read the stored credential from the vault and performed the action itself; the credential was never returned to the model."
-                            }),
-                            Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
-                        }
-                    } else {
-                        json!({
-                            "decision": "allow", "primitive": "secretless",
-                            "note": format!("the broker would perform '{}' using the stored credential; no execution is wired for this verb yet.", verb.as_str())
-                        })
+                    ApprovalOutcome::Rejected => json!({ "decision": "deny", "reason": format!("human rejected step-up: {reason}") }),
+                    ApprovalOutcome::Unavailable => json!({ "decision": "step_up", "reason": reason, "note": "human approval required; interactive elicitation is unavailable on this client." }),
+                }
+            }
+        }
+    }
+
+    /// Perform an allowed action: mint (mintable) or read the stored token
+    /// (vault), then execute via the executor. The credential is never returned.
+    async fn execute(
+        &self,
+        mintable: bool,
+        item_id: String,
+        base: Option<String>,
+        verb: ActionVerb,
+        origin: String,
+        params: serde_json::Value,
+        approved: bool,
+    ) -> serde_json::Value {
+        let secret = match base {
+            Some(s) => s,
+            None => return json!({
+                "decision": "allow",
+                "primitive": if mintable { "minted" } else { "secretless" },
+                "note": "decision allows the action, but no credential is loaded (running without a vault). Load a vault via PROCTOR_VAULT/PROCTOR_MASTER."
+            }),
+        };
+        let kind = exec_kind_for(verb);
+
+        if mintable {
+            let token = match self.minter.mint(&item_id, &secret, &scope_for(verb)).await {
+                Ok(t) => t,
+                Err(e) => return json!({ "decision": "error", "reason": format!("mint failed: {e}") }),
+            };
+            match kind {
+                Some(k) => {
+                    let ea = ExecAction::with_params(k, origin, params);
+                    match self.executor.perform(token.expose(), &ea).await {
+                        Ok(r) => with_approved(json!({
+                            "decision": "allow", "primitive": "secretless_exec", "source": "minted",
+                            "provider": self.executor.provider(), "performed": true,
+                            "result_summary": r.summary, "result": r.data,
+                            "note": "the broker minted a scoped short-TTL token and performed the action itself; neither the base secret nor the minted token was returned to the model."
+                        }), approved),
+                        Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
                     }
                 }
-            },
-        };
-
-        Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
+                None => {
+                    let mut state = self.state.lock().await;
+                    let token_ref = format!("mint_{}", state.minted.len() + 1);
+                    let resp = with_approved(json!({
+                        "decision": "allow", "primitive": "minted", "provider": token.provider,
+                        "token_ref": token_ref, "masked": token.masked(), "scope": token.scope_desc,
+                        "provider_expires_at": token.provider_expires_at,
+                        "note": "a fresh, scoped, short-TTL token was minted and is held server-side; it is NOT returned to the model."
+                    }), approved);
+                    state.minted.insert(token_ref, token);
+                    resp
+                }
+            }
+        } else {
+            match kind {
+                Some(k) => {
+                    let ea = ExecAction::with_params(k, origin, params);
+                    match self.executor.perform(&secret, &ea).await {
+                        Ok(r) => with_approved(json!({
+                            "decision": "allow", "primitive": "secretless_exec", "source": "vault",
+                            "provider": self.executor.provider(), "performed": true,
+                            "result_summary": r.summary, "result": r.data,
+                            "note": "the broker read the stored credential from the vault and performed the action itself; the credential was never returned to the model."
+                        }), approved),
+                        Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
+                    }
+                }
+                None => json!({
+                    "decision": "allow", "primitive": "secretless",
+                    "note": format!("the broker would perform '{}' using the stored credential; no execution is wired for this verb yet.", verb.as_str())
+                }),
+            }
+        }
     }
 
     #[tool(
@@ -488,191 +514,156 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    fn server_with_secret() -> ProctorServer {
+    struct MockApprover(ApprovalOutcome);
+    #[async_trait::async_trait]
+    impl Approver for MockApprover {
+        async fn request(&self, _reason: &str) -> ApprovalOutcome {
+            self.0
+        }
+    }
+    fn no_approve() -> MockApprover {
+        MockApprover(ApprovalOutcome::Rejected)
+    }
+
+    fn args(item: &str, origin: &str, verb: &str, unattended: bool) -> UseCredentialArgs {
+        UseCredentialArgs {
+            item_id: item.into(),
+            origin: origin.into(),
+            verb: verb.into(),
+            unattended,
+            want_raw_secret: false,
+            params: serde_json::Value::Null,
+        }
+    }
+
+    fn server(mintable: bool, secret: &str, approved: &[&str]) -> ProctorServer {
         let items = vec![ItemRef {
             id: "itm_github".into(),
             label: "GitHub".into(),
-            bound_origins: vec!["github.com".into()],
-            mintable: true,
+            bound_origins: vec!["github.com".into(), "api.github.com".into()],
+            mintable,
         }];
         let mut secrets = HashMap::new();
-        secrets.insert("itm_github".to_string(), "SUPER_SECRET_BASE_PEM".to_string());
-        ProctorServer::with(
-            items,
-            secrets,
-            Arc::new(MockMinter),
-            Arc::new(MockExecutor),
-            &["github.com".to_string()],
-            None,
-        )
+        secrets.insert("itm_github".to_string(), secret.to_string());
+        let approved: Vec<String> = approved.iter().map(|s| s.to_string()).collect();
+        ProctorServer::with(items, secrets, Arc::new(MockMinter), Arc::new(MockExecutor), &approved, None)
     }
 
-    fn body(res: &CallToolResult) -> String {
-        serde_json::to_string(res).unwrap()
-    }
-
-    /// Parse the tool's text content back into JSON (un-escaping the inner doc).
+    /// Parse a CallToolResult's text content back into JSON.
     fn tool_json(res: &CallToolResult) -> serde_json::Value {
         let v = serde_json::to_value(res).unwrap();
-        let text = v["content"][0]["text"].as_str().unwrap().to_string();
-        serde_json::from_str(&text).unwrap()
+        serde_json::from_str(v["content"][0]["text"].as_str().unwrap()).unwrap()
     }
 
     #[tokio::test]
-    async fn kill_switch_revokes_held_tokens() {
-        let server = server_with_secret(); // mintable=true item
-        // Mint-and-hold a token (a non-executing verb).
-        let mint = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "github.com".into(),
-            verb: "MintReadToken".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::Value::Null,
-        };
-        let _ = server.use_credential(Parameters(mint)).await.unwrap();
-        assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 1);
-        // Kill switch.
-        assert_eq!(tool_json(&server.revoke_all().await.unwrap())["revoked"], 1);
-        assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 0);
+    async fn minted_read_returns_result_not_secret() {
+        let v = server(true, "SUPER_SECRET_BASE_PEM", &["github.com"])
+            .handle_use(args("itm_github", "github.com", "Read", true), &no_approve())
+            .await;
+        assert_eq!(v["primitive"], "secretless_exec");
+        assert_eq!(v["source"], "minted");
+        assert!(v.to_string().contains("octo/demo"));
+        assert!(!v.to_string().contains("SUPER_SECRET_BASE_PEM"));
+        assert!(!v.to_string().contains("ephemeral_token"));
     }
 
     #[tokio::test]
-    async fn secretless_read_returns_result_not_secret() {
-        // Read → mint + perform the action; the model gets the result, not the token.
-        let server = server_with_secret();
-        let args = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "github.com".into(),
-            verb: "Read".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::Value::Null,
-        };
-        let res = server.use_credential(Parameters(args)).await.unwrap();
-        let s = body(&res);
-        assert!(s.contains("secretless_exec"), "expected secretless execution: {s}");
-        assert!(s.contains("octo/demo"), "expected the sanitized result: {s}");
-        // The invariant: neither the base secret nor the minted token value appears.
-        assert!(!s.contains("SUPER_SECRET_BASE_PEM"), "base secret leaked!");
-        assert!(!s.contains("ephemeral_token"), "minted token value leaked!");
-    }
-
-    fn server_with_stored_token() -> ProctorServer {
-        // mintable = false → the vault holds the actual token; the broker reads it.
-        let items = vec![ItemRef {
-            id: "itm_github".into(),
-            label: "GitHub PAT".into(),
-            bound_origins: vec!["github.com".into()],
-            mintable: false,
-        }];
-        let mut secrets = HashMap::new();
-        secrets.insert("itm_github".to_string(), "ghp_STORED_TOKEN_FROM_VAULT".to_string());
-        ProctorServer::with(
-            items,
-            secrets,
-            Arc::new(MockMinter),
-            Arc::new(MockExecutor),
-            &["github.com".to_string()],
-            None,
-        )
+    async fn vault_read_uses_stored_token_without_leaking_it() {
+        let v = server(false, "ghp_STORED_TOKEN", &["github.com"])
+            .handle_use(args("itm_github", "github.com", "Read", true), &no_approve())
+            .await;
+        assert_eq!(v["primitive"], "secretless_exec");
+        assert_eq!(v["source"], "vault");
+        assert!(!v.to_string().contains("ghp_STORED_TOKEN"));
     }
 
     #[tokio::test]
-    async fn secretless_stored_read_uses_vault_token_without_leaking_it() {
-        // mintable=false + Read → the broker reads the stored token and performs
-        // the action; the token is used internally and never returned.
-        let server = server_with_stored_token();
-        let args = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "github.com".into(),
-            verb: "Read".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::Value::Null,
-        };
-        let res = server.use_credential(Parameters(args)).await.unwrap();
-        let s = body(&res);
-        assert!(s.contains("secretless_exec"), "expected secretless execution: {s}");
-        assert!(s.contains("vault"), "expected the vault-read source/note: {s}");
-        assert!(s.contains("octo/demo"), "expected the sanitized result: {s}");
-        // The invariant: the stored token never appears in the response.
-        assert!(!s.contains("ghp_STORED_TOKEN_FROM_VAULT"), "stored token leaked!");
-    }
-
-    #[tokio::test]
-    async fn non_read_mint_holds_token_and_masks_it() {
-        // A non-executing verb mints and holds the token server-side, returning
-        // only a reference + masked view.
-        let server = server_with_secret();
-        let args = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "github.com".into(),
-            verb: "MintReadToken".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::Value::Null,
-        };
-        let res = server.use_credential(Parameters(args)).await.unwrap();
-        let s = body(&res);
-        assert!(s.contains("token_ref"), "expected a held token ref: {s}");
-        assert!(s.contains("masked"));
-        assert!(!s.contains("SUPER_SECRET_BASE_PEM"));
-        assert!(!s.contains("ephemeral_token"));
-    }
-
-    #[tokio::test]
-    async fn handler_blocks_confused_deputy() {
-        let server = server_with_secret();
-        let args = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "evil.example.com".into(),
-            verb: "Read".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::Value::Null,
-        };
-        let res = server.use_credential(Parameters(args)).await.unwrap();
-        assert!(body(&res).contains("origin mismatch"));
+    async fn confused_deputy_is_blocked() {
+        let v = server(true, "SEC", &["github.com"])
+            .handle_use(args("itm_github", "evil.example.com", "Read", true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "deny");
+        assert!(v["reason"].as_str().unwrap().contains("origin mismatch"));
     }
 
     #[tokio::test]
     async fn ship_to_prod_is_proposed_not_committed() {
-        let server = server_with_secret();
-        let args = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "github.com".into(),
-            verb: "ShipToProduction".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::Value::Null,
-        };
-        let res = server.use_credential(Parameters(args)).await.unwrap();
-        let s = body(&res);
-        assert!(s.contains("propose_not_commit"));
-        assert!(s.contains("OpenPullRequest"));
+        let v = server(false, "ghp_x", &["github.com"])
+            .handle_use(args("itm_github", "github.com", "ShipToProduction", true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "propose_not_commit");
+        assert_eq!(v["proposed_verb"], "OpenPullRequest");
     }
 
     #[tokio::test]
-    async fn open_pr_executes_as_a_reviewable_artifact() {
-        // The proposed alternative to ShipToProduction: the agent opens a PR,
-        // which the broker performs as a reviewable draft — never a merge.
-        let server = server_with_secret();
-        let args = UseCredentialArgs {
-            item_id: "itm_github".into(),
-            origin: "github.com".into(),
-            verb: "OpenPullRequest".into(),
-            unattended: true,
-            want_raw_secret: false,
-            params: serde_json::json!({ "repo": "octo/infra", "title": "Automated fix" }),
-        };
-        let res = server.use_credential(Parameters(args)).await.unwrap();
-        let s = body(&res);
-        assert!(s.contains("secretless_exec"), "expected execution: {s}");
-        assert!(s.contains("pull_request"), "expected a PR artifact: {s}");
-        assert!(s.contains("not merged"), "must be a reviewable artifact, not a merge: {s}");
-        // The threaded params reached the executor.
-        assert!(s.contains("Automated fix"), "params did not flow through: {s}");
-        assert!(!s.contains("SUPER_SECRET_BASE_PEM"));
+    async fn open_pr_executes_as_reviewable_artifact_with_params() {
+        let mut a = args("itm_github", "github.com", "OpenPullRequest", true);
+        a.params = json!({ "repo": "octo/infra", "title": "Automated fix" });
+        let v = server(false, "ghp_x", &["github.com"]).handle_use(a, &no_approve()).await;
+        assert_eq!(v["primitive"], "secretless_exec");
+        let s = v.to_string();
+        assert!(s.contains("pull_request"));
+        assert!(s.contains("not merged"));
+        assert!(s.contains("Automated fix")); // params flowed through
+    }
+
+    #[tokio::test]
+    async fn non_executing_verb_mints_and_holds() {
+        let v = server(true, "SEC", &["github.com"])
+            .handle_use(args("itm_github", "github.com", "MintReadToken", true), &no_approve())
+            .await;
+        assert_eq!(v["primitive"], "minted");
+        assert!(v["token_ref"].is_string());
+        assert!(!v.to_string().contains("ephemeral_token"));
+    }
+
+    // --- step-up / elicitation ---
+
+    #[tokio::test]
+    async fn step_up_approved_executes() {
+        // Read on a bound-but-not-pre-approved origin, attended → step-up.
+        let v = server(false, "ghp_STORED", &["github.com"])
+            .handle_use(
+                args("itm_github", "api.github.com", "Read", false),
+                &MockApprover(ApprovalOutcome::Approved),
+            )
+            .await;
+        assert_eq!(v["primitive"], "secretless_exec");
+        assert_eq!(v["approved_via"], "human elicitation");
+        assert!(!v.to_string().contains("ghp_STORED"));
+    }
+
+    #[tokio::test]
+    async fn step_up_rejected_denies() {
+        let v = server(false, "ghp_STORED", &["github.com"])
+            .handle_use(
+                args("itm_github", "api.github.com", "Read", false),
+                &MockApprover(ApprovalOutcome::Rejected),
+            )
+            .await;
+        assert_eq!(v["decision"], "deny");
+        assert!(v["reason"].as_str().unwrap().contains("rejected"));
+    }
+
+    #[tokio::test]
+    async fn step_up_unavailable_falls_back_to_note() {
+        let v = server(false, "ghp_STORED", &["github.com"])
+            .handle_use(
+                args("itm_github", "api.github.com", "Read", false),
+                &MockApprover(ApprovalOutcome::Unavailable),
+            )
+            .await;
+        assert_eq!(v["decision"], "step_up");
+    }
+
+    #[tokio::test]
+    async fn kill_switch_revokes_held_tokens() {
+        let server = server(true, "SEC", &["github.com"]);
+        let _ = server
+            .handle_use(args("itm_github", "github.com", "MintReadToken", true), &no_approve())
+            .await;
+        assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 1);
+        assert_eq!(tool_json(&server.revoke_all().await.unwrap())["revoked"], 1);
+        assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 0);
     }
 }

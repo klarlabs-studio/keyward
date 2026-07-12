@@ -113,10 +113,17 @@ As of **v0.5.0**, operation parameters flow from the tool through to the executo
 parameterized (`owner/repo/head/base/title`) — the POST is real code, still
 exercised offline via mock.
 
+As of **v1.0.0**, **step-up is interactive**: a policy step-up (e.g. a
+bound-but-not-pre-approved origin, attended) prompts the user through the MCP
+client via elicitation (`peer.elicit`). Approve → perform + tag
+`approved_via: human elicitation`; reject → deny; no elicitation support → fall
+back to a step-up note. An `Approver` abstraction keeps the path unit-tested.
+Audit is persistent (`PROCTOR_AUDIT`), and a `revoke_all` kill switch clears all
+held tokens.
+
 **Not yet built:** OAuth Token Exchange (RFC 8693) / cloud STS minters,
-`elicitation`-based step-up approval, unattended-policy pre-authorization +
-out-of-band alerts, anomaly detection, and a **formal security review before any
-real use**.
+unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and
+a **formal security review before any real use**.
 
 ## Consequences
 

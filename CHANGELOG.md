@@ -3,6 +3,34 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.0.0] — 2026-07-12
+
+The Phase B wedge is complete end-to-end: the interactive approval loop closes
+the last behavioral gap.
+
+### Added
+- **Interactive step-up via MCP elicitation** — when the risk-tiered policy
+  returns a step-up (e.g. a bound-but-not-pre-approved origin, attended), the
+  broker prompts the user through the client (`peer.elicit`). Approve → the
+  action is performed and tagged `approved_via: human elicitation`; reject →
+  denied; no elicitation support → falls back to a step-up note.
+- An `Approver` abstraction (`ElicitApprover` in production, `MockApprover` in
+  tests) so the whole step-up path is unit-tested (approve / reject / unavailable).
+- Refactor: decision + execution logic extracted into `handle_use` + `execute`,
+  making the broker's behavior fully testable independent of the MCP transport.
+
+### Complete end-to-end (this is what "the wedge" now does)
+- Origin-binding (anti confused-deputy) · risk-tiered policy · **interactive
+  step-up** · propose-not-commit (refuse → downgrade → perform as a draft PR) ·
+  two credential-use models (vault-read *or* mint) · secretless read + write
+  execution with real params · persistent hash-chained audit · kill switch —
+  all driveable from Claude Code over MCP. 37 tests.
+
+### Still deferred (post-wedge)
+- OAuth Token Exchange (RFC 8693) / cloud STS minters, more executable
+  operations, unattended out-of-band alerts, anomaly detection, sync/self-host,
+  and a **formal security review before any real use**.
+
 ## [0.6.0] — 2026-07-12
 
 Accountability + capability lifecycle.
