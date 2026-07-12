@@ -3,22 +3,29 @@
 A Manifest V3 browser extension that autofills login credentials into web pages,
 styled to match the Proctor Passbook brand.
 
-> **This is a PROTOTYPE using demo data.** The vault items (GitHub, Netflix,
-> Chase, Google, Amazon) and their passwords are **hardcoded placeholders** in
-> `popup.js`. They are not real secrets and nothing here talks to an actual
-> vault. See [Prototype note](#prototype-note) for how a production version would
-> differ.
+> **This is a PROTOTYPE.** It now reads real vault items from a local **native
+> messaging bridge** (`passbook bridge`), but the host wrapper unlocks the vault
+> from a master-password file, which is demo-only — see
+> [`native-host/README.md`](native-host/README.md). If the bridge is not
+> installed, the popup **falls back to hardcoded demo data** (GitHub, Netflix,
+> Chase, Google, Amazon) so the flow still demos. See
+> [Prototype note](#prototype-note).
 
 ## What it does
 
-- Click the toolbar icon to open a popup listing demo vault items.
-- The popup detects the active tab's site and:
-  - sorts and tags items that **match this site**, and
+- Click the toolbar icon to open a popup. The popup:
+  - resolves the active tab's origin and asks the local Passbook bridge for a
+    **`list`** of logins that match this site (titles and usernames only — **no
+    passwords** cross this boundary until fill time),
+  - tags matching items with a "This site" badge, and
   - shows a "matches this site" banner (or a "login form detected" hint).
-- Type in the search box to filter by name, username, or domain.
-- Click an item to autofill the page's username and password fields. The content
-  script fires proper `input`/`change` events so single-page-app frameworks
-  (React, Vue, etc.) register the change.
+- If the bridge is unavailable, a subtle *"Passbook bridge not connected —
+  showing demo items"* banner appears and the demo vault is used instead.
+- Type in the search box to filter by name, username, or domain/URL.
+- Click an item to autofill. For a live item the popup requests **`get`** for its
+  id (fetching the secret only now, at fill time) and relays the credentials to
+  the page. The content script fires proper `input`/`change` events so
+  single-page-app frameworks (React, Vue, etc.) register the change.
 
 ## Load it unpacked in Chrome
 
@@ -31,13 +38,39 @@ styled to match the Proctor Passbook brand.
 
 To pick up code changes, click the **reload** (↻) button on the extension card.
 
+### Connect the vault bridge (optional but recommended)
+
+Out of the box the popup shows demo data. To read your real vault, install the
+native-messaging host: see [`native-host/README.md`](native-host/README.md) for
+per-OS install steps, building the `passbook` binary
+(`cargo build -p passbook-cli --release`), and wiring the extension ID into the
+host manifest's `allowed_origins`. Once installed, the popup prefers the live
+bridge automatically and drops the demo banner.
+
 ### Firefox note
 
 Firefox also supports MV3. Load via `about:debugging` → **This Firefox** →
 **Load Temporary Add-on** → pick `manifest.json`. Firefox uses the `browser.*`
 namespace but aliases `chrome.*`, so these scripts work as-is.
 
-## How autofill works (message flow)
+## How it works (message flow)
+
+**Listing items (popup open) and fetching a secret (on click):**
+
+```
+popup.js  ──(runtime.sendMessage {type:"native", payload:{type:"list", origin}})──►  background.js
+                                                                                          │
+                          chrome.runtime.sendNativeMessage(                              │
+                            "com.klarlabs.proctor.passbook", …)                          ▼
+                                                                              native host: passbook bridge
+                                                                                          │
+                              {items:[{id,title,username,url,hasTotp}]}  (no secrets)     ▼
+popup.js  ◄──────────────────────────────────────────────────────────────────────  background.js
+
+  (on click)  {type:"native", payload:{type:"get", id}}  →  bridge  →  {id,username,password,totp}
+```
+
+**Filling the page (unchanged relay path):**
 
 ```
 popup.js  ──(runtime.sendMessage {type:"relay", payload:{type:"fill",…}})──►  background.js
@@ -51,8 +84,12 @@ background.js  ──(tabs.sendMessage {type:"fill", username, password})──�
 content.js  ──(sendResponse {ok, filledUsername, filledPassword, origin})──►  background.js  ──►  popup.js
 ```
 
-- **`popup.js`** never messages the tab directly. It sends a `relay` message to
-  the background worker with the real payload.
+- **`popup.js`** never messages the tab or the native host directly. It sends
+  `native` messages (vault `list`/`get`) and `relay` messages (page `fill`/
+  `probe`) to the background worker.
+- The **`list`** response carries **no passwords**; the secret is fetched with
+  **`get`** only when the user clicks to fill, handed straight to the content
+  script, and never logged or stored.
 - **`background.js`** (the MV3 service worker) resolves the active tab, makes sure
   `content.js` is present (injecting it via `chrome.scripting` for pages that
   loaded before the extension), forwards the payload, and passes the response back.
@@ -69,9 +106,10 @@ content.js  ──(sendResponse {ok, filledUsername, filledPassword, origin})─
 | File | Role |
 |------|------|
 | `manifest.json` | MV3 manifest: permissions, background worker, content script, action/popup, icons |
-| `background.js` | Service worker — relays messages, injects the content script on demand |
+| `background.js` | Service worker — relays fill/probe to the tab and proxies `list`/`get` to the native host |
 | `content.js` | Detects login fields, fills them, reports page origin |
-| `popup.html` / `popup.css` / `popup.js` | The branded popup UI and vault logic |
+| `popup.html` / `popup.css` / `popup.js` | The branded popup UI and vault logic (live bridge + demo fallback) |
+| `native-host/` | Native-messaging host manifest template, bridge wrapper, and install guide |
 | `icons/lock-*.png` | Teal lock action icon (16/32/48/128 px) |
 
 ## Permissions
@@ -79,19 +117,33 @@ content.js  ──(sendResponse {ok, filledUsername, filledPassword, origin})─
 | Permission | Why |
 |------------|-----|
 | `activeTab` | Interact with the tab the user is currently on when they click the icon |
-| `storage` | Reserved for the vault-item cache / preferences (demo data is in-memory today) |
+| `storage` | Reserved for preferences (no secrets are stored) |
 | `scripting` | Inject `content.js` into pages that loaded before the extension so fill still works |
+| `nativeMessaging` | Talk to the local Passbook bridge (`com.klarlabs.proctor.passbook`) for `list`/`get` |
 | `host_permissions: ["<all_urls>"]` | Autofill must work on any login page the user visits |
 
 ## Prototype note
 
-A production Passbook build would **not** hardcode credentials. Instead:
+The extension now reads real vault items from a **local native-messaging bridge**
+(`passbook bridge`), preferring it over the demo data whenever it responds. What
+still makes this a prototype:
 
-- The extension would request a decrypted secret from a **local vault bridge**
-  (Chrome **native messaging** to a `proctor` host, or a `proctor-mcp`-style local
-  service) only at fill time and only after explicit user action.
-- Secrets would live in the encrypted vault, never inside the extension bundle or
-  `chrome.storage`.
-- Filling would be gated behind the vault being unlocked, with origin checks and
-  optional per-fill confirmation to defend against clickjacking and phishing.
-- Field matching would use saved per-item URL rules rather than heuristics alone.
+- **Bridge unlock is demo-only.** The host wrapper unlocks the vault from a
+  master-password file on disk. A production host would hold an unlocked session
+  (OS keychain / agent) or prompt the user to unlock, never keeping the master
+  password in a readable file. See
+  [`native-host/README.md`](native-host/README.md).
+- The demo fallback still ships hardcoded placeholder credentials in `popup.js`
+  for when the bridge is not installed.
+- A production build would additionally gate filling behind explicit per-fill
+  confirmation, stronger origin checks, and saved per-item URL rules rather than
+  field heuristics alone.
+
+What is already true today:
+
+- Secrets live in the vault, never in the extension bundle or `chrome.storage`.
+- The `list` response carries no passwords; a secret is fetched with `get` only
+  at fill time, handed straight to the content script, and never logged or stored.
+- Native messaging (not a localhost HTTP server) means only this browser plus the
+  extension ID pinned in the host's `allowed_origins` can invoke the bridge —
+  arbitrary web pages cannot.

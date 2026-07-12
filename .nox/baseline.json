@@ -288,6 +288,14 @@
       "severity": "medium",
       "reason": "Test fixtures in app/scripts/roundtrip.test.ts — a demo email (f@x.dev) and a demo TOTP secret in the round-trip test entries; not real credentials.",
       "created_at": "2026-07-12T20:52:34.403793Z"
+    },
+    {
+      "fingerprint": "fe07b6b0c4110e77cfeb9408bbd422c97e9dae0960aa1f4fc7e93042899adf35",
+      "rule_id": "DATA-001",
+      "file_path": "crates/passbook-cli/src/bridge.rs",
+      "severity": "medium",
+      "reason": "Test fixture in bridge.rs host_of() unit test: \"user@GitHub.com:443\" exercises credential/port stripping in URL host normalization — not a real email address.",
+      "created_at": "2026-07-12T21:08:13.900895Z"
     }
   ]
 }

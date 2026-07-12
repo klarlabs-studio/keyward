@@ -46,6 +46,7 @@ crates/
                             family sharing (X25519 sealed-box) — PROTOTYPE
   passbook-cli/ passbook    manage the consumer vault from the terminal
                             (init/add-login/list/show/totp/watchtower/emergency-kit)
+                            + `passbook bridge` — the browser native-messaging host
   passbook-wasm/ passbook-wasm  wasm-bindgen surface so the vault crypto/TOTP/Watchtower
                             runs client-side in the browser
   mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
@@ -62,7 +63,10 @@ The consumer product (**Phase A**, the 1Password equivalent) also ships:
   flow. **Import** from Bitwarden (JSON) or LastPass/1Password/CSV and **export**
   (Proctor/Bitwarden JSON, CSV) — no lock-in.
   `cd app && npm install && npm run build:wasm && npm run dev`.
-- **[`extension/`](extension/)** — a Manifest V3 browser extension for autofill.
+- **[`extension/`](extension/)** — a Manifest V3 browser extension for autofill,
+  wired to the real vault over Chrome **native messaging** (`passbook bridge`) with
+  a demo fallback. The `list` reply carries no secrets; passwords cross only at
+  fill time, origin-bound. See [`extension/native-host/`](extension/native-host/).
 
 The vault crypto core (`proctor-passbook`) compiles to WebAssembly so the same
 tested Rust runs in the CLI, the MCP server, and the browser.

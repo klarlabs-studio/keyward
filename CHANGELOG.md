@@ -3,6 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.17.0] — 2026-07-12
+
+**Real autofill — the browser extension talks to the vault.** The last "demo
+data" seam is closed: the extension now reads the real vault over Chrome **native
+messaging** (deliberately not a localhost HTTP server, which any web page could
+reach). Verified end-to-end headless by driving the host as a real process.
+
+### Added — native-messaging host (`passbook bridge`)
+- **`crates/passbook-cli/src/bridge.rs`:** a Chrome native-messaging host — reads
+  the length-prefixed-JSON wire protocol on stdio, loads the real (2SKD-sealed)
+  vault once, and answers `ping` / `list` / `get`. The **`list` reply carries no
+  secrets** (just enough to render the picker); passwords and a computed TOTP code
+  cross the pipe only in a `get` reply, at fill time. Origin-bound: a site only
+  sees its own logins (exact host or subdomain). 10 unit tests + a headless
+  integration run (framed requests → framed replies against a real sealed vault).
+- New `passbook bridge` subcommand.
+
+### Added — extension (`extension/`)
+- The popup now resolves the active tab's origin, asks the host to `list` matching
+  logins, and fetches secrets via `get` only at fill time (never logged/stored).
+  Falls back to demo data with a banner when the host isn't installed.
+- `nativeMessaging` permission; a native-host manifest template, an `exec passbook
+  bridge` wrapper script, and per-OS install docs under `extension/native-host/`.
+
+### Security
+- Only the specific browser + the extension id pinned in the host manifest's
+  `allowed_origins` can invoke the host — arbitrary pages cannot. Secrets are
+  origin-bound and released only at fill time.
+
 ## [1.16.0] — 2026-07-12
 
 **Export your vault — no lock-in.** The web vault exports to a portable file in

@@ -2,8 +2,8 @@
   "manifest_version": 3,
   "name": "Proctor Passbook",
   "version": "0.1.0",
-  "description": "Autofill credentials from your Proctor Passbook vault (prototype with demo data).",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "description": "Autofill credentials from your Proctor Passbook vault via a local native-messaging bridge (prototype; demo fallback).",
+  "permissions": ["activeTab", "storage", "scripting", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"

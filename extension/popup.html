@@ -42,6 +42,20 @@
         </div>
       </header>
 
+      <div class="bridge-banner" id="bridge-banner" hidden>
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+          <path
+            d="M12 3a9 9 0 1 0 9 9"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+          />
+          <path d="M12 8v4l2.5 1.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <span id="bridge-banner-text">Passbook bridge not connected — showing demo items</span>
+      </div>
+
       <div class="site-banner" id="site-banner" hidden>
         <span class="dot"></span>
         <span id="site-banner-text">Matches this site</span>
@@ -70,7 +84,7 @@
       <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
       <footer class="footer">
-        <span class="proto-badge">Prototype · demo data</span>
+        <span class="proto-badge">Prototype · native bridge</span>
       </footer>
     </div>
 

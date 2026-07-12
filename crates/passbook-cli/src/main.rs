@@ -24,6 +24,8 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod bridge;
+
 const TOTP_STEP: u64 = 30;
 
 fn main() {
@@ -37,6 +39,7 @@ fn main() {
         "totp" => cmd_totp(&args[1..]),
         "watchtower" => cmd_watchtower(),
         "emergency-kit" => cmd_emergency_kit(),
+        "bridge" => cmd_bridge(),
         "" => {
             eprintln!("{USAGE}");
             exit(2);
@@ -57,7 +60,8 @@ const USAGE: &str = "usage: passbook <command> [args]\n\
     \x20 show <id> [--reveal]                             show an entry (password hidden unless --reveal)\n\
     \x20 totp <id>                                        current TOTP code + seconds remaining\n\
     \x20 watchtower                                       security report (weak / reused / no-2fa)\n\
-    \x20 emergency-kit                                    print the Secret Key (Emergency-Kit format)";
+    \x20 emergency-kit                                    print the Secret Key (Emergency-Kit format)\n\
+    \x20 bridge                                           run the browser native-messaging host (stdio)";
 
 // ---------------------------------------------------------------------------
 // Config helpers (env + ~ expansion)
@@ -518,6 +522,17 @@ fn cmd_watchtower() {
         "Security score: {score}/100  ({} issue(s), {login_count} login(s))",
         issues.len()
     );
+}
+
+/// Run the Chrome native-messaging host: load the vault once, then serve the
+/// browser extension over stdio until it closes the pipe.
+fn cmd_bridge() {
+    let path = vault_path();
+    let entries = load_entries(&path, &master(), load_secret_key().as_ref());
+    if let Err(e) = bridge::run(&entries) {
+        eprintln!("error: native-messaging bridge failed: {e}");
+        exit(1);
+    }
 }
 
 fn cmd_emergency_kit() {

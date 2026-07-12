@@ -889,7 +889,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "passbook-cli"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "proctor-passbook",
  "serde_json",
@@ -897,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-wasm"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "getrandom 0.2.17",
  "proctor-passbook",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-broker"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "hmac",
  "serde",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-cli"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "proctor-broker",
  "proctor-profiles",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mcp"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mint"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -1045,7 +1045,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-passbook"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "argon2",
  "base32",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-profiles"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "regex",
  "serde",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-vault"
-version = "1.13.0"
+version = "1.17.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
