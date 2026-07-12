@@ -55,6 +55,16 @@ impl Broker {
         }
     }
 
+    /// Like [`Broker::new`], but the audit log also appends to `path` on disk.
+    pub fn with_audit_file(policy: Policy, path: std::path::PathBuf) -> Self {
+        Broker {
+            policy,
+            audit: AuditLog::with_file(path),
+            default_ttl: Duration::from_secs(600),
+            default_uses: 1,
+        }
+    }
+
     /// Request to *use* a credential. Returns an action/handle, never plaintext.
     pub fn request_use(
         &mut self,

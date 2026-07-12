@@ -20,6 +20,8 @@ pub struct AuditEntry {
 #[derive(Default)]
 pub struct AuditLog {
     entries: Vec<AuditEntry>,
+    /// Optional append-only sink: each entry is also written as a JSON line.
+    file: Option<std::path::PathBuf>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -46,6 +48,14 @@ impl AuditLog {
         AuditLog::default()
     }
 
+    /// An audit log that also appends every entry to `path` as a JSON line.
+    pub fn with_file(path: std::path::PathBuf) -> Self {
+        AuditLog {
+            entries: Vec::new(),
+            file: Some(path),
+        }
+    }
+
     pub fn append(&mut self, item_id: &str, origin: &str, verb: &str, decision: &str) {
         let seq = self.entries.len() as u64;
         let prev = self
@@ -54,7 +64,7 @@ impl AuditLog {
             .map(|e| e.hash.clone())
             .unwrap_or_else(|| GENESIS.to_string());
         let hash = digest(seq, item_id, origin, verb, decision, &prev);
-        self.entries.push(AuditEntry {
+        let entry = AuditEntry {
             seq,
             item_id: item_id.to_string(),
             origin: origin.to_string(),
@@ -62,7 +72,19 @@ impl AuditLog {
             decision: decision.to_string(),
             prev_hash: prev,
             hash,
-        });
+        };
+        if let Some(path) = &self.file {
+            if let Ok(line) = serde_json::to_string(&entry) {
+                use std::io::Write;
+                match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(mut f) => {
+                        let _ = writeln!(f, "{line}");
+                    }
+                    Err(e) => eprintln!("proctor: audit append failed: {e}"),
+                }
+            }
+        }
+        self.entries.push(entry);
     }
 
     /// Recompute the chain and confirm nothing was altered.
@@ -101,5 +123,20 @@ mod tests {
         // Silently rewrite a past decision — the chain must break.
         log.entries[1].decision = "ALLOW".to_string();
         assert!(!log.verify());
+    }
+
+    #[test]
+    fn file_sink_appends_json_lines() {
+        let path = std::env::temp_dir().join(format!("proctor-audit-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut log = AuditLog::with_file(path.clone());
+        log.append("itm_a", "github.com", "Read", "ALLOW");
+        log.append("itm_a", "evil.com", "Read", "DENY");
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("\"decision\":\"ALLOW\""));
+        assert!(lines[1].contains("DENY"));
+        let _ = std::fs::remove_file(&path);
     }
 }

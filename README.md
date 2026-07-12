@@ -39,7 +39,7 @@ crates/
 ```
 
 ```bash
-cargo test --workspace              # 32 tests: origin-binding, propose-not-commit exec, secretless no-leak, audit chain…
+cargo test --workspace              # 34 tests: origin-binding, propose-not-commit exec, secretless no-leak, audit chain…
 cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 

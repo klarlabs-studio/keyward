@@ -3,6 +3,18 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [0.6.0] — 2026-07-12
+
+Accountability + capability lifecycle.
+
+### Added
+- **Persistent audit log** — set `PROCTOR_AUDIT` to append every broker decision
+  to a JSON-lines file (hash-chained, tamper-evident). `AuditLog::with_file` /
+  `Broker::with_audit_file`.
+- **Kill switch** — `revoke_all` MCP tool revokes all server-held minted tokens
+  immediately (audited); `list_minted` shows held tokens (reference + provider +
+  masked, never values).
+
 ## [0.5.0] — 2026-07-12
 
 Threads real operation parameters through the tool, making the GitHub write a

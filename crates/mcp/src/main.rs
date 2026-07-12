@@ -112,13 +112,19 @@ impl ProctorServer {
         minter: Arc<dyn Minter>,
         executor: Arc<dyn Executor>,
         approved_origins: &[String],
+        audit_path: Option<PathBuf>,
     ) -> Self {
         let approved: Vec<&str> = approved_origins.iter().map(|s| s.as_str()).collect();
+        let policy = Policy::with_approved_origins(&approved);
+        let broker = match audit_path {
+            Some(p) => Broker::with_audit_file(policy, p),
+            None => Broker::new(policy),
+        };
         ProctorServer {
             state: Arc::new(Mutex::new(AppState {
                 items,
                 secrets,
-                broker: Broker::new(Policy::with_approved_origins(&approved)),
+                broker,
                 minted: HashMap::new(),
             })),
             minter,
@@ -353,6 +359,30 @@ impl ProctorServer {
         let out = json!({ "verified": state.broker.audit.verify(), "entries": entries });
         Ok(text_result(serde_json::to_string_pretty(&out).unwrap_or_default()))
     }
+
+    #[tool(
+        description = "List the short-lived tokens minted and held server-side this session (reference + provider + masked view). Never returns token values."
+    )]
+    async fn list_minted(&self) -> Result<CallToolResult, McpError> {
+        let state = self.state.lock().await;
+        let list: Vec<_> = state
+            .minted
+            .iter()
+            .map(|(r, t)| json!({ "token_ref": r, "provider": t.provider, "masked": t.masked(), "scope": t.scope_desc }))
+            .collect();
+        Ok(text_result(serde_json::to_string_pretty(&json!({ "count": list.len(), "minted": list })).unwrap_or_default()))
+    }
+
+    #[tool(
+        description = "Kill switch: revoke all server-held minted tokens immediately. Audited."
+    )]
+    async fn revoke_all(&self) -> Result<CallToolResult, McpError> {
+        let mut state = self.state.lock().await;
+        let n = state.minted.len();
+        state.minted.clear();
+        state.broker.audit.append("*", "*", "RevokeAll", &format!("REVOKE-ALL:{n}-tokens"));
+        Ok(text_result(serde_json::to_string_pretty(&json!({ "revoked": n })).unwrap_or_default()))
+    }
 }
 
 fn text_result(s: String) -> CallToolResult {
@@ -390,6 +420,11 @@ fn build_server() -> ProctorServer {
         _ => (Arc::new(MockMinter), Arc::new(MockExecutor)),
     };
 
+    let audit_path = std::env::var("PROCTOR_AUDIT").ok().map(PathBuf::from);
+    if let Some(p) = &audit_path {
+        eprintln!("proctor-mcp: appending audit log to {}", p.display());
+    }
+
     let vault = std::env::var("PROCTOR_VAULT").map(PathBuf::from);
     let master = std::env::var("PROCTOR_MASTER");
 
@@ -410,7 +445,7 @@ fn build_server() -> ProctorServer {
                     }
                     let approved = approved_origins(&refs);
                     eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, minter, executor, &approved);
+                    return ProctorServer::with(refs, secrets, minter, executor, &approved, audit_path);
                 }
                 Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
             }
@@ -427,7 +462,7 @@ fn build_server() -> ProctorServer {
         ItemRef { id: "itm_bank".into(), label: "Bank".into(), bound_origins: vec!["bank.com".into()], mintable: false },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(items, HashMap::new(), minter, executor, &approved)
+    ProctorServer::with(items, HashMap::new(), minter, executor, &approved, audit_path)
 }
 
 /// The auto-approve origin list: env override, else the union of item origins.
@@ -468,11 +503,38 @@ mod tests {
             Arc::new(MockMinter),
             Arc::new(MockExecutor),
             &["github.com".to_string()],
+            None,
         )
     }
 
     fn body(res: &CallToolResult) -> String {
         serde_json::to_string(res).unwrap()
+    }
+
+    /// Parse the tool's text content back into JSON (un-escaping the inner doc).
+    fn tool_json(res: &CallToolResult) -> serde_json::Value {
+        let v = serde_json::to_value(res).unwrap();
+        let text = v["content"][0]["text"].as_str().unwrap().to_string();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    #[tokio::test]
+    async fn kill_switch_revokes_held_tokens() {
+        let server = server_with_secret(); // mintable=true item
+        // Mint-and-hold a token (a non-executing verb).
+        let mint = UseCredentialArgs {
+            item_id: "itm_github".into(),
+            origin: "github.com".into(),
+            verb: "MintReadToken".into(),
+            unattended: true,
+            want_raw_secret: false,
+            params: serde_json::Value::Null,
+        };
+        let _ = server.use_credential(Parameters(mint)).await.unwrap();
+        assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 1);
+        // Kill switch.
+        assert_eq!(tool_json(&server.revoke_all().await.unwrap())["revoked"], 1);
+        assert_eq!(tool_json(&server.list_minted().await.unwrap())["count"], 0);
     }
 
     #[tokio::test]
@@ -512,6 +574,7 @@ mod tests {
             Arc::new(MockMinter),
             Arc::new(MockExecutor),
             &["github.com".to_string()],
+            None,
         )
     }
 
