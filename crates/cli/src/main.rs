@@ -8,7 +8,7 @@
 //!
 //! Commands:
 //!   proctor init
-//!   proctor add <id> <label> <origins-csv> <mintable:true|false> <secret> [kind]
+//!   proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind]
 //!   proctor list
 //!   proctor demo     (in-memory broker walkthrough)
 
@@ -72,19 +72,22 @@ fn cmd_init() {
 }
 
 fn cmd_add(rest: &[String]) {
-    if rest.len() < 5 {
-        eprintln!("usage: proctor add <id> <label> <origins-csv> <mintable:true|false> <secret> [kind]");
+    if rest.len() < 4 {
+        eprintln!("usage: proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind]");
+        eprintln!("  mintable defaults to false — Proctor stores and uses the token directly (no minting).");
         exit(2);
     }
-    let (id, label, origins_csv, mintable, secret) =
-        (&rest[0], &rest[1], &rest[2], &rest[3], &rest[4]);
+    let (id, label, origins_csv, secret) = (&rest[0], &rest[1], &rest[2], &rest[3]);
+    let mintable = rest
+        .get(4)
+        .map(|m| matches!(m.to_lowercase().as_str(), "true" | "yes" | "1"))
+        .unwrap_or(false);
     let kind = rest.get(5).map(|s| parse_kind(s)).unwrap_or(ItemKind::Password);
     let origins: Vec<String> = origins_csv
         .split(',')
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
-    let mintable = matches!(mintable.to_lowercase().as_str(), "true" | "yes" | "1");
 
     let path = vault_path();
     let m = master();

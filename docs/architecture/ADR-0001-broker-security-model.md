@@ -102,10 +102,17 @@ the model (verified end-to-end). This corresponds to the two safe primitives
 (§Decision): **Secretless** (use-in-place) and **Minted** (derive-then-use);
 `RawSecret` remains hard-denied.
 
-**Not yet built:** write operations via propose-not-commit artifacts, OAuth Token
-Exchange (RFC 8693) / cloud STS minters, `elicitation`-based step-up approval,
-unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and
-a **formal security review before any real use**.
+As of **v0.4.0**, the **propose-not-commit** floor is closed at runtime:
+`ShipToProduction` (unattended) is downgraded to `OpenPullRequest`, and that verb
+executes as a **draft pull request** (`draft: true` — a reviewable artifact, never
+a merge) via a `pull_requests:write`-scoped credential. The never-unattended
+commit is never performed.
+
+**Not yet built:** OAuth Token Exchange (RFC 8693) / cloud STS minters,
+`elicitation`-based step-up approval, real PR parameters from tool args (today the
+GitHub write needs owner/repo/head/base/title; the mock demonstrates the flow),
+unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and a
+**formal security review before any real use**.
 
 ## Consequences
 

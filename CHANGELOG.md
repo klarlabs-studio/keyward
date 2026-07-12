@@ -3,6 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [0.4.0] — 2026-07-12
+
+Closes the **propose-not-commit** loop at runtime: an irreversible action is
+downgraded to a reviewable artifact, and that artifact is actually performed.
+
+### Added
+- **Write-side secretless execution** — `ExecKind::OpenPullRequest`:
+  - `ShipToProduction` (unattended) → the broker proposes `OpenPullRequest`.
+  - `OpenPullRequest` → the broker performs it as a **draft pull request** (a
+    reviewable artifact, never a merge), via a `pull_requests:write`-scoped
+    credential (minted) or the stored token (vault-read). The credential never
+    reaches the model.
+  - `GitHubExecutor` posts a draft PR (`draft: true`) from supplied params;
+    `MockExecutor` demonstrates it offline.
+- Verb-appropriate mint scopes: `OpenPullRequest` mints `contents:read +
+  pull_requests:write`; reads stay read-only.
+
+### Changed
+- `Executor` HTTP is now a single injected `HttpClient` (get + post); the real
+  client is `ReqwestClient` (behind `net`).
+- **CLI**: `proctor add`'s `mintable` is now an optional trailing arg defaulting
+  to **false** — the vault-read model is the default (`add <id> <label>
+  <origins> <secret> [mintable] [kind]`).
+
+### Security invariants (tested)
+- The proposed write executes as a **draft PR only** (`draft: true`, "not
+  merged") — the never-unattended commit is never performed.
+- Neither minted tokens nor stored credentials appear in any response.
+
 ## [0.3.0] — 2026-07-12
 
 Two ways to use a credential, selected per item by the `mintable` flag — you are

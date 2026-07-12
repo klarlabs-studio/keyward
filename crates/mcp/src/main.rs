@@ -35,7 +35,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
-use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestGet};
+use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
 use proctor_mint::{MintScope, MintedToken, Minter, MockMinter};
 
@@ -58,9 +58,14 @@ struct ProctorServer {
     tool_router: ToolRouter<Self>,
 }
 
-/// Verbs that map to a read we can perform secretlessly on the agent's behalf.
-fn is_read(v: ActionVerb) -> bool {
-    matches!(v, ActionVerb::Read | ActionVerb::FetchData)
+/// Map a verb to an executable operation, if the broker can perform it
+/// secretlessly on the agent's behalf. `None` → mint-and-hold / note only.
+fn exec_kind_for(v: ActionVerb) -> Option<ExecKind> {
+    match v {
+        ActionVerb::Read | ActionVerb::FetchData => Some(ExecKind::Read),
+        ActionVerb::OpenPullRequest => Some(ExecKind::OpenPullRequest),
+        _ => None,
+    }
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -81,9 +86,18 @@ struct UseCredentialArgs {
     want_raw_secret: bool,
 }
 
-/// Which scope a minted token should carry for a given verb (v1: read-only).
-fn scope_for(_verb: ActionVerb) -> MintScope {
-    MintScope::read_only()
+/// Which scope a minted token should carry for a given verb. Writes get a
+/// narrower-but-write scope; everything else is read-only.
+fn scope_for(verb: ActionVerb) -> MintScope {
+    match verb {
+        ActionVerb::OpenPullRequest => {
+            let mut permissions = std::collections::BTreeMap::new();
+            permissions.insert("contents".to_string(), "read".to_string());
+            permissions.insert("pull_requests".to_string(), "write".to_string());
+            MintScope { permissions, resources: Vec::new() }
+        }
+        _ => MintScope::read_only(),
+    }
 }
 
 #[tool_router]
@@ -235,11 +249,11 @@ impl ProctorServer {
                 }),
                 Some(secret) => match self.minter.mint(&item_id, &secret, &scope).await {
                     Ok(token) => {
-                        if is_read(verb) {
+                        if let Some(kind) = exec_kind_for(verb) {
                             // Secretless execution: use the minted token to perform the
                             // action ourselves and return only the sanitized result. The
                             // token never reaches the model.
-                            let exec_action = ExecAction { kind: ExecKind::Read, target: origin };
+                            let exec_action = ExecAction::new(kind, origin);
                             match self.executor.perform(token.expose(), &exec_action).await {
                                 Ok(r) => json!({
                                     "decision": "allow",
@@ -283,8 +297,8 @@ impl ProctorServer {
                     "note": "decision allows a secretless action, but no stored credential is loaded (running without a vault)."
                 }),
                 Some(secret) => {
-                    if is_read(verb) {
-                        let exec_action = ExecAction { kind: ExecKind::Read, target: origin };
+                    if let Some(kind) = exec_kind_for(verb) {
+                        let exec_action = ExecAction::new(kind, origin);
                         match self.executor.perform(&secret, &exec_action).await {
                             Ok(r) => json!({
                                 "decision": "allow",
@@ -362,7 +376,7 @@ fn build_server() -> ProctorServer {
             eprintln!("proctor-mcp: using GitHub App minter + executor (app {app})");
             (
                 Arc::new(GitHubAppMinter::new(app, inst, RealSigner, ReqwestHttp::new())),
-                Arc::new(GitHubExecutor::new(ReqwestGet::new())),
+                Arc::new(GitHubExecutor::new(ReqwestClient::new())),
             )
         }
         _ => (Arc::new(MockMinter), Arc::new(MockExecutor)),
@@ -561,5 +575,25 @@ mod tests {
         let s = body(&res);
         assert!(s.contains("propose_not_commit"));
         assert!(s.contains("OpenPullRequest"));
+    }
+
+    #[tokio::test]
+    async fn open_pr_executes_as_a_reviewable_artifact() {
+        // The proposed alternative to ShipToProduction: the agent opens a PR,
+        // which the broker performs as a reviewable draft — never a merge.
+        let server = server_with_secret();
+        let args = UseCredentialArgs {
+            item_id: "itm_github".into(),
+            origin: "github.com".into(),
+            verb: "OpenPullRequest".into(),
+            unattended: true,
+            want_raw_secret: false,
+        };
+        let res = server.use_credential(Parameters(args)).await.unwrap();
+        let s = body(&res);
+        assert!(s.contains("secretless_exec"), "expected execution: {s}");
+        assert!(s.contains("pull_request"), "expected a PR artifact: {s}");
+        assert!(s.contains("not merged"), "must be a reviewable artifact, not a merge: {s}");
+        assert!(!s.contains("SUPER_SECRET_BASE_PEM"));
     }
 }

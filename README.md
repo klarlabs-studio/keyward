@@ -39,7 +39,7 @@ crates/
 ```
 
 ```bash
-cargo test --workspace              # 28 tests: origin-binding, propose-not-commit, secretless no-leak, audit chain…
+cargo test --workspace              # 31 tests: origin-binding, propose-not-commit exec, secretless no-leak, audit chain…
 cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 
@@ -50,7 +50,10 @@ cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy at
 cargo install --path crates/cli --path crates/mcp
 export PROCTOR_VAULT=~/.proctor/vault.json PROCTOR_MASTER='your master secret'
 mkdir -p ~/.proctor && proctor init
-proctor add itm_github "GitHub App key" github.com true "$(cat github-app.pem)" apikey
+# vault-read (default): store the token; Proctor reads and uses it directly
+proctor add itm_github "GitHub token" github.com "$(cat token.txt)"
+# or minting: store an App key and pass mintable=true
+# proctor add itm_ghapp "GitHub App" github.com "$(cat app.pem)" true apikey
 
 # 2. Register the MCP server (it reads the same env)
 claude mcp add proctor -- proctor-mcp
@@ -70,8 +73,10 @@ execution*). How it gets the credential is per-item, set by the `mintable` flag:
   short-lived, narrowly-scoped token, then performs — `source: "minted"`.
 
 Either way the token is used *inside* the broker and never returned. Ask your
-agent to use a credential against the wrong origin, or to ship to prod unattended,
-and watch the broker refuse or downgrade it.
+agent to ship to prod unattended and it's **downgraded to a pull request**; ask it
+to open that PR and the broker performs it as a **draft (review required, not
+merged)** — the runtime half of *propose-not-commit*. Use a credential against the
+wrong origin and it's refused outright.
 
 > **Security note:** this is a prototype. The vault, minting, broker, and
 > secretless read execution are real and tested, but a **formal security review
@@ -79,13 +84,16 @@ and watch the broker refuse or downgrade it.
 
 ## Status
 
-**v0.3.0** offers **two ways to use a credential**, chosen per item by `mintable`:
-read the stored token from the vault and use it (`false`), or mint a short-lived
-scoped token (`true`) — both perform the action inside the broker and return only
-the result. On top of v0.2.0's secretless execution and v0.1.0's file-backed vault
-+ CLI, broker security model, and vault-backed MCP server. 28 passing tests. Next:
-write operations via propose-not-commit artifacts, `elicitation` step-up, and the
+**v0.4.0** closes the **propose-not-commit** loop: an unattended `ShipToProduction`
+is downgraded to `OpenPullRequest`, and that PR is performed as a reviewable draft
+— never a merge. On top of two credential-use models (vault-read *or* mint, per
+`mintable`), secretless read/write execution, the file-backed vault + CLI, the
+broker security model, and the vault-backed MCP server. 31 passing tests. Next:
+`elicitation`-based step-up through MCP, more executable operations, and the
 vault/sync surfaces. See the [CHANGELOG](CHANGELOG.md) and the PRD roadmap.
+
+> A **formal security review is required before any real use.** GitHub network
+> paths are real code, exercised offline via injected mocks.
 
 ## License
 
