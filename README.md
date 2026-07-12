@@ -41,6 +41,8 @@ crates/
                             (MockMinter/MockExecutor + real GitHub App minter & executor)
   profiles/ proctor-profiles external, pluggable provider profiles (TOML) — add a
                             provider by dropping a file; no recompile
+  passbook/ proctor-passbook consumer credential manager (Phase A): rich item model,
+                            TOTP (RFC 6238), Secret Key (2SKD), Watchtower — PROTOTYPE
   mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
   cli/      proctor         manage the vault (init/add/list) + list profiles + demo
 ```

@@ -3,7 +3,31 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.10.0] — 2026-07-12
+## [1.11.0] — 2026-07-12
+
+**Phase A kickoff — the consumer credential manager (the "1Password equivalent").**
+
+The broker (Phase B) is the developer wedge; this begins the mainstream family
+product, sharing the crypto core.
+
+### Added — `proctor-passbook` (foundation, tested)
+- **Rich item model:** logins (username/password/URLs/TOTP/passkey), secure notes,
+  cards, identities — with titles, tags, favorites.
+- **Secret Key (2SKD):** a 128-bit device key combined with the master password
+  (`key = SHA256(argon2id(master) || secret_key)`), so a server breach yields
+  uncrackable data even against a weak master — verified: right master but no
+  Secret Key can't open. Emergency-Kit format + parse.
+- **TOTP (RFC 6238):** rolling 2FA codes (verified against the RFC test vectors),
+  so the manager shows codes inline — no separate authenticator app.
+- **Watchtower:** weak-password (entropy) + reused-password analysis with a
+  security score. 9 tests.
+
+### Added — UX prototype
+- A polished, interactive **web-vault UI prototype** (design artifact): 3-pane app
+  shell, category nav, search, item detail with reveal/copy/live-TOTP, and a
+  Watchtower security dashboard — the visible "1Password equivalent" to steer the UX.
+
+
 
 The last two threat-model residuals (R4, R5).
 
