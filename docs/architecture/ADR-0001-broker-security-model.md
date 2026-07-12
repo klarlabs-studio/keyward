@@ -81,9 +81,12 @@ entry breaks `verify()`.
 Implemented in `crates/broker` (`action`, `capability`, `policy`, `audit`,
 `broker`) with 11 unit tests + a `crates/vault` prototype (Argon2id +
 XChaCha20-Poly1305, 4 tests). `cargo run -p proctor-cli -- demo` shows all paths
-end-to-end. **Not yet built:** real minting integrations (GitHub/STS/RFC 8693),
-MCP transport wiring, unattended-policy pre-authorization + out-of-band alerts,
-anomaly detection, and a formal security review before any real use.
+end-to-end. **MCP transport is wired** in `crates/mcp` (`proctor-mcp`, an `rmcp`
+stdio server exposing `list_credentials` / `use_credential` / `audit_log`) —
+verified end-to-end over real JSON-RPC. **Not yet built:** real minting
+integrations (GitHub/STS/RFC 8693), vault-backed item loading in the MCP server,
+unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and
+a formal security review before any real use.
 
 ## Consequences
 

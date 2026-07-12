@@ -76,6 +76,27 @@ impl ActionVerb {
         }
     }
 
+    /// Parse a verb name (case-insensitive, snake_case or CamelCase) as sent
+    /// over the MCP wire.
+    pub fn parse(s: &str) -> Option<ActionVerb> {
+        use ActionVerb::*;
+        Some(match s.trim().to_lowercase().replace('_', "").as_str() {
+            "read" => Read,
+            "runtests" => RunTests,
+            "fetchdata" => FetchData,
+            "openpullrequest" | "openpr" => OpenPullRequest,
+            "draftmessage" => DraftMessage,
+            "stagechange" => StageChange,
+            "mintreadtoken" => MintReadToken,
+            "deletedata" => DeleteData,
+            "movemoney" => MoveMoney,
+            "shiptoproduction" | "shiptoprod" => ShipToProduction,
+            "sendcommsasuser" => SendCommsAsUser,
+            "rotateorrevokeothercredential" => RotateOrRevokeOtherCredential,
+            _ => return None,
+        })
+    }
+
     pub fn as_str(&self) -> &'static str {
         use ActionVerb::*;
         match self {

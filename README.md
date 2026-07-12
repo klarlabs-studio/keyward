@@ -33,6 +33,7 @@ crates/
   broker/   proctor-broker  the security model: capabilities, origin-binding,
                             propose-not-commit, risk-tiered policy, hash-chained audit
   cli/      proctor         end-to-end demo
+  mcp/      proctor-mcp     the broker exposed as an MCP server (stdio) via rmcp
 ```
 
 ```bash
@@ -43,6 +44,19 @@ cargo run -p proctor-cli -- demo  # watch the model block a confused-deputy atta
 The demo shows a manipulated agent being refused when it tries to use GitHub
 creds on `evil.example.com`, a ship-to-prod request downgraded to a pull request,
 unattended money-movement denied, and a tamper-evident audit trail.
+
+### Use it from Claude Code (the wedge, live)
+
+`proctor-mcp` is a real MCP server. Build and register it:
+
+```bash
+cargo install --path crates/mcp     # installs the `proctor-mcp` binary
+claude mcp add proctor -- proctor-mcp
+```
+
+It exposes three tools — `list_credentials`, `use_credential`, `audit_log` — and
+returns **scoped actions/handles, never plaintext**. Ask your agent to use a
+credential against the wrong origin and watch the broker refuse it.
 
 > **Security note:** this is a prototype of the *shape*, not an audited build. Real
 > minting integrations, MCP transport, and a formal review come before any real use.
