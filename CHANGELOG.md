@@ -3,6 +3,29 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.14.0] — 2026-07-12
+
+**Secret Key (2SKD) in the browser.** The web vault is now sealed with a device
+Secret Key in addition to the master password, so a stolen vault blob is
+uncrackable even against a weak master. Verified end-to-end in a headless
+browser: first-run generates a real Secret Key + Emergency Kit, the vault seals
+and reopens with it, a locked→unlock reuses the stored key, and the Emergency Kit
+is re-viewable.
+
+### Added — `passbook-wasm`
+- `seal_vault` / `open_vault` now take an optional Secret Key (Emergency-Kit
+  string) — pass `null` for master-only, or the key for 2SKD. `generate_secret_key`
+  and `secret_key_is_valid` round out the surface.
+
+### Added — web vault (`app/`)
+- **Device Secret Key** stored locally (a device factor, never sent anywhere) and
+  mixed into key derivation via the WASM binding. First unlock generates one and
+  reveals a one-time **Emergency Kit** (copy + download) that must be acknowledged.
+- **Add-this-device flow:** a device holding the vault but not its Secret Key
+  prompts for the key on the unlock screen; a wrong key/master is rejected cleanly.
+- A **re-viewable Emergency Kit** from the top bar, and a "· 2SKD" indicator on the
+  vault pill. Every reseal (add/edit/favourite) uses the Secret Key.
+
 ## [1.13.0] — 2026-07-12
 
 **The web vault — a real Vue app on the WASM crypto core.** The polished UX

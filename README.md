@@ -57,8 +57,9 @@ The consumer product (**Phase A**, the 1Password equivalent) also ships:
 - **[`app/`](app/)** — the **web vault**: a Vue 3 + Vite + TypeScript + Pinia app
   backed by `passbook-wasm`. Unlock, browse, reveal/copy, live RFC-6238 2FA, and a
   Watchtower security dashboard — the vault is stored as a single encrypted blob in
-  the browser and all crypto runs in WebAssembly. `cd app && npm install &&
-  npm run build:wasm && npm run dev`.
+  the browser and all crypto runs in WebAssembly. Sealed with a device **Secret Key
+  (2SKD)** + master password, with a one-time **Emergency Kit** and an add-a-device
+  flow. `cd app && npm install && npm run build:wasm && npm run dev`.
 - **[`extension/`](extension/)** — a Manifest V3 browser extension for autofill.
 
 The vault crypto core (`proctor-passbook`) compiles to WebAssembly so the same

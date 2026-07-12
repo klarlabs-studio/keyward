@@ -3,6 +3,7 @@ import { useVaultStore } from '@/stores/vault';
 import UnlockView from '@/components/UnlockView.vue';
 import AppShell from '@/components/AppShell.vue';
 import ToastHost from '@/components/ToastHost.vue';
+import EmergencyKitDialog from '@/components/EmergencyKitDialog.vue';
 
 const vault = useVaultStore();
 </script>
@@ -10,6 +11,13 @@ const vault = useVaultStore();
 <template>
   <UnlockView v-if="vault.locked" />
   <AppShell v-else />
+  <!-- One-time Emergency Kit reveal right after first-run vault creation. -->
+  <EmergencyKitDialog
+    v-if="vault.freshSecretKey"
+    :secret-key="vault.freshSecretKey"
+    first-run
+    @close="vault.acknowledgeKit()"
+  />
   <ToastHost />
 </template>
 

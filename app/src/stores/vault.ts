@@ -7,13 +7,19 @@ import { defineStore } from 'pinia';
 import type { Category, Entry, Issue, Login } from '../lib/passbook-types';
 import { categoryOf } from '../lib/passbook-types';
 import {
+  clearSecretKey,
   createVault,
   destroyVault,
+  getSecretKey,
+  hasSecretKey,
+  isValidSecretKey,
+  newSecretKey,
   nowUnix,
   openVault,
   saveVault,
-  strengthBits,
+  storeSecretKey,
   vaultExists,
+  strengthBits,
   watchtower,
 } from '../lib/passbook';
 import { demoEntries } from '../lib/seed';
@@ -30,6 +36,12 @@ interface VaultState {
   strengths: Record<string, number>;
   unlockError: string | null;
   busy: boolean;
+  // A vault exists on this device but its Secret Key does not — the user must
+  // supply it (the "add this device" flow) before the vault can be opened.
+  needsSecretKey: boolean;
+  // Set once, immediately after first-run creation, so the unlock screen can
+  // show the Emergency Kit exactly once. Cleared when acknowledged.
+  freshSecretKey: string | null;
 }
 
 export const CATEGORY_LABEL: Record<Category, string> = {
@@ -84,11 +96,17 @@ export const useVaultStore = defineStore('vault', {
     strengths: {},
     unlockError: null,
     busy: false,
+    needsSecretKey: false,
+    freshSecretKey: null,
   }),
 
   getters: {
     locked: (s) => s.master === null,
     hasVault: () => vaultExists(),
+    // Whether this device holds a Secret Key (i.e. the vault is 2SKD-protected).
+    secretKeyProtected: () => hasSecretKey(),
+    // The device Secret Key, for the Emergency Kit view (only meaningful unlocked).
+    secretKey: () => getSecretKey(),
 
     counts(s): Record<string, number> {
       const by: Record<string, number> = {
@@ -141,15 +159,26 @@ export const useVaultStore = defineStore('vault', {
   },
 
   actions: {
-    /** Unlock an existing vault (or seed + create the demo one on first run). */
+    /**
+     * Unlock the vault. On first run this generates a device Secret Key, seeds
+     * the demo vault sealed with 2SKD, and surfaces the Emergency Kit once. On a
+     * device that has the vault but not its Secret Key, it flips `needsSecretKey`
+     * so the UI can prompt for it (the "add this device" flow).
+     */
     async unlock(master: string) {
       this.busy = true;
       this.unlockError = null;
       try {
         if (!vaultExists()) {
-          await createVault(demoEntries(nowUnix()), master);
+          const key = await newSecretKey();
+          storeSecretKey(key);
+          await createVault(demoEntries(nowUnix()), master, key);
+          this.freshSecretKey = key;
+        } else if (!hasSecretKey()) {
+          this.needsSecretKey = true;
+          return;
         }
-        this.entries = await openVault(master);
+        this.entries = await openVault(master, getSecretKey());
         this.master = master;
         this.selectFirst();
         await this.refreshSecurity();
@@ -160,17 +189,51 @@ export const useVaultStore = defineStore('vault', {
       }
     },
 
+    /**
+     * Add this device: store the supplied Secret Key, then unlock. Used when a
+     * vault is present but the device has no Secret Key yet.
+     */
+    async addDevice(master: string, secretKey: string) {
+      this.busy = true;
+      this.unlockError = null;
+      try {
+        if (!(await isValidSecretKey(secretKey))) {
+          this.unlockError = 'That Secret Key is not valid — check the Emergency Kit.';
+          return;
+        }
+        storeSecretKey(secretKey);
+        this.entries = await openVault(master, secretKey);
+        this.master = master;
+        this.needsSecretKey = false;
+        this.selectFirst();
+        await this.refreshSecurity();
+      } catch {
+        // Wrong key/master: drop the just-stored key so the prompt reappears clean.
+        clearSecretKey();
+        this.unlockError = 'Wrong master password or Secret Key for this vault.';
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    /** Dismiss the one-time Emergency Kit shown after first-run creation. */
+    acknowledgeKit() {
+      this.freshSecretKey = null;
+    },
+
     lock() {
       this.master = null;
       this.entries = [];
       this.issues = [];
       this.strengths = {};
       this.query = '';
+      this.freshSecretKey = null;
     },
 
-    /** Wipe the local vault entirely (irreversible). */
+    /** Wipe the local vault AND the device Secret Key entirely (irreversible). */
     reset() {
       destroyVault();
+      this.needsSecretKey = false;
       this.lock();
     },
 
@@ -193,10 +256,11 @@ export const useVaultStore = defineStore('vault', {
       this.selectedId = list.length ? list[0].id : null;
     },
 
-    /** Persist the current entries and recompute security signals. */
+    /** Persist the current entries (resealed with the device Secret Key) and
+     * recompute security signals. */
     async persist() {
       if (this.master === null) return;
-      await saveVault(this.entries, this.master);
+      await saveVault(this.entries, this.master, getSecretKey());
       await this.refreshSecurity();
     },
 

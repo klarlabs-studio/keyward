@@ -176,6 +176,102 @@
       "severity": "medium",
       "reason": "Extension prototype false positives: DATA-001/SEC-080 are the documented hardcoded demo vault (demo emails + placeholder passwords) in extension/popup.js — README states production uses a native-messaging bridge and never bundles secrets; SEC-163 matches are CSS selector strings in content.js (input[autocomplete=current-password], querySelector), not secrets.",
       "created_at": "2026-07-12T17:38:00.967175Z"
+    },
+    {
+      "fingerprint": "eb6483aa928a0008c1aec28971504b5c1f3b30bb41e1d0b8432216e879361721",
+      "rule_id": "DATA-001",
+      "file_path": "app/src/components/AddItemDialog.vue",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "2d1291b90a7bb2cfcf48016c33db7bc4c7d50542bd9a50cbf8388fadf6f98635",
+      "rule_id": "DATA-001",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "9838a32abecec9ac69db2705a2315e6062d36b7912d2d23b17613cb3f9af143a",
+      "rule_id": "DATA-001",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "480e88daec402cc36122e92ef02da4e077c44c690096a0af510d7357c512cee7",
+      "rule_id": "DATA-001",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "1d2af309ba769315cf235b7598a58d31b45835d3df5117c536b1b546de9ee551",
+      "rule_id": "SEC-080",
+      "file_path": "app/src/components/ItemDetail.vue",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "5fe6d06f841dce0938bce3a470becfb86dbf7278c47414357c452c958b05baac",
+      "rule_id": "SEC-080",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "08734d3ad0817627b87c34e5eca411bc317372ee1ec5f4ce46501f71030e2b0e",
+      "rule_id": "SEC-080",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "c73a4e40bb72ac905f9dfffb0328bc1a44eb245193c08e23406fa0cf1b8865f2",
+      "rule_id": "SEC-080",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "df32c27982ba9ecb4354f4faa660c842fefda5c1bac33ec6e643a7c5e54c7e04",
+      "rule_id": "SEC-081",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "b0b20925fe449c8b0fd39a173ebeb1dc4ba7a68e5b2c33e1374b88c67b41b3e7",
+      "rule_id": "SEC-081",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "adaa25d8ad440b63f333d335a1c5878a495ef86833fac0599fba67457802a73c",
+      "rule_id": "SEC-163",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
+    },
+    {
+      "fingerprint": "68b666f5c04353e6b397435e7c389c3ade3bf0d17cbbac1e3fbc8f7384b75142",
+      "rule_id": "SEC-163",
+      "file_path": "app/src/lib/seed.ts",
+      "severity": "medium",
+      "reason": "Web-vault false positives: app/src/lib/seed.ts is the documented first-run DEMO vault (demo emails, placeholder passwords, demo TOTP secrets) — sealed by real crypto on first unlock, nothing special-cased; AddItemDialog.vue:80 is an email input placeholder; ItemDetail.vue:96 renders the user's own decrypted password on reveal (login.password), not a hardcoded secret.",
+      "created_at": "2026-07-12T19:28:58.738012Z"
     }
   ]
 }

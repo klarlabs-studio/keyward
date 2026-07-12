@@ -11,7 +11,9 @@
 //! device Secret Key (2SKD) through these bindings is a planned follow-up — see
 //! [`seal_vault`].
 
-use proctor_passbook::{open, seal, strength_bits, totp, watchtower, Entry, Issue, SealedVault};
+use proctor_passbook::{
+    open, seal, strength_bits, totp, watchtower, Entry, Issue, SealedVault, SecretKey,
+};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -79,24 +81,59 @@ pub fn watchtower_json(entries_json: &str) -> String {
     serde_json::to_string(&issues).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Seal a JSON array of entries under a master password, returning the
-/// [`SealedVault`] as JSON.
+/// Parse an optional Emergency-Kit Secret Key string into a [`SecretKey`].
 ///
-/// Browser prototype: **master-password only**. Secret Key (2SKD) protection is a
-/// planned follow-up and is not yet wired through this binding.
+/// `None`/absent → a master-only vault. `Some(s)` → 2SKD, where the derived key
+/// mixes in the device Secret Key so a stolen sealed blob is uncrackable without
+/// both factors. An empty/whitespace string is treated as absent.
+fn parse_secret_key(secret_key: Option<String>) -> Result<Option<SecretKey>, JsValue> {
+    match secret_key {
+        Some(s) if !s.trim().is_empty() => Ok(Some(SecretKey::parse(&s).map_err(js_err)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Generate a fresh device Secret Key, formatted for the Emergency Kit.
 #[wasm_bindgen]
-pub fn seal_vault(entries_json: &str, master: &str) -> Result<String, JsValue> {
+pub fn generate_secret_key() -> String {
+    SecretKey::generate().emergency_kit_format()
+}
+
+/// True if `s` is a well-formed Secret Key (32 hex digits, grouping ignored).
+#[wasm_bindgen]
+pub fn secret_key_is_valid(s: &str) -> bool {
+    SecretKey::parse(s).is_ok()
+}
+
+/// Seal a JSON array of entries under a master password (and optional Secret
+/// Key), returning the [`SealedVault`] as JSON.
+///
+/// Pass `null` for `secret_key` to seal master-only; pass the Emergency-Kit
+/// string to seal with 2SKD.
+#[wasm_bindgen]
+pub fn seal_vault(
+    entries_json: &str,
+    master: &str,
+    secret_key: Option<String>,
+) -> Result<String, JsValue> {
     let entries: Vec<Entry> = serde_json::from_str(entries_json).map_err(js_err)?;
-    let sealed = seal(&entries, master.as_bytes(), None).map_err(js_err)?;
+    let sk = parse_secret_key(secret_key)?;
+    let sealed = seal(&entries, master.as_bytes(), sk.as_ref()).map_err(js_err)?;
     serde_json::to_string(&sealed).map_err(js_err)
 }
 
-/// Open a sealed vault (as JSON) with a master password, returning the entries
-/// as JSON. Fails on a wrong master password or any tampering.
+/// Open a sealed vault (as JSON) with a master password (and optional Secret
+/// Key), returning the entries as JSON. Fails on a wrong master password, a
+/// missing/wrong Secret Key, or any tampering.
 #[wasm_bindgen]
-pub fn open_vault(sealed_json: &str, master: &str) -> Result<String, JsValue> {
+pub fn open_vault(
+    sealed_json: &str,
+    master: &str,
+    secret_key: Option<String>,
+) -> Result<String, JsValue> {
     let sealed: SealedVault = serde_json::from_str(sealed_json).map_err(js_err)?;
-    let entries = open(&sealed, master.as_bytes(), None).map_err(js_err)?;
+    let sk = parse_secret_key(secret_key)?;
+    let entries = open(&sealed, master.as_bytes(), sk.as_ref()).map_err(js_err)?;
     serde_json::to_string(&entries).map_err(js_err)
 }
 

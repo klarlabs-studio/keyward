@@ -9,10 +9,16 @@ import { DEMO_MASTER } from '@/lib/seed';
 
 const vault = useVaultStore();
 const master = ref('');
+const secretKey = ref('');
 
 async function submit(): Promise<void> {
   if (!master.value || vault.busy) return;
-  await vault.unlock(master.value);
+  if (vault.needsSecretKey) {
+    if (!secretKey.value) return;
+    await vault.addDevice(master.value, secretKey.value);
+  } else {
+    await vault.unlock(master.value);
+  }
 }
 
 function useDemo(): void {
@@ -38,7 +44,13 @@ function useDemo(): void {
         </svg>
       </div>
       <h1>Passbook</h1>
-      <p class="tagline">Your family vault — encrypted on this device.</p>
+      <p class="tagline">
+        {{
+          vault.needsSecretKey
+            ? 'This device needs your Secret Key to open the vault.'
+            : 'Your family vault — encrypted on this device.'
+        }}
+      </p>
 
       <label class="pw">
         <span>Master password</span>
@@ -52,17 +64,46 @@ function useDemo(): void {
         />
       </label>
 
+      <label v-if="vault.needsSecretKey" class="pw pw-key">
+        <span>Secret Key</span>
+        <input
+          v-model="secretKey"
+          type="text"
+          spellcheck="false"
+          autocapitalize="characters"
+          placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX"
+          aria-label="Secret Key"
+        />
+      </label>
+
       <p v-if="vault.unlockError" class="err" role="alert">{{ vault.unlockError }}</p>
 
-      <button class="btn-unlock" type="submit" :disabled="!master || vault.busy">
+      <button
+        class="btn-unlock"
+        type="submit"
+        :disabled="!master || (vault.needsSecretKey && !secretKey) || vault.busy"
+      >
         <span v-if="vault.busy" class="spinner" aria-hidden="true"></span>
-        {{ vault.busy ? 'Unlocking…' : 'Unlock' }}
+        {{
+          vault.busy
+            ? vault.needsSecretKey
+              ? 'Adding device…'
+              : 'Unlocking…'
+            : vault.needsSecretKey
+              ? 'Add this device'
+              : 'Unlock'
+        }}
       </button>
 
-      <div class="hint">
-        First unlock creates a demo family vault. Master:
+      <div v-if="!vault.needsSecretKey" class="hint">
+        First unlock creates a demo family vault, protected by a device Secret Key
+        (2SKD) — you'll get an Emergency Kit. Master:
         <code>{{ DEMO_MASTER }}</code>
         <button type="button" class="demo-link" :disabled="vault.busy" @click="useDemo">Use demo</button>
+      </div>
+      <div v-else class="hint">
+        Find your Secret Key in the Emergency Kit you saved when the vault was
+        created. It never leaves your devices.
       </div>
     </form>
   </div>
@@ -133,6 +174,14 @@ function useDemo(): void {
 .pw input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.pw-key {
+  margin-top: 0.8rem;
+}
+.pw-key input {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
 }
 .err {
   width: 100%;

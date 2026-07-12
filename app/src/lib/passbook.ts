@@ -8,9 +8,11 @@
 // only ciphertext is persisted.
 
 import init, {
+  generate_secret_key,
   open_vault,
   password_strength,
   seal_vault,
+  secret_key_is_valid,
   totp_code,
   totp_seconds_remaining,
   watchtower_json,
@@ -18,6 +20,10 @@ import init, {
 import type { Entry, Issue } from './passbook-types';
 
 const STORAGE_KEY = 'proctor.passbook.vault.v1';
+// The device Secret Key (2SKD factor). It is not secret *from this device* — it
+// lives here so the vault can be unlocked with just the typed master — but it
+// never leaves the device, so a stolen sealed vault is uncrackable without it.
+const SECRET_KEY_STORAGE = 'proctor.passbook.secretkey.v1';
 
 let ready: Promise<void> | null = null;
 
@@ -42,40 +48,83 @@ export function vaultExists(): boolean {
   return localStorage.getItem(STORAGE_KEY) !== null;
 }
 
-/** Remove the local sealed vault (used by "reset" / sign-out flows). */
+/** Remove the local sealed vault AND the device Secret Key (full reset). */
 export function destroyVault(): void {
   localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem(SECRET_KEY_STORAGE);
+}
+
+/** The device Secret Key (Emergency-Kit format), or null if none is stored. */
+export function getSecretKey(): string | null {
+  return localStorage.getItem(SECRET_KEY_STORAGE);
+}
+
+/** True once a device Secret Key is present on this device. */
+export function hasSecretKey(): boolean {
+  return getSecretKey() !== null;
+}
+
+/** Persist a device Secret Key (e.g. after generating one or adding a device). */
+export function storeSecretKey(key: string): void {
+  localStorage.setItem(SECRET_KEY_STORAGE, key);
+}
+
+/** Remove only the device Secret Key, leaving the sealed vault intact. */
+export function clearSecretKey(): void {
+  localStorage.removeItem(SECRET_KEY_STORAGE);
+}
+
+/** Generate a fresh device Secret Key (does not store it). */
+export async function newSecretKey(): Promise<string> {
+  await ensureReady();
+  return generate_secret_key();
+}
+
+/** True if `key` is a well-formed Secret Key (32 hex digits, grouping ignored). */
+export async function isValidSecretKey(key: string): Promise<boolean> {
+  await ensureReady();
+  return secret_key_is_valid(key);
 }
 
 /**
- * Seal `entries` under `master` and persist the ciphertext locally.
- * Throws if sealing fails (it should not for well-formed input).
+ * Seal `entries` under `master` (+ optional device Secret Key) and persist the
+ * ciphertext locally. Throws if sealing fails (it should not for well-formed
+ * input). Pass `null`/omit `secretKey` for a master-only vault.
  */
-export async function saveVault(entries: Entry[], master: string): Promise<void> {
+export async function saveVault(
+  entries: Entry[],
+  master: string,
+  secretKey?: string | null,
+): Promise<void> {
   await ensureReady();
-  const sealed = seal_vault(JSON.stringify(entries), master);
+  const sealed = seal_vault(JSON.stringify(entries), master, secretKey ?? undefined);
   localStorage.setItem(STORAGE_KEY, sealed);
 }
 
 /**
- * Open the locally-stored sealed vault with `master`. Throws on a wrong master
- * password or any tampering — the caller turns that into an "unlock failed"
- * message without learning anything more specific.
+ * Open the locally-stored sealed vault with `master` (+ optional Secret Key).
+ * Throws on a wrong master password, a missing/wrong Secret Key, or any
+ * tampering — the caller turns that into an "unlock failed" message without
+ * learning anything more specific.
  */
-export async function openVault(master: string): Promise<Entry[]> {
+export async function openVault(master: string, secretKey?: string | null): Promise<Entry[]> {
   await ensureReady();
   const sealed = localStorage.getItem(STORAGE_KEY);
   if (sealed === null) {
     throw new Error('No vault on this device yet.');
   }
-  const json = open_vault(sealed, master);
+  const json = open_vault(sealed, master, secretKey ?? undefined);
   return JSON.parse(json) as Entry[];
 }
 
 /** Create a brand-new sealed vault from `entries` (first-run / demo seeding). */
-export async function createVault(entries: Entry[], master: string): Promise<void> {
+export async function createVault(
+  entries: Entry[],
+  master: string,
+  secretKey?: string | null,
+): Promise<void> {
   await ensureReady();
-  await saveVault(entries, master);
+  await saveVault(entries, master, secretKey);
 }
 
 /** Estimate a password's strength in bits. */

@@ -6,7 +6,7 @@ import { computed } from 'vue';
 import { useVaultStore } from '@/stores/vault';
 
 const vault = useVaultStore();
-const emit = defineEmits<{ (e: 'new-item'): void }>();
+const emit = defineEmits<{ (e: 'new-item'): void; (e: 'view-kit'): void }>();
 
 const placeholder = computed(() => `Search ${vault.counts.all} items…`);
 
@@ -34,7 +34,22 @@ function toggleTheme(): void {
       />
     </label>
     <div class="spacer"></div>
-    <div class="vault-pill"><span class="dot"></span>Family vault · on-device</div>
+    <div class="vault-pill">
+      <span class="dot"></span>Family vault · on-device
+      <span v-if="vault.secretKeyProtected" class="pill-2skd" title="Protected by a device Secret Key (2SKD)">· 2SKD</span>
+    </div>
+    <button
+      v-if="vault.secretKeyProtected"
+      class="icon-btn"
+      title="Emergency Kit"
+      aria-label="Emergency Kit"
+      @click="emit('view-kit')"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3l7 3v6c0 5-3.5 8-7 9-3.5-1-7-4-7-9V6z" />
+        <path d="M9 12l2 2 4-4" />
+      </svg>
+    </button>
     <button class="icon-btn" title="Toggle theme" aria-label="Toggle theme" @click="toggleTheme">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z" />
@@ -53,3 +68,11 @@ function toggleTheme(): void {
     </button>
   </div>
 </template>
+
+<style scoped>
+.pill-2skd {
+  color: var(--accent-ink);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+</style>
