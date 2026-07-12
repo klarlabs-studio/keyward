@@ -38,6 +38,11 @@ const bits = computed(() => (entry.value ? (vault.strengths[entry.value.id] ?? 0
 function strengthColor(b: number): string {
   return b >= 80 ? 'var(--strong)' : b >= 55 ? 'var(--warn)' : 'var(--weak)';
 }
+
+/** Build a safe href — only prepend https:// when the URL has no scheme. */
+function webHref(url: string): string {
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
 function strengthLabel(b: number): string {
   return b >= 80 ? 'Excellent' : b >= 55 ? 'Fair' : 'Weak';
 }
@@ -120,7 +125,7 @@ function strengthLabel(b: number): string {
           <div v-if="login.urls.length" class="field">
             <div class="lbl">Website</div>
             <div class="val">
-              <a class="link" :href="'https://' + login.urls[0]" target="_blank" rel="noopener">{{
+              <a class="link" :href="webHref(login.urls[0])" target="_blank" rel="noopener">{{
                 login.urls[0]
               }}</a>
             </div>

@@ -307,5 +307,37 @@ export const useVaultStore = defineStore('vault', {
       this.selectFirst();
       await this.persist();
     },
+
+    /**
+     * Merge imported entries into the vault (newest first) and persist. Returns
+     * the number actually added after skipping exact duplicates already present.
+     */
+    async importEntries(incoming: Entry[]): Promise<number> {
+      const seen = new Set(this.entries.map((e) => entryKey(e)));
+      const fresh = incoming.filter((e) => {
+        const k = entryKey(e);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      if (fresh.length === 0) return 0;
+      this.entries = [...fresh, ...this.entries];
+      this.filter = 'all';
+      this.query = '';
+      this.selectFirst();
+      await this.persist();
+      return fresh.length;
+    },
   },
 });
+
+/** Dedupe key: title + category + the identifying field, case-insensitive. */
+function entryKey(e: Entry): string {
+  const c = e.content;
+  let detail = '';
+  if ('Login' in c) detail = `${c.Login.username}|${c.Login.password}`;
+  else if ('Card' in c) detail = c.Card.number;
+  else if ('Identity' in c) detail = c.Identity.email;
+  else if ('SecureNote' in c) detail = c.SecureNote;
+  return `${categoryOf(e)}|${e.title}|${detail}`.toLowerCase();
+}

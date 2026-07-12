@@ -3,6 +3,28 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.15.0] — 2026-07-12
+
+**Import your vault.** The web vault can now import from another manager, so a
+real vault can move in. Parsing is entirely local; imported entries are merged
+(exact duplicates skipped) and resealed with the device Secret Key.
+
+### Added — web vault (`app/`)
+- **`app/src/lib/import.ts`:** importers for **Bitwarden (JSON)** — logins, secure
+  notes, cards, identities — and **LastPass / 1Password / generic CSV** (logins,
+  plus LastPass `http://sn` secure notes). Includes an RFC 4180-ish CSV parser
+  (quoted fields, `""` escapes, embedded commas and newlines) and header-based
+  format auto-detection.
+- **Import dialog:** paste an export or choose a file; the format is auto-detected
+  (overridable) with a live preview of how many items will import (and how many
+  skipped), then Import merges + reseals through the real crypto path. Verified
+  headless: a Bitwarden export (5 items across all four types) and a LastPass CSV
+  (with a comma-in-quotes password and a multi-line note) both imported correctly.
+
+### Fixed
+- Website links no longer double a `https://` scheme when a stored URL already
+  includes one (surfaced by imported full URLs).
+
 ## [1.14.0] — 2026-07-12
 
 **Secret Key (2SKD) in the browser.** The web vault is now sealed with a device

@@ -6,7 +6,11 @@ import { computed } from 'vue';
 import { useVaultStore } from '@/stores/vault';
 
 const vault = useVaultStore();
-const emit = defineEmits<{ (e: 'new-item'): void; (e: 'view-kit'): void }>();
+const emit = defineEmits<{
+  (e: 'new-item'): void;
+  (e: 'view-kit'): void;
+  (e: 'import'): void;
+}>();
 
 const placeholder = computed(() => `Search ${vault.counts.all} items…`);
 
@@ -53,6 +57,12 @@ function toggleTheme(): void {
     <button class="icon-btn" title="Toggle theme" aria-label="Toggle theme" @click="toggleTheme">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8Z" />
+      </svg>
+    </button>
+    <button class="icon-btn" title="Import vault" aria-label="Import vault" @click="emit('import')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v12m0-12 4 4m-4-4-4 4" />
+        <path d="M4 21h16" />
       </svg>
     </button>
     <button class="icon-btn" title="Lock vault" aria-label="Lock vault" @click="vault.lock()">
