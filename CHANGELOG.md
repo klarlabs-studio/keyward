@@ -3,7 +3,21 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.6.0] — 2026-07-12
+## [1.7.0] — 2026-07-12
+
+Zeroize secrets in memory (threat-model R1, the top open risk).
+
+### Changed / hardened
+- **Vault `Item.secret` is wiped on `Drop`**, and the **decrypted vault plaintext**
+  is held in `Zeroizing` during load.
+- **The broker's long-lived secret map** (`AppState.secrets`) and the transient
+  `secret` / `inject` handles in `run_command` / `use_credential` are now
+  `Zeroizing<String>` (minted token values already were).
+- Result: secrets no longer linger as plain `String` in the long-lived stores; a
+  core dump exposes far less. *Residual:* a few short-lived copies and `Item`'s
+  `Debug` derive can still surface plaintext (follow-ups noted in the threat model).
+
+
 
 Security review artifact + the first hardening it surfaced.
 

@@ -18,7 +18,7 @@ use chacha20poly1305::{
 };
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
@@ -108,6 +108,13 @@ impl Item {
     }
 }
 
+impl Drop for Item {
+    /// Wipe the plaintext secret from memory when the item is dropped.
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
+}
+
 /// A sealed (encrypted-at-rest) vault blob.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SealedVault {
@@ -146,9 +153,11 @@ pub fn seal(items: &[Item], secret: &[u8]) -> Result<SealedVault, VaultError> {
 pub fn open(sealed: &SealedVault, secret: &[u8]) -> Result<Vec<Item>, VaultError> {
     let key = derive_key(secret, &sealed.salt)?;
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
-    let plaintext = cipher
-        .decrypt(XNonce::from_slice(&sealed.nonce), sealed.ciphertext.as_ref())
-        .map_err(|_| VaultError::Decrypt)?;
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(XNonce::from_slice(&sealed.nonce), sealed.ciphertext.as_ref())
+            .map_err(|_| VaultError::Decrypt)?,
+    );
     let items = serde_json::from_slice(&plaintext)?;
     Ok(items)
 }

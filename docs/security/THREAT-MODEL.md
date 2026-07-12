@@ -48,11 +48,13 @@ result or a scoped handle, never a value.
 - **Information disclosure — response channel:** **Mitigated** — no allow path
   returns plaintext; minted values are `masked()`; `run_command` **redacts**
   injected values from stdout/stderr. `want_raw_secret` is hard-denied by default.
-- **Information disclosure — memory:** *Residual (known gap).* Secrets live in the
-  broker as plain `String` (vault `Item.secret`, `AppState.secrets`) — not
-  zeroized in memory. A core dump / debugger / same-process compromise exposes
-  them. The vault's on-disk form is Argon2id + XChaCha20-Poly1305; the *at-rest*
-  story is strong, the *in-memory* story is not yet hardened.
+- **Information disclosure — memory:** **Mitigated (v1.7.0):** the long-lived
+  stores are zeroized — vault `Item.secret` wipes on `Drop`, the decrypted vault
+  plaintext is `Zeroizing`, and the broker's `secrets` map + transient
+  `secret`/`inject` handles are `Zeroizing<String>` (minted token values already
+  were). *Residual:* a few short-lived `String` copies (the input map handed to
+  the server, and the `#[derive(Debug)]` on `Item`) can still surface plaintext;
+  a same-process compromise / debugger remains out of scope (host is trusted).
 - **Tampering — vault file:** AEAD detects modification (open fails). *Residual:*
   no rollback protection (an old sealed vault can be substituted).
 
@@ -110,7 +112,7 @@ result or a scoped handle, never a value.
 
 | # | Risk | Severity | Status |
 |---|---|---|---|
-| R1 | Secrets not zeroized in memory (core dump / debugger) | High | Open |
+| R1 | Secrets not zeroized in memory (core dump / debugger) | High | Mitigated (v1.7.0); residual transient copies + Debug derive |
 | R2 | `isolation=none` default; env injection recoverable via /proc | High (untrusted) | Mitigated *if configured* |
 | R3 | Shell-interpreter authorization bypasses command-binding | High | Blocked by default (v1.6.0); opt-in via `allow_shell` |
 | R4 | Audit log not signed (FS-write attacker can forge) | Medium | Evident, not tamper-*proof* |
@@ -120,8 +122,9 @@ result or a scoped handle, never a value.
 
 ## 6. Recommendations before real use
 
-1. **Zeroize** secrets in memory (`zeroize::Zeroizing` for `Item.secret` and the
-   broker's secret map) — addresses R1.
+1. ✅ **Done (v1.7.0):** secrets zeroized in memory (`Item.secret` `Drop` +
+   `Zeroizing` for the broker's secret map, handles, and decrypted plaintext).
+   Follow-up: redact `Item`'s `Debug`, and zeroize the transient input map.
 2. ✅ **Done (v1.6.0):** shell-interpreter authorization is blocked unless the
    profile sets `allow_shell = true` — addresses R3.
 3. **Sign the audit log** (or ship to an append-only external sink) — R4.

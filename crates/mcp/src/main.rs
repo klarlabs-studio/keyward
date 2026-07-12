@@ -36,6 +36,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::Mutex;
+use zeroize::Zeroizing;
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
 use proctor_mint::aws::{AwsWebIdentityMinter, ReqwestRawHttp};
@@ -48,8 +49,8 @@ use proctor_profiles::{Registry, RiskClass};
 
 struct AppState {
     items: Vec<ItemRef>,
-    /// item_id → durable base secret. Held server-side only; never model-facing.
-    secrets: HashMap<String, String>,
+    /// item_id → durable base secret (zeroized on drop). Server-side only; never model-facing.
+    secrets: HashMap<String, Zeroizing<String>>,
     /// item_id → provider profile id (links an item to how it injects + binds).
     providers: HashMap<String, String>,
     broker: Broker,
@@ -210,7 +211,8 @@ impl ProctorServer {
         ProctorServer {
             state: Arc::new(Mutex::new(AppState {
                 items,
-                secrets,
+                // Wrap secrets so they are wiped from memory when dropped.
+                secrets: secrets.into_iter().map(|(k, v)| (k, Zeroizing::new(v))).collect(),
                 providers,
                 broker,
                 minted: HashMap::new(),
@@ -280,8 +282,8 @@ impl ProctorServer {
 
         enum Plan {
             Value(serde_json::Value),
-            Exec { mintable: bool, item_id: String, base: Option<String>, verb: ActionVerb, origin: String, params: serde_json::Value },
-            StepUp { reason: String, mintable: bool, item_id: String, base: Option<String>, verb: ActionVerb, origin: String, params: serde_json::Value },
+            Exec { mintable: bool, item_id: String, base: Option<Zeroizing<String>>, verb: ActionVerb, origin: String, params: serde_json::Value },
+            StepUp { reason: String, mintable: bool, item_id: String, base: Option<Zeroizing<String>>, verb: ActionVerb, origin: String, params: serde_json::Value },
         }
 
         // Decide under the lock (broker is sync); execute/elicit after releasing it.
@@ -341,7 +343,7 @@ impl ProctorServer {
         &self,
         mintable: bool,
         item_id: String,
-        base: Option<String>,
+        base: Option<Zeroizing<String>>,
         verb: ActionVerb,
         origin: String,
         params: serde_json::Value,
@@ -551,7 +553,7 @@ impl ProctorServer {
                 // Use the minted credential only if it composes for this profile —
                 // single tokens fill `env_var`, JSON trios fill `env_map`.
                 if profile.compose_env(tok.expose()).is_ok() {
-                    inject = tok.expose().to_string();
+                    inject = Zeroizing::new(tok.expose().to_string());
                     cred_source = "minted";
                 }
             }
