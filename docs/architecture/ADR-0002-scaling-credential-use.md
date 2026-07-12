@@ -155,14 +155,15 @@ this explicit per credential/context, not paper over it.
    mutate/unknown step-up or deny). Injects via env only, never argv.
 2. ✅ **Seed profiles** (v1.1.0) — external TOML: aws, azure, github, gitlab,
    hetzner; add a provider by dropping a file.
-3. **Standard protocol minters** — RFC 8693 token exchange + OIDC WIF (covers the
-   big clouds), reusing the existing `Minter` trait. *(Not yet built.)*
-4. ⚠️ **OS isolation backend** (v1.3.0, partial) — namespace/container execution
-   is built (`Isolation`: none / bubblewrap / docker|podman container), configured
-   via `PROCTOR_ISOLATION`; the credential is passed via `--env`, never argv;
-   real containerized run verified with docker. **Still pending:** *prefer minted
-   short-TTL creds on the exec path* — isolation + short-TTL together are the full
-   posture; only isolation is done (see Phase 3).
+3. ✅ **Standard protocol minters** (v1.4.0) — RFC 8693 token-exchange minter
+   (`proctor-mint::exchange`), the mechanism behind OIDC WIF / generic STS, reusing
+   the `Minter` trait; wired via `PROCTOR_STS_ENDPOINT`. *(AWS AssumeRoleWithWebIdentity
+   multi-field output is a later variant.)*
+4. ✅ **OS isolation backend** (v1.3.0) + **prefer-minted short-TTL on exec path**
+   (v1.4.0) — the full posture. `Isolation` (none / bubblewrap / container) contains
+   *where* a credential can be scanned; minting a short-TTL token and injecting that
+   (not the durable secret) bounds *how long* a leak is useful. `run_command`
+   reports `isolation` + `credential_source`.
 5. ✅ **Profile registry format** (v1.1.0) + community contribution path
    ([`profiles/README.md`](../../profiles/README.md)).
 

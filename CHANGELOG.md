@@ -3,7 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.3.0] — 2026-07-12
+## [1.4.0] — 2026-07-12
+
+Protocol minters + prefer-minted on the exec path (ADR-0002 Phase 3) — the last
+unbuilt axis. ADR-0002 is now fully implemented.
+
+### Added
+- **`proctor-mint::exchange` — RFC 8693 OAuth 2.0 Token Exchange minter.** Present
+  a held subject token (an OIDC identity / JWT) to an STS token endpoint and get a
+  short-lived scoped access token. One minter, any conforming STS — the mechanism
+  behind OIDC Workload Identity Federation (GCP WIF, generic STS). HTTP injected
+  for offline tests; real reqwest form-post behind `net`. Wired via
+  `PROCTOR_STS_ENDPOINT` (+ `_AUDIENCE` / `_SCOPE` / `_SUBJECT_TYPE`).
+- **Prefer minted short-TTL creds on the `run_command` exec path.** A mintable
+  item mints a short-lived token and injects *that* into the subprocess (not the
+  durable secret), bounding how long a leaked value stays useful. Falls back to
+  the stored secret for non-mintable items or multi-field profiles. Responses
+  report `credential_source: minted | stored`.
+
+### Result
+- The exec-path security posture is complete: **OS isolation** (v1.3.0) contains
+  *where* a credential can be scanned; **short-TTL minting** (this release) bounds
+  *how long* a leaked one is useful. ADR-0002's five axes are all implemented.
+
+### Still deferred (beyond ADR-0002)
+- AWS `AssumeRoleWithWebIdentity` multi-field minting (the exchange minter returns
+  a single access token today; multi-field cloud creds compose from JSON later),
+  per-provider minter selection, and a **formal security review before real use**.
+
+
 
 OS-level isolation for `run_command` (ADR-0002 Phase 4) — the exec path can now
 run the credential-bearing command in a container/namespace, so `/proc` and the

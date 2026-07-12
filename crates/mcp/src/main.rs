@@ -38,6 +38,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
+use proctor_mint::exchange::{ReqwestFormHttp, TokenExchangeMinter};
 use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
 use proctor_mint::run::{run_isolated, Isolation};
@@ -453,18 +454,19 @@ impl ProctorServer {
     async fn handle_run(&self, args: RunCommandArgs, approver: &dyn Approver) -> serde_json::Value {
         let mode = if args.unattended { Mode::Unattended } else { Mode::Attended };
 
-        // Gather secret + provider under the lock.
-        let (secret, provider_id) = {
+        // Gather secret + provider + mintable under the lock.
+        let (secret, provider_id, mintable) = {
             let state = self.state.lock().await;
-            if !state.items.iter().any(|i| i.id == args.item_id) {
-                return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) });
-            }
+            let mintable = match state.items.iter().find(|i| i.id == args.item_id) {
+                Some(i) => i.mintable,
+                None => return json!({ "decision": "error", "reason": format!("no such item '{}'", args.item_id) }),
+            };
             let provider = match state.providers.get(&args.item_id) {
                 Some(p) => p.clone(),
                 None => return json!({ "decision": "error", "reason": "item has no provider profile; set one to run commands" }),
             };
             match state.secrets.get(&args.item_id) {
-                Some(s) => (s.clone(), provider),
+                Some(s) => (s.clone(), provider, mintable),
                 None => return json!({ "decision": "allow", "note": "no credential loaded (running without a vault)" }),
             }
         };
@@ -511,8 +513,23 @@ impl ProctorServer {
         };
         let _ = proceed;
 
-        // (3) Compose env + run (off-thread), then redact injected values from output.
-        let env = match profile.compose_env(&secret) {
+        // (3) Prefer a minted short-TTL credential on the exec path — it bounds
+        // how long a leaked value (via /proc, etc.) stays useful. Falls back to
+        // the stored secret when the item isn't mintable or the minted token
+        // doesn't fit the profile (e.g. multi-field env_map).
+        let mut cred_source = "stored";
+        let mut inject = secret.clone();
+        if mintable {
+            if let Ok(tok) = self.minter.mint(&args.item_id, &secret, &MintScope::read_only()).await {
+                if profile.compose_env(tok.expose()).is_ok() {
+                    inject = tok.expose().to_string();
+                    cred_source = "minted";
+                }
+            }
+        }
+
+        // Compose env + run (off-thread), then redact injected values from output.
+        let env = match profile.compose_env(&inject) {
             Ok(e) => e,
             Err(e) => return json!({ "decision": "error", "reason": format!("credential/profile mismatch: {e}") }),
         };
@@ -538,6 +555,7 @@ impl ProctorServer {
                     "provider": provider_id,
                     "command": argv.join(" "),
                     "isolation": self.isolation.label(),
+                    "credential_source": cred_source,
                     "exit_code": r.code,
                     "stdout": redact(r.stdout),
                     "stderr": redact(r.stderr),
@@ -578,18 +596,37 @@ impl ServerHandler for ProctorServer {
 
 /// Build the server from the environment: a real vault if configured, else demo.
 fn build_server() -> ProctorServer {
-    let (minter, executor): (Arc<dyn Minter>, Arc<dyn Executor>) = match (
-        std::env::var("PROCTOR_GH_APP_ID"),
-        std::env::var("PROCTOR_GH_INSTALLATION_ID"),
-    ) {
-        (Ok(app), Ok(inst)) if !app.is_empty() && !inst.is_empty() => {
-            eprintln!("proctor-mcp: using GitHub App minter + executor (app {app})");
-            (
-                Arc::new(GitHubAppMinter::new(app, inst, RealSigner, ReqwestHttp::new())),
-                Arc::new(GitHubExecutor::new(ReqwestClient::new())),
-            )
+    let gh = match (std::env::var("PROCTOR_GH_APP_ID"), std::env::var("PROCTOR_GH_INSTALLATION_ID")) {
+        (Ok(a), Ok(i)) if !a.is_empty() && !i.is_empty() => Some((a, i)),
+        _ => None,
+    };
+
+    // Executor: GitHub HTTP-perform if configured, else mock.
+    let executor: Arc<dyn Executor> = if gh.is_some() {
+        Arc::new(GitHubExecutor::new(ReqwestClient::new()))
+    } else {
+        Arc::new(MockExecutor)
+    };
+
+    // Minter: RFC 8693 token-exchange (STS) > GitHub App > mock.
+    let minter: Arc<dyn Minter> = if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
+        if !ep.is_empty() {
+            eprintln!("proctor-mcp: using RFC 8693 token-exchange minter ({ep})");
+            let mut m = TokenExchangeMinter::new(ep, ReqwestFormHttp::new());
+            m.audience = std::env::var("PROCTOR_STS_AUDIENCE").ok();
+            m.scope = std::env::var("PROCTOR_STS_SCOPE").ok();
+            if let Ok(t) = std::env::var("PROCTOR_STS_SUBJECT_TYPE") {
+                m.subject_token_type = t;
+            }
+            Arc::new(m)
+        } else {
+            Arc::new(MockMinter)
         }
-        _ => (Arc::new(MockMinter), Arc::new(MockExecutor)),
+    } else if let Some((app, inst)) = gh {
+        eprintln!("proctor-mcp: using GitHub App minter (app {app})");
+        Arc::new(GitHubAppMinter::new(app, inst, RealSigner, ReqwestHttp::new()))
+    } else {
+        Arc::new(MockMinter)
     };
 
     let audit_path = std::env::var("PROCTOR_AUDIT").ok().map(PathBuf::from);
@@ -758,13 +795,17 @@ mod tests {
         )
     }
 
-    /// A server whose item has a provider profile, for run_command tests.
     fn run_server() -> ProctorServer {
+        run_server_m(false)
+    }
+
+    /// A server whose item has a provider profile, for run_command tests.
+    fn run_server_m(mintable: bool) -> ProctorServer {
         let items = vec![ItemRef {
             id: "itm_cli".into(),
             label: "Demo CLI cred".into(),
             bound_origins: vec![],
-            mintable: false,
+            mintable,
         }];
         let mut secrets = HashMap::new();
         secrets.insert("itm_cli".to_string(), "supersecret_token".to_string());
@@ -966,6 +1007,25 @@ mod tests {
             .handle_run(run_args("sh", &["-c", "echo delete"], true), &no_approve())
             .await;
         assert_eq!(v["decision"], "deny");
+    }
+
+    #[tokio::test]
+    async fn run_prefers_minted_credential_when_mintable() {
+        // A mintable item → the broker mints a short-TTL token and injects THAT,
+        // not the durable secret. (source: minted)
+        let v = run_server_m(true)
+            .handle_run(run_args("sh", &["-c", "echo hi"], true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "allow");
+        assert_eq!(v["credential_source"], "minted");
+    }
+
+    #[tokio::test]
+    async fn run_uses_stored_credential_when_not_mintable() {
+        let v = run_server_m(false)
+            .handle_run(run_args("sh", &["-c", "echo hi"], true), &no_approve())
+            .await;
+        assert_eq!(v["credential_source"], "stored");
     }
 
     #[tokio::test]
