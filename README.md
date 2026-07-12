@@ -20,6 +20,7 @@ Built open-core: fully open-source clients + server, **self-host free forever**;
 - 📊 **[Market & Feature Research](docs/research/market-and-feature-research.md)** — market sizing, competitive teardown, feature matrix, pain points, trends, and the opening.
 - 📐 **[Product Specification (PRD)](docs/product/product-spec.md)** — vision, personas, differentiation, architecture, the AI credential broker, feature set, pricing, roadmap, and GTM.
 - 🏛️ **[ADR-0001 — Broker security model](docs/architecture/ADR-0001-broker-security-model.md)** — the design the prototype implements.
+- 🧭 **[ADR-0002 — Scaling credential use across providers](docs/architecture/ADR-0002-scaling-credential-use.md)** — why "N providers" doesn't get huge: vault-read + standard-protocol minters + one generic injector + a profile registry.
 
 ## v1.0.0 — the Phase B wedge, complete end-to-end
 
