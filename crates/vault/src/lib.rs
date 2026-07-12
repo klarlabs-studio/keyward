@@ -28,6 +28,8 @@ pub enum VaultError {
     Decrypt,
     #[error("serialization failed: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// The kind of credential an item holds.
@@ -65,6 +67,25 @@ pub struct ItemRef {
 }
 
 impl Item {
+    /// Construct a new item.
+    pub fn new(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        kind: ItemKind,
+        bound_origins: Vec<String>,
+        mintable: bool,
+        secret: impl Into<String>,
+    ) -> Item {
+        Item {
+            id: id.into(),
+            label: label.into(),
+            kind,
+            bound_origins,
+            mintable,
+            secret: secret.into(),
+        }
+    }
+
     /// Project to a secret-free reference for the broker.
     pub fn as_ref_meta(&self) -> ItemRef {
         ItemRef {
@@ -121,6 +142,21 @@ pub fn open(sealed: &SealedVault, secret: &[u8]) -> Result<Vec<Item>, VaultError
     Ok(items)
 }
 
+/// Seal `items` and write the sealed blob to `path` as JSON.
+pub fn save_to_file(path: &std::path::Path, items: &[Item], secret: &[u8]) -> Result<(), VaultError> {
+    let sealed = seal(items, secret)?;
+    let json = serde_json::to_vec_pretty(&sealed)?;
+    std::fs::write(path, json)?;
+    Ok(())
+}
+
+/// Read a sealed vault from `path` and open it.
+pub fn load_from_file(path: &std::path::Path, secret: &[u8]) -> Result<Vec<Item>, VaultError> {
+    let bytes = std::fs::read(path)?;
+    let sealed: SealedVault = serde_json::from_slice(&bytes)?;
+    open(&sealed, secret)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -165,5 +201,18 @@ mod tests {
         assert_eq!(r.id, "itm_github");
         assert!(r.mintable);
         // ItemRef has no `secret` field at all — enforced at the type level.
+    }
+
+    #[test]
+    fn file_roundtrip() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("proctor-test-vault-{}.json", std::process::id()));
+        save_to_file(&path, &sample(), b"master").unwrap();
+        let opened = load_from_file(&path, b"master").unwrap();
+        assert_eq!(opened.len(), 1);
+        assert_eq!(opened[0].id, "itm_github");
+        // Wrong master fails.
+        assert!(load_from_file(&path, b"nope").is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }

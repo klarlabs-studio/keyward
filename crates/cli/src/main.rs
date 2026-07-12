@@ -1,83 +1,157 @@
-//! Proctor CLI — a runnable end-to-end demonstration of the credential broker.
+//! Proctor CLI — manage a real on-disk vault and demonstrate the broker.
 //!
-//! Run: `cargo run -p proctor-cli -- demo`
+//! Config via env:
+//!   PROCTOR_VAULT   path to the vault file (default: ./proctor-vault.json)
+//!   PROCTOR_MASTER  master secret used to seal/open the vault (required for
+//!                   init/add/list). In production this is master-password +
+//!                   device Secret Key; here a passphrase stands in.
 //!
-//! It seals a real (Argon2id + XChaCha20-Poly1305) vault, opens it, hands the
-//! broker only secret-free metadata, and runs a battery of agent requests
-//! through the security model — printing each decision and the tamper-evident
-//! audit trail.
+//! Commands:
+//!   proctor init
+//!   proctor add <id> <label> <origins-csv> <mintable:true|false> <secret> [kind]
+//!   proctor list
+//!   proctor demo     (in-memory broker walkthrough)
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy};
-use proctor_vault::{seal, open, Item, ItemKind};
+use proctor_vault::{load_from_file, save_to_file, Item, ItemKind};
+use std::path::PathBuf;
+use std::process::exit;
 use std::time::SystemTime;
 
+fn vault_path() -> PathBuf {
+    std::env::var("PROCTOR_VAULT")
+        .unwrap_or_else(|_| "proctor-vault.json".to_string())
+        .into()
+}
+
+fn master() -> Vec<u8> {
+    match std::env::var("PROCTOR_MASTER") {
+        Ok(m) if !m.is_empty() => m.into_bytes(),
+        _ => {
+            eprintln!("error: set PROCTOR_MASTER to your master secret.");
+            exit(2);
+        }
+    }
+}
+
+fn parse_kind(s: &str) -> ItemKind {
+    match s.to_lowercase().as_str() {
+        "password" => ItemKind::Password,
+        "apikey" | "api_key" | "token" => ItemKind::ApiKey,
+        "totp" | "totpseed" => ItemKind::TotpSeed,
+        _ => ItemKind::Note,
+    }
+}
+
 fn main() {
-    let arg = std::env::args().nth(1).unwrap_or_else(|| "demo".to_string());
-    match arg.as_str() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cmd = args.first().map(|s| s.as_str()).unwrap_or("demo");
+    match cmd {
+        "init" => cmd_init(),
+        "add" => cmd_add(&args[1..]),
+        "list" => cmd_list(),
         "demo" => demo(),
         other => {
-            eprintln!("unknown command: {other}\nusage: proctor demo");
-            std::process::exit(2);
+            eprintln!("unknown command: {other}\nusage: proctor <init|add|list|demo>");
+            exit(2);
         }
+    }
+}
+
+fn cmd_init() {
+    let path = vault_path();
+    if path.exists() {
+        eprintln!("vault already exists at {}", path.display());
+        exit(1);
+    }
+    save_to_file(&path, &[], &master()).unwrap_or_else(|e| {
+        eprintln!("failed to create vault: {e}");
+        exit(1);
+    });
+    println!("created empty vault at {}", path.display());
+}
+
+fn cmd_add(rest: &[String]) {
+    if rest.len() < 5 {
+        eprintln!("usage: proctor add <id> <label> <origins-csv> <mintable:true|false> <secret> [kind]");
+        exit(2);
+    }
+    let (id, label, origins_csv, mintable, secret) =
+        (&rest[0], &rest[1], &rest[2], &rest[3], &rest[4]);
+    let kind = rest.get(5).map(|s| parse_kind(s)).unwrap_or(ItemKind::Password);
+    let origins: Vec<String> = origins_csv
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mintable = matches!(mintable.to_lowercase().as_str(), "true" | "yes" | "1");
+
+    let path = vault_path();
+    let m = master();
+    let mut items = load_from_file(&path, &m).unwrap_or_else(|e| {
+        eprintln!("failed to open vault at {}: {e}", path.display());
+        exit(1);
+    });
+    if items.iter().any(|i| &i.id == id) {
+        eprintln!("item '{id}' already exists");
+        exit(1);
+    }
+    items.push(Item::new(id.clone(), label.clone(), kind, origins, mintable, secret.clone()));
+    save_to_file(&path, &items, &m).unwrap_or_else(|e| {
+        eprintln!("failed to save vault: {e}");
+        exit(1);
+    });
+    println!("added item '{id}' ({} items total)", items.len());
+}
+
+fn cmd_list() {
+    let path = vault_path();
+    let items = load_from_file(&path, &master()).unwrap_or_else(|e| {
+        eprintln!("failed to open vault at {}: {e}", path.display());
+        exit(1);
+    });
+    if items.is_empty() {
+        println!("(vault is empty)");
+        return;
+    }
+    println!("{:<16} {:<20} {:<8} {}", "ID", "LABEL", "MINTABLE", "ORIGINS");
+    for i in &items {
+        println!(
+            "{:<16} {:<20} {:<8} {}",
+            i.id,
+            i.label,
+            i.mintable,
+            i.bound_origins.join(",")
+        );
     }
 }
 
 fn demo() {
     println!("== Proctor broker demo ==\n");
 
-    // 1. A real encrypted vault. The master secret would normally be
-    //    master-password + device Secret Key (2SKD); here a passphrase stands in.
-    let items = vec![
-        Item {
-            id: "itm_github".into(),
-            label: "GitHub".into(),
-            kind: ItemKind::ApiKey,
-            bound_origins: vec!["github.com".into()],
-            mintable: true, // broker can mint scoped short-lived tokens
-            secret: "ghp_do_not_leak_me".into(),
-        },
-        Item {
-            id: "itm_bank".into(),
-            label: "Bank".into(),
-            kind: ItemKind::Password,
-            bound_origins: vec!["bank.com".into()],
-            mintable: false, // no minting → broker acts secretlessly
-            secret: "hunter2".into(),
-        },
-    ];
-
-    let master = b"master-password + device-secret-key";
-    let sealed = seal(&items, master).expect("seal");
-    let opened = open(&sealed, master).expect("open");
-    println!("vault sealed & opened: {} items (secrets stay in the vault)\n", opened.len());
-
-    // 2. The broker only ever receives secret-free metadata.
-    let refs: Vec<ItemRef> = opened
-        .iter()
-        .map(|it| {
-            let m = it.as_ref_meta();
-            ItemRef {
-                id: m.id,
-                label: m.label,
-                bound_origins: m.bound_origins,
-                mintable: m.mintable,
-            }
-        })
-        .collect();
-    let github = &refs[0];
-    let bank = &refs[1];
+    let github = ItemRef {
+        id: "itm_github".into(),
+        label: "GitHub".into(),
+        bound_origins: vec!["github.com".into()],
+        mintable: true,
+    };
+    let bank = ItemRef {
+        id: "itm_bank".into(),
+        label: "Bank".into(),
+        bound_origins: vec!["bank.com".into()],
+        mintable: false,
+    };
 
     let mut broker = Broker::new(Policy::with_approved_origins(&["github.com", "bank.com"]));
     let now = SystemTime::now();
 
-    // 3. A battery of agent requests.
     let scenarios: Vec<(&str, &ItemRef, Action, Mode, bool)> = vec![
-        ("agent reads GitHub (bound, reversible, unattended)", github, Action::new(ActionVerb::Read, "github.com"), Mode::Unattended, false),
-        ("INJECTED: use GitHub creds on evil.example.com", github, Action::new(ActionVerb::Read, "evil.example.com"), Mode::Unattended, false),
-        ("agent wants to ship to prod, unattended", github, Action::new(ActionVerb::ShipToProduction, "github.com"), Mode::Unattended, false),
-        ("agent wants to move money, unattended", bank, Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Unattended, false),
-        ("agent wants to move money, human present", bank, Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Attended, false),
-        ("agent demands the raw GitHub secret", github, Action::new(ActionVerb::Read, "github.com"), Mode::Attended, true),
+        ("agent reads GitHub (bound, reversible, unattended)", &github, Action::new(ActionVerb::Read, "github.com"), Mode::Unattended, false),
+        ("INJECTED: use GitHub creds on evil.example.com", &github, Action::new(ActionVerb::Read, "evil.example.com"), Mode::Unattended, false),
+        ("agent wants to ship to prod, unattended", &github, Action::new(ActionVerb::ShipToProduction, "github.com"), Mode::Unattended, false),
+        ("agent wants to move money, unattended", &bank, Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Unattended, false),
+        ("agent wants to move money, human present", &bank, Action::new(ActionVerb::MoveMoney, "bank.com"), Mode::Attended, false),
+        ("agent demands the raw GitHub secret", &github, Action::new(ActionVerb::Read, "github.com"), Mode::Attended, true),
     ];
 
     for (desc, item, action, mode, raw) in scenarios {
@@ -92,7 +166,6 @@ fn demo() {
         println!("• {desc}\n    [{verb} @ {}] -> {outcome}\n", action.target.0);
     }
 
-    // 4. The tamper-evident audit trail.
     println!("== audit trail (hash-chained, verify()={}) ==", broker.audit.verify());
     for e in broker.audit.entries() {
         println!("  #{} {:<16} {:<18} {}", e.seq, e.item_id, e.origin, e.decision);
