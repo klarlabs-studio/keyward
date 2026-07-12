@@ -68,6 +68,8 @@ struct ProctorServer {
     executor: Arc<dyn Executor>,
     profiles: Arc<Registry>,
     isolation: Isolation,
+    /// Untrusted posture: refuse run_command unless OS isolation is configured.
+    require_isolation: bool,
     // Used by the #[tool_router]/#[tool_handler] macro machinery.
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
@@ -222,8 +224,15 @@ impl ProctorServer {
             executor,
             profiles,
             isolation,
+            require_isolation: false,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Untrusted posture: require OS isolation for run_command (builder).
+    fn with_require_isolation(mut self, v: bool) -> Self {
+        self.require_isolation = v;
+        self
     }
 
     /// The minter for an item's provider (by its profile's `mint` kind), or the
@@ -473,6 +482,15 @@ impl ProctorServer {
     async fn handle_run(&self, args: RunCommandArgs, approver: &dyn Approver) -> serde_json::Value {
         let mode = if args.unattended { Mode::Unattended } else { Mode::Attended };
 
+        // (0) Trust gate — in untrusted mode, refuse to inject a credential into a
+        // subprocess without OS isolation (env injection is not a boundary).
+        if self.require_isolation && matches!(self.isolation, Isolation::None) {
+            return json!({
+                "decision": "deny",
+                "reason": "run_command requires OS isolation in untrusted mode; set PROCTOR_ISOLATION (e.g. docker:<image> or bwrap), or PROCTOR_TRUST=trusted for a trusted host."
+            });
+        }
+
         // Gather secret + provider + mintable under the lock.
         let (secret, provider_id, mintable) = {
             let state = self.state.lock().await;
@@ -701,8 +719,16 @@ fn build_server() -> ProctorServer {
     eprintln!("proctor-mcp: {} provider profile(s) loaded", profiles.len());
 
     let isolation = isolation_from_env();
+    let require_isolation = matches!(
+        std::env::var("PROCTOR_TRUST").unwrap_or_default().as_str(),
+        "untrusted" | "untrust"
+    );
     if matches!(isolation, Isolation::None) {
-        eprintln!("proctor-mcp: run_command isolation = none (safe only for trusted use; set PROCTOR_ISOLATION for untrusted autonomy)");
+        if require_isolation {
+            eprintln!("proctor-mcp: TRUST=untrusted + isolation=none — run_command will be refused until PROCTOR_ISOLATION is set");
+        } else {
+            eprintln!("proctor-mcp: run_command isolation = none (trusted mode; set PROCTOR_ISOLATION + PROCTOR_TRUST=untrusted for autonomy)");
+        }
     } else {
         eprintln!("proctor-mcp: run_command isolation = {}", isolation.label());
     }
@@ -731,7 +757,8 @@ fn build_server() -> ProctorServer {
                     }
                     let approved = approved_origins(&refs);
                     eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, providers, minter, minters, executor, profiles, isolation, &approved, audit_path);
+                    return ProctorServer::with(refs, secrets, providers, minter, minters, executor, profiles, isolation, &approved, audit_path)
+                        .with_require_isolation(require_isolation);
                 }
                 Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
             }
@@ -749,6 +776,7 @@ fn build_server() -> ProctorServer {
     ];
     let approved = approved_origins(&items);
     ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, minters, executor, profiles, isolation, &approved, audit_path)
+        .with_require_isolation(require_isolation)
 }
 
 /// Parse run_command isolation from $PROCTOR_ISOLATION:
@@ -1035,6 +1063,17 @@ mod tests {
     }
 
     // --- run_command (generic exec-injection executor) ---
+
+    #[tokio::test]
+    async fn untrusted_mode_refuses_run_without_isolation() {
+        // isolation=none + require_isolation → run_command is gated off entirely.
+        let server = run_server_m(false).with_require_isolation(true);
+        let v = server
+            .handle_run(run_args("sh", &["-c", "echo hi"], true), &no_approve())
+            .await;
+        assert_eq!(v["decision"], "deny");
+        assert!(v["reason"].as_str().unwrap().contains("OS isolation"));
+    }
 
     #[tokio::test]
     async fn run_read_command_executes_and_returns_output() {

@@ -79,9 +79,11 @@ result or a scoped handle, never a value.
   *hygiene, not a boundary* (ADR-0002). **Partially mitigated** by: injecting via
   env only (never argv — `/proc/cmdline` is world-readable), preferring minted
   short-TTL creds (bounds duration), and **OS-level isolation** (namespace /
-  container) that contains `/proc` + filesystem. *Residual:* the default is
-  `isolation=none` (safe only for trusted use); untrusted autonomy **requires**
-  `PROCTOR_ISOLATION` be set.
+  container) that contains `/proc` + filesystem. **Enforced (v1.8.0):** with
+  `PROCTOR_TRUST=untrusted`, `run_command` is **refused** unless
+  `PROCTOR_ISOLATION` is set — the safe posture is a config gate, not advice.
+  *Residual:* the default remains trusted mode (for local interactive use); an
+  operator must opt into untrusted mode.
 - **Command-binding bypass via shells:** authorizing an interpreter (`sh`, `python`,
   …) lets `sh -c '<anything>'` run past argv risk classification. **Mitigated**
   (v1.6.0): shells are **blocked by default** — a profile must set
@@ -113,7 +115,7 @@ result or a scoped handle, never a value.
 | # | Risk | Severity | Status |
 |---|---|---|---|
 | R1 | Secrets not zeroized in memory (core dump / debugger) | High | Mitigated (v1.7.0); residual transient copies + Debug derive |
-| R2 | `isolation=none` default; env injection recoverable via /proc | High (untrusted) | Mitigated *if configured* |
+| R2 | `isolation=none` default; env injection recoverable via /proc | High (untrusted) | Gated (v1.8.0): untrusted mode refuses run_command without isolation |
 | R3 | Shell-interpreter authorization bypasses command-binding | High | Blocked by default (v1.6.0); opt-in via `allow_shell` |
 | R4 | Audit log not signed (FS-write attacker can forge) | Medium | Evident, not tamper-*proof* |
 | R5 | AWS STS response parsed with a minimal extractor | Low | Works; harden before prod |
@@ -130,8 +132,8 @@ result or a scoped handle, never a value.
 3. **Sign the audit log** (or ship to an append-only external sink) — R4.
 4. **Real XML parser** for STS — R5.
 5. **External security review + fuzzing** of the parsers and the policy engine.
-6. Default-deny posture check: ship with `isolation` guidance and refuse
-   `run_command` for untrusted contexts when `isolation=none` (config gate).
+6. ✅ **Done (v1.8.0):** `PROCTOR_TRUST=untrusted` refuses `run_command` when
+   `isolation=none` — the config gate for untrusted contexts.
 
 ## 7. Reviewer checklist
 

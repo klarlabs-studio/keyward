@@ -3,7 +3,18 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.7.0] — 2026-07-12
+## [1.8.0] — 2026-07-12
+
+Trust gate for the exec path (threat-model R2).
+
+### Added
+- **`PROCTOR_TRUST=untrusted`** makes the safe posture enforceable: `run_command`
+  is **refused** when isolation is `none`, directing the operator to set
+  `PROCTOR_ISOLATION` (`docker:<image>` / `bwrap`) or explicitly choose trusted
+  mode. Default remains trusted (local interactive use). The refusal is a hard
+  gate at the top of the run path, before any credential is touched.
+
+
 
 Zeroize secrets in memory (threat-model R1, the top open risk).
 
