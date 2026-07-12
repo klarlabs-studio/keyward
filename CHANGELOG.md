@@ -3,7 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.2.0] — 2026-07-12
+## [1.3.0] — 2026-07-12
+
+OS-level isolation for `run_command` (ADR-0002 Phase 4) — the exec path can now
+run the credential-bearing command in a container/namespace, so `/proc` and the
+filesystem don't cross to the host.
+
+### Added
+- **`Isolation` backend** (`proctor-mint::run`): `none` (default), `bubblewrap`
+  (Linux user/pid/mount namespaces, remounted `/proc`), and `container`
+  (docker/podman: separate `/proc` + filesystem, `--rm`). Configured via
+  `PROCTOR_ISOLATION` = `none` | `bwrap` | `docker:<image>` | `podman:<image>`
+  (network via `PROCTOR_ISOLATION_NETWORK`, default `bridge`).
+- The credential is passed with `--env NAME` (value from the runtime's env),
+  **never in argv** — verified by test that the secret value never appears in the
+  wrapped command line.
+- `run_command` responses now report the `isolation` posture; the server logs a
+  warning when isolation is `none` (safe for trusted use only).
+
+### Verified
+- Real containerized run (docker:alpine): the command ran inside the container
+  (confirmed via `/etc/alpine-release`), the credential injected via `--env`, and
+  the output returned redacted.
+
+### Still deferred
+- **Prefer minted short-TTL creds on the exec path** + RFC 8693 / OIDC-WIF
+  protocol minters (ADR-0002 Phase 3). Isolation + short-TTL together are the full
+  posture for untrusted-content-driven autonomy; only isolation is done.
+
+
 
 The generic exec-injection executor (ADR-0002 Phase 1) — one engine covers the
 CLI long tail via the external profiles.

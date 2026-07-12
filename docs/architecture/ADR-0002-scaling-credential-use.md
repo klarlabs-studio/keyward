@@ -157,9 +157,12 @@ this explicit per credential/context, not paper over it.
    hetzner; add a provider by dropping a file.
 3. **Standard protocol minters** — RFC 8693 token exchange + OIDC WIF (covers the
    big clouds), reusing the existing `Minter` trait. *(Not yet built.)*
-4. **OS isolation backend** — namespace/container execution for untrusted contexts;
-   prefer minted short-TTL creds on the exec path. *(Not yet built — required
-   before untrusted-content-driven autonomy.)*
+4. ⚠️ **OS isolation backend** (v1.3.0, partial) — namespace/container execution
+   is built (`Isolation`: none / bubblewrap / docker|podman container), configured
+   via `PROCTOR_ISOLATION`; the credential is passed via `--env`, never argv;
+   real containerized run verified with docker. **Still pending:** *prefer minted
+   short-TTL creds on the exec path* — isolation + short-TTL together are the full
+   posture; only isolation is done (see Phase 3).
 5. ✅ **Profile registry format** (v1.1.0) + community contribution path
    ([`profiles/README.md`](../../profiles/README.md)).
 

@@ -40,7 +40,7 @@ use tokio::sync::Mutex;
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
 use proctor_mint::exec::{ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient};
 use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
-use proctor_mint::run::run_with_env;
+use proctor_mint::run::{run_isolated, Isolation};
 use proctor_mint::{MintScope, MintedToken, Minter, MockMinter};
 use proctor_profiles::{Registry, RiskClass};
 
@@ -61,6 +61,7 @@ struct ProctorServer {
     minter: Arc<dyn Minter>,
     executor: Arc<dyn Executor>,
     profiles: Arc<Registry>,
+    isolation: Isolation,
     // Used by the #[tool_router]/#[tool_handler] macro machinery.
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
@@ -190,6 +191,7 @@ impl ProctorServer {
         minter: Arc<dyn Minter>,
         executor: Arc<dyn Executor>,
         profiles: Arc<Registry>,
+        isolation: Isolation,
         approved_origins: &[String],
         audit_path: Option<PathBuf>,
     ) -> Self {
@@ -210,6 +212,7 @@ impl ProctorServer {
             minter,
             executor,
             profiles,
+            isolation,
             tool_router: Self::tool_router(),
         }
     }
@@ -513,8 +516,9 @@ impl ProctorServer {
             Ok(e) => e,
             Err(e) => return json!({ "decision": "error", "reason": format!("credential/profile mismatch: {e}") }),
         };
-        let (program, cmdargs, env_run) = (args.program.clone(), args.args.clone(), env.clone());
-        let run = tokio::task::spawn_blocking(move || run_with_env(&program, &cmdargs, &env_run)).await;
+        let (program, cmdargs, env_run, iso) =
+            (args.program.clone(), args.args.clone(), env.clone(), self.isolation.clone());
+        let run = tokio::task::spawn_blocking(move || run_isolated(&iso, &program, &cmdargs, &env_run)).await;
 
         let redact = |mut s: String| -> String {
             for v in env.values() {
@@ -533,6 +537,7 @@ impl ProctorServer {
                     "ran": true,
                     "provider": provider_id,
                     "command": argv.join(" "),
+                    "isolation": self.isolation.label(),
                     "exit_code": r.code,
                     "stdout": redact(r.stdout),
                     "stderr": redact(r.stderr),
@@ -595,6 +600,13 @@ fn build_server() -> ProctorServer {
     let profiles = Arc::new(load_profiles());
     eprintln!("proctor-mcp: {} provider profile(s) loaded", profiles.len());
 
+    let isolation = isolation_from_env();
+    if matches!(isolation, Isolation::None) {
+        eprintln!("proctor-mcp: run_command isolation = none (safe only for trusted use; set PROCTOR_ISOLATION for untrusted autonomy)");
+    } else {
+        eprintln!("proctor-mcp: run_command isolation = {}", isolation.label());
+    }
+
     let vault = std::env::var("PROCTOR_VAULT").map(PathBuf::from);
     let master = std::env::var("PROCTOR_MASTER");
 
@@ -619,7 +631,7 @@ fn build_server() -> ProctorServer {
                     }
                     let approved = approved_origins(&refs);
                     eprintln!("proctor-mcp: loaded vault {} ({} items)", path.display(), refs.len());
-                    return ProctorServer::with(refs, secrets, providers, minter, executor, profiles, &approved, audit_path);
+                    return ProctorServer::with(refs, secrets, providers, minter, executor, profiles, isolation, &approved, audit_path);
                 }
                 Err(e) => eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items"),
             }
@@ -636,7 +648,31 @@ fn build_server() -> ProctorServer {
         ItemRef { id: "itm_bank".into(), label: "Bank".into(), bound_origins: vec!["bank.com".into()], mintable: false },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, executor, profiles, &approved, audit_path)
+    ProctorServer::with(items, HashMap::new(), HashMap::new(), minter, executor, profiles, isolation, &approved, audit_path)
+}
+
+/// Parse run_command isolation from $PROCTOR_ISOLATION:
+///   none (default) | bwrap | docker:<image> | podman:<image>
+fn isolation_from_env() -> Isolation {
+    let spec = std::env::var("PROCTOR_ISOLATION").unwrap_or_default();
+    let network = std::env::var("PROCTOR_ISOLATION_NETWORK").unwrap_or_else(|_| "bridge".into());
+    match spec.as_str() {
+        "" | "none" => Isolation::None,
+        "bwrap" | "bubblewrap" => Isolation::Bubblewrap,
+        other => {
+            for rt in ["docker", "podman"] {
+                if let Some(image) = other.strip_prefix(&format!("{rt}:")) {
+                    return Isolation::Container {
+                        runtime: rt.to_string(),
+                        image: image.to_string(),
+                        network: network.clone(),
+                    };
+                }
+            }
+            eprintln!("proctor-mcp: unknown PROCTOR_ISOLATION '{other}'; using none");
+            Isolation::None
+        }
+    }
 }
 
 /// Load provider profiles from $PROCTOR_PROFILES (or ~/.proctor/profiles).
@@ -716,6 +752,7 @@ mod tests {
             Arc::new(MockMinter),
             Arc::new(MockExecutor),
             Arc::new(Registry::new()),
+            Isolation::None,
             &approved,
             None,
         )
@@ -757,6 +794,7 @@ mod tests {
             Arc::new(MockMinter),
             Arc::new(MockExecutor),
             Arc::new(reg),
+            Isolation::None,
             &[],
             None,
         )
