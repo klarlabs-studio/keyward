@@ -7,7 +7,7 @@
 //! repositories) plus a mock executor for offline demos/tests. HTTP GET is an
 //! injected trait so the flow is fully testable offline.
 
-use crate::{MintError, MintedToken};
+use crate::MintError;
 
 /// What to perform. Deliberately small; extended as real operations are added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,10 +26,22 @@ pub struct ExecResult {
     pub data: serde_json::Value,
 }
 
-/// Performs an action using an already-minted token, returning a secret-free result.
+/// Mask a bearer token for safe display — never reveal the whole value.
+pub fn mask(bearer: &str) -> String {
+    let n = bearer.len();
+    let head: String = bearer.chars().take(3).collect();
+    format!("{head}…(masked, {n} chars)")
+}
+
+/// Performs an action using a bearer credential, returning a secret-free result.
+///
+/// The `bearer` is used *inside* the executor (as the Authorization credential)
+/// and MUST NOT appear in the returned [`ExecResult`]. It can be either a minted
+/// short-lived token or a durable token read straight from the vault — the
+/// executor does not care where it came from.
 #[async_trait::async_trait]
 pub trait Executor: Send + Sync {
-    async fn perform(&self, token: &MintedToken, action: &ExecAction) -> Result<ExecResult, MintError>;
+    async fn perform(&self, bearer: &str, action: &ExecAction) -> Result<ExecResult, MintError>;
     fn provider(&self) -> &'static str;
 }
 
@@ -45,13 +57,13 @@ pub struct MockExecutor;
 
 #[async_trait::async_trait]
 impl Executor for MockExecutor {
-    async fn perform(&self, token: &MintedToken, action: &ExecAction) -> Result<ExecResult, MintError> {
+    async fn perform(&self, bearer: &str, action: &ExecAction) -> Result<ExecResult, MintError> {
         Ok(ExecResult {
             summary: format!(
-                "performed (mock) {:?} on {} using a minted token ({})",
+                "performed (mock) {:?} on {} using a bearer credential ({})",
                 action.kind,
                 action.target,
-                token.masked()
+                mask(bearer)
             ),
             data: serde_json::json!({ "mock": true, "repositories": ["octo/demo"] }),
         })
@@ -80,12 +92,12 @@ impl<G: GetHttp> GitHubExecutor<G> {
 
 #[async_trait::async_trait]
 impl<G: GetHttp> Executor for GitHubExecutor<G> {
-    async fn perform(&self, token: &MintedToken, action: &ExecAction) -> Result<ExecResult, MintError> {
+    async fn perform(&self, bearer: &str, action: &ExecAction) -> Result<ExecResult, MintError> {
         match action.kind {
             ExecKind::Read => {
                 let url = format!("{}/installation/repositories", self.base_url);
-                // token.expose() flows to the HTTP layer, never to the caller.
-                let v = self.http.get_json(&url, token.expose()).await?;
+                // `bearer` flows to the HTTP layer, never back to the caller.
+                let v = self.http.get_json(&url, bearer).await?;
                 let repos: Vec<String> = v
                     .get("repositories")
                     .and_then(|r| r.as_array())
@@ -153,18 +165,8 @@ impl GetHttp for ReqwestGet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MintedToken;
-    use std::time::{Duration, SystemTime};
 
-    fn token() -> MintedToken {
-        MintedToken::new(
-            "ghs_secret_installation_token".into(),
-            SystemTime::now() + Duration::from_secs(3600),
-            None,
-            "[contents:read]".into(),
-            "github".into(),
-        )
-    }
+    const BEARER: &str = "ghp_secret_token_from_vault";
 
     struct MockGet {
         response: serde_json::Value,
@@ -173,35 +175,35 @@ mod tests {
     impl GetHttp for MockGet {
         async fn get_json(&self, url: &str, bearer: &str) -> Result<serde_json::Value, MintError> {
             assert!(url.ends_with("/installation/repositories"));
-            assert_eq!(bearer, "ghs_secret_installation_token"); // token used internally
+            assert_eq!(bearer, BEARER); // the credential is used internally
             Ok(self.response.clone())
         }
     }
 
     #[tokio::test]
-    async fn github_read_returns_repos_without_leaking_token() {
+    async fn github_read_returns_repos_without_leaking_the_credential() {
         let exec = GitHubExecutor::new(MockGet {
             response: serde_json::json!({
                 "repositories": [ { "full_name": "octo/demo" }, { "full_name": "octo/infra" } ]
             }),
         });
         let res = exec
-            .perform(&token(), &ExecAction { kind: ExecKind::Read, target: "github.com".into() })
+            .perform(BEARER, &ExecAction { kind: ExecKind::Read, target: "github.com".into() })
             .await
             .unwrap();
         assert!(res.summary.contains("2 repositories"));
         assert_eq!(res.data["repositories"][0], "octo/demo");
-        // The token value must not appear anywhere in the sanitized result.
+        // The credential must not appear anywhere in the sanitized result.
         let serialized = format!("{} {}", res.summary, res.data);
-        assert!(!serialized.contains("ghs_secret_installation_token"));
+        assert!(!serialized.contains(BEARER));
     }
 
     #[tokio::test]
-    async fn mock_executor_masks_the_token() {
+    async fn mock_executor_masks_the_credential() {
         let res = MockExecutor
-            .perform(&token(), &ExecAction { kind: ExecKind::Read, target: "github.com".into() })
+            .perform(BEARER, &ExecAction { kind: ExecKind::Read, target: "github.com".into() })
             .await
             .unwrap();
-        assert!(!res.summary.contains("ghs_secret_installation_token"));
+        assert!(!res.summary.contains(BEARER));
     }
 }

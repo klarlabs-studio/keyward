@@ -3,6 +3,29 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [0.3.0] — 2026-07-12
+
+Two ways to use a credential, selected per item by the `mintable` flag — you are
+not forced to mint.
+
+### Added
+- **Secretless execution from the vault** (`mintable = false`): the broker **reads
+  the durable token stored in the vault and uses it directly** to perform the
+  action — nothing is fetched or created. The token is used inside the broker and
+  never returned to the model (`primitive: "secretless_exec"`, `source: "vault"`).
+- The `Executor` now takes a bearer credential (from either source), so the same
+  execution path serves both:
+  - `mintable = true`  → mint a short-lived scoped token, then perform (`source: "minted"`).
+  - `mintable = false` → read the stored token from the vault, then perform (`source: "vault"`).
+
+### Changed
+- `Executor::perform` takes `bearer: &str` instead of a `MintedToken`, decoupling
+  execution from where the credential came from.
+
+### Security invariants (tested)
+- On a vault-read execution, the stored token never appears in the response
+  (verified end-to-end); credentials are masked in summaries.
+
 ## [0.2.0] — 2026-07-12
 
 Closes the loop: **secretless execution**. The broker mints a scoped token,

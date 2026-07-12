@@ -161,6 +161,12 @@ impl ProctorServer {
                 verb: ActionVerb,
                 origin: String,
             },
+            /// Use the durable token stored in the vault directly (mintable=false).
+            UseStored {
+                base: Option<String>,
+                verb: ActionVerb,
+                origin: String,
+            },
         }
 
         let next = {
@@ -187,11 +193,14 @@ impl ProctorServer {
                             origin: action.target.0.clone(),
                         }
                     }
-                    Primitive::Secretless => Next::Respond(json!({
-                        "decision": "allow",
-                        "primitive": "secretless",
-                        "note": "the broker performs the action; the secret never leaves the server and is never returned to the model"
-                    })),
+                    Primitive::Secretless => {
+                        let base = state.secrets.get(&item.id).cloned();
+                        Next::UseStored {
+                            base,
+                            verb,
+                            origin: action.target.0.clone(),
+                        }
+                    }
                     Primitive::RawSecret => Next::Respond(json!({
                         "decision": "allow",
                         "primitive": "raw",
@@ -231,10 +240,11 @@ impl ProctorServer {
                             // action ourselves and return only the sanitized result. The
                             // token never reaches the model.
                             let exec_action = ExecAction { kind: ExecKind::Read, target: origin };
-                            match self.executor.perform(&token, &exec_action).await {
+                            match self.executor.perform(token.expose(), &exec_action).await {
                                 Ok(r) => json!({
                                     "decision": "allow",
                                     "primitive": "secretless_exec",
+                                    "source": "minted",
                                     "provider": self.executor.provider(),
                                     "performed": true,
                                     "result_summary": r.summary,
@@ -263,6 +273,38 @@ impl ProctorServer {
                     }
                     Err(e) => json!({ "decision": "error", "reason": format!("mint failed: {e}") }),
                 },
+            },
+            // Secretless: read the durable token from the vault and use it directly
+            // (no minting, nothing fetched/created). The token performs the action
+            // inside the broker and is never returned to the model.
+            Next::UseStored { base, verb, origin } => match base {
+                None => json!({
+                    "decision": "allow", "primitive": "secretless",
+                    "note": "decision allows a secretless action, but no stored credential is loaded (running without a vault)."
+                }),
+                Some(secret) => {
+                    if is_read(verb) {
+                        let exec_action = ExecAction { kind: ExecKind::Read, target: origin };
+                        match self.executor.perform(&secret, &exec_action).await {
+                            Ok(r) => json!({
+                                "decision": "allow",
+                                "primitive": "secretless_exec",
+                                "source": "vault",
+                                "provider": self.executor.provider(),
+                                "performed": true,
+                                "result_summary": r.summary,
+                                "result": r.data,
+                                "note": "the broker read the stored credential from the vault and performed the action itself; the credential was never returned to the model."
+                            }),
+                            Err(e) => json!({ "decision": "error", "reason": format!("execution failed: {e}") }),
+                        }
+                    } else {
+                        json!({
+                            "decision": "allow", "primitive": "secretless",
+                            "note": format!("the broker would perform '{}' using the stored credential; no execution is wired for this verb yet.", verb.as_str())
+                        })
+                    }
+                }
             },
         };
 
@@ -429,6 +471,46 @@ mod tests {
         // The invariant: neither the base secret nor the minted token value appears.
         assert!(!s.contains("SUPER_SECRET_BASE_PEM"), "base secret leaked!");
         assert!(!s.contains("ephemeral_token"), "minted token value leaked!");
+    }
+
+    fn server_with_stored_token() -> ProctorServer {
+        // mintable = false → the vault holds the actual token; the broker reads it.
+        let items = vec![ItemRef {
+            id: "itm_github".into(),
+            label: "GitHub PAT".into(),
+            bound_origins: vec!["github.com".into()],
+            mintable: false,
+        }];
+        let mut secrets = HashMap::new();
+        secrets.insert("itm_github".to_string(), "ghp_STORED_TOKEN_FROM_VAULT".to_string());
+        ProctorServer::with(
+            items,
+            secrets,
+            Arc::new(MockMinter),
+            Arc::new(MockExecutor),
+            &["github.com".to_string()],
+        )
+    }
+
+    #[tokio::test]
+    async fn secretless_stored_read_uses_vault_token_without_leaking_it() {
+        // mintable=false + Read → the broker reads the stored token and performs
+        // the action; the token is used internally and never returned.
+        let server = server_with_stored_token();
+        let args = UseCredentialArgs {
+            item_id: "itm_github".into(),
+            origin: "github.com".into(),
+            verb: "Read".into(),
+            unattended: true,
+            want_raw_secret: false,
+        };
+        let res = server.use_credential(Parameters(args)).await.unwrap();
+        let s = body(&res);
+        assert!(s.contains("secretless_exec"), "expected secretless execution: {s}");
+        assert!(s.contains("vault"), "expected the vault-read source/note: {s}");
+        assert!(s.contains("octo/demo"), "expected the sanitized result: {s}");
+        // The invariant: the stored token never appears in the response.
+        assert!(!s.contains("ghp_STORED_TOKEN_FROM_VAULT"), "stored token leaked!");
     }
 
     #[tokio::test]

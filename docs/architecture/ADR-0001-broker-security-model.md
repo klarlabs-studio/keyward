@@ -88,11 +88,19 @@ As of **v0.1.0** the wedge is implemented end-to-end (24 workspace tests):
   On an allowed mintable item it mints a token held server-side and returns only a
   reference + masked view.
 
-As of **v0.2.0**, **secretless execution** is implemented (`crates/mint/exec.rs`):
-on an allowed read the broker mints a scoped token, performs the action itself
-(GitHub: list installation repositories), and returns only a sanitized result —
-neither the base secret nor the minted token reaches the model (verified
-end-to-end).
+As of **v0.3.0**, **secretless execution** supports both credential sources,
+chosen per item by the vault's `mintable` flag (`crates/mint/exec.rs`,
+`crates/mcp`):
+- `mintable = false` → the broker **reads the durable token from the vault** and
+  uses it directly (nothing fetched or created) — `source: "vault"`.
+- `mintable = true` → the broker mints a fresh, scoped, short-TTL token, then
+  performs — `source: "minted"`.
+
+Either way the broker performs the action itself (GitHub: list installation
+repositories) and returns only a sanitized result — the credential never reaches
+the model (verified end-to-end). This corresponds to the two safe primitives
+(§Decision): **Secretless** (use-in-place) and **Minted** (derive-then-use);
+`RawSecret` remains hard-denied.
 
 **Not yet built:** write operations via propose-not-commit artifacts, OAuth Token
 Exchange (RFC 8693) / cloud STS minters, `elicitation`-based step-up approval,
