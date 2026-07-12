@@ -3,7 +3,26 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.9.1] — 2026-07-12
+## [1.10.0] — 2026-07-12
+
+The last two threat-model residuals (R4, R5).
+
+### Added / hardened
+- **R4 — signed audit log.** With `PROCTOR_AUDIT_KEY` (hex), the hash chain is
+  **HMAC-SHA256**-signed instead of plain SHA-256, so an attacker with only
+  filesystem write (no key) cannot forge a valid chain — tamper-*resistant*, not
+  just tamper-evident. (`AuditLog::with_file_signed`, `Broker::with_audit_file_signed`.)
+- **R5 — real STS XML parser.** The AWS `AssumeRoleWithWebIdentity` response is now
+  parsed with `roxmltree` (namespace-agnostic on local name, scoped to
+  `<Credentials>`), replacing the hand-rolled tag extractor; malformed/junk XML
+  yields a clean error instead of silent mis-parse.
+
+### Threat-model status
+All seven expert findings (T1–T7) and all self-review residuals except a formal
+external human review are now addressed. R4/R5 fixed here; R1 (zeroize), R2 (trust
+gate), R3 (shell block) fixed earlier.
+
+
 
 Supply-chain gate + lint hygiene.
 

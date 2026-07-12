@@ -455,6 +455,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest",
+]
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -916,8 +925,9 @@ dependencies = [
 
 [[package]]
 name = "proctor-broker"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
+ "hmac",
  "serde",
  "serde_json",
  "sha2",
@@ -926,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-cli"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "proctor-broker",
  "proctor-profiles",
@@ -935,7 +945,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mcp"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -953,11 +963,12 @@ dependencies = [
 
 [[package]]
 name = "proctor-mint"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
  "reqwest",
+ "roxmltree",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -967,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-profiles"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "regex",
  "serde",
@@ -978,7 +989,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-vault"
-version = "1.9.0"
+version = "1.9.1"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1252,6 +1263,12 @@ dependencies = [
  "serde_json",
  "syn",
 ]
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
 
 [[package]]
 name = "rustc-hash"

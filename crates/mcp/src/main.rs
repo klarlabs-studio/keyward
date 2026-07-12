@@ -202,12 +202,13 @@ impl ProctorServer {
         profiles: Arc<Registry>,
         isolation: Isolation,
         approved_origins: &[String],
-        audit_path: Option<PathBuf>,
+        audit: Option<(PathBuf, Option<Vec<u8>>)>,
     ) -> Self {
         let approved: Vec<&str> = approved_origins.iter().map(|s| s.as_str()).collect();
         let policy = Policy::with_approved_origins(&approved);
-        let broker = match audit_path {
-            Some(p) => Broker::with_audit_file(policy, p),
+        let broker = match audit {
+            Some((p, Some(key))) => Broker::with_audit_file_signed(policy, p, key),
+            Some((p, None)) => Broker::with_audit_file(policy, p),
             None => Broker::new(policy),
         };
         ProctorServer {
@@ -928,9 +929,29 @@ fn build_server() -> ProctorServer {
     };
 
     let audit_path = std::env::var("PROCTOR_AUDIT").ok().map(PathBuf::from);
+    // Optional HMAC signing key for the audit chain (hex). With it, an FS-write
+    // attacker without the key cannot forge a valid chain.
+    let audit_key: Option<Vec<u8>> = std::env::var("PROCTOR_AUDIT_KEY").ok().and_then(|h| {
+        match (0..h.len()).step_by(2).map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect::<Option<Vec<u8>>>() {
+            Some(k) if !k.is_empty() => Some(k),
+            _ => {
+                eprintln!("proctor-mcp: PROCTOR_AUDIT_KEY is not valid hex; audit chain will be unsigned");
+                None
+            }
+        }
+    });
     if let Some(p) = &audit_path {
-        eprintln!("proctor-mcp: appending audit log to {}", p.display());
+        eprintln!(
+            "proctor-mcp: appending audit log to {} ({})",
+            p.display(),
+            if audit_key.is_some() {
+                "HMAC-signed"
+            } else {
+                "unsigned"
+            }
+        );
     }
+    let audit = audit_path.map(|p| (p, audit_key));
 
     let profiles = Arc::new(load_profiles());
     eprintln!("proctor-mcp: {} provider profile(s) loaded", profiles.len());
@@ -980,7 +1001,7 @@ fn build_server() -> ProctorServer {
                     );
                     return ProctorServer::with(
                         refs, secrets, providers, minter, minters, executor, profiles, isolation,
-                        &approved, audit_path,
+                        &approved, audit,
                     )
                     .with_require_isolation(require_isolation);
                 }
@@ -1024,7 +1045,7 @@ fn build_server() -> ProctorServer {
         profiles,
         isolation,
         &approved,
-        audit_path,
+        audit,
     )
     .with_require_isolation(require_isolation)
 }

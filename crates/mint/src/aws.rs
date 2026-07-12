@@ -45,13 +45,37 @@ impl<H: RawHttp> AwsWebIdentityMinter<H> {
     }
 }
 
-/// Extract the text between `<name>` and `</name>` (first occurrence).
-fn tag<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
-    let open = format!("<{name}>");
-    let close = format!("</{name}>");
-    let start = xml.find(&open)? + open.len();
-    let end = xml[start..].find(&close)? + start;
-    Some(&xml[start..end])
+/// The short-lived credential fields from an STS response.
+struct StsCredentials {
+    access_key_id: String,
+    secret_access_key: String,
+    session_token: String,
+    expiration: Option<String>,
+}
+
+/// Parse the STS XML with a real parser (namespace-agnostic on local name),
+/// scoped to the `<Credentials>` element so we don't pick up stray tags.
+fn parse_sts_credentials(xml: &str) -> Result<StsCredentials, MintError> {
+    let doc = roxmltree::Document::parse(xml)
+        .map_err(|e| MintError::Parse(format!("STS XML parse error: {e}")))?;
+    let creds = doc
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "Credentials")
+        .ok_or_else(|| MintError::Parse("STS response has no <Credentials>".into()))?;
+    let field = |name: &str| -> Option<String> {
+        creds
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == name)
+            .and_then(|n| n.text())
+            .map(|s| s.to_string())
+    };
+    let missing = |f: &str| MintError::Parse(format!("STS Credentials missing {f}"));
+    Ok(StsCredentials {
+        access_key_id: field("AccessKeyId").ok_or_else(|| missing("AccessKeyId"))?,
+        secret_access_key: field("SecretAccessKey").ok_or_else(|| missing("SecretAccessKey"))?,
+        session_token: field("SessionToken").ok_or_else(|| missing("SessionToken"))?,
+        expiration: field("Expiration"),
+    })
 }
 
 #[async_trait::async_trait]
@@ -74,25 +98,20 @@ impl<H: RawHttp> Minter for AwsWebIdentityMinter<H> {
             ),
         ];
         let xml = self.http.post_form_raw(&self.sts_endpoint, &form).await?;
-        let ak = tag(&xml, "AccessKeyId")
-            .ok_or_else(|| MintError::Parse("STS response missing AccessKeyId".into()))?;
-        let sk = tag(&xml, "SecretAccessKey")
-            .ok_or_else(|| MintError::Parse("STS response missing SecretAccessKey".into()))?;
-        let st = tag(&xml, "SessionToken")
-            .ok_or_else(|| MintError::Parse("STS response missing SessionToken".into()))?;
+        let creds = parse_sts_credentials(&xml)?;
 
         // Emit the trio as JSON so a multi-field (env_map) profile composes it.
         let value = serde_json::json!({
-            "access_key_id": ak,
-            "secret_access_key": sk,
-            "session_token": st,
+            "access_key_id": creds.access_key_id,
+            "secret_access_key": creds.secret_access_key,
+            "session_token": creds.session_token,
         })
         .to_string();
 
         Ok(MintedToken::new(
             value,
             SystemTime::now() + Duration::from_secs(self.duration_secs),
-            tag(&xml, "Expiration").map(|s| s.to_string()),
+            creds.expiration,
             format!("[assume-role {}]", self.role_arn),
             "aws-sts".to_string(),
         ))
@@ -193,8 +212,16 @@ mod tests {
     }
 
     #[test]
-    fn tag_extraction() {
-        assert_eq!(tag("<A>x</A>", "A"), Some("x"));
-        assert_eq!(tag("<A>x</A>", "B"), None);
+    fn parses_namespaced_sts_xml_and_rejects_junk() {
+        // Real STS responses carry a default namespace — the parser matches on
+        // local name, so this still extracts the Credentials fields.
+        let ns = r#"<AssumeRoleWithWebIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>AK</AccessKeyId><SecretAccessKey>SK</SecretAccessKey><SessionToken>ST</SessionToken></Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>"#;
+        let c = parse_sts_credentials(ns).unwrap();
+        assert_eq!(c.access_key_id, "AK");
+        assert_eq!(c.secret_access_key, "SK");
+        assert!(c.expiration.is_none());
+        // Malformed / missing-credentials XML is a clean error, not a panic.
+        assert!(parse_sts_credentials("<not-xml").is_err());
+        assert!(parse_sts_credentials("<Response></Response>").is_err());
     }
 }

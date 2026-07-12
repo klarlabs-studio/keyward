@@ -117,8 +117,8 @@ result or a scoped handle, never a value.
 | R1 | Secrets not zeroized in memory (core dump / debugger) | High | Mitigated (v1.7.0); residual transient copies + Debug derive |
 | R2 | `isolation=none` default; env injection recoverable via /proc | High (untrusted) | Gated (v1.8.0): untrusted mode refuses run_command without isolation |
 | R3 | Shell-interpreter authorization bypasses command-binding | High | Blocked by default (v1.6.0); opt-in via `allow_shell` |
-| R4 | Audit log not signed (FS-write attacker can forge) | Medium | Evident, not tamper-*proof* |
-| R5 | AWS STS response parsed with a minimal extractor | Low | Works; harden before prod |
+| R4 | Audit log not signed (FS-write attacker can forge) | Medium | **Fixed (v1.10.0):** optional HMAC-signed chain (`PROCTOR_AUDIT_KEY`) |
+| R5 | AWS STS response parsed with a minimal extractor | Low | **Fixed (v1.10.0):** real XML parser (roxmltree) |
 | R6 | No vault rollback protection | Low | Open |
 | R7 | Classification correctness (risk patterns / never-unattended set) | Medium | Ongoing |
 
@@ -129,8 +129,11 @@ result or a scoped handle, never a value.
    Follow-up: redact `Item`'s `Debug`, and zeroize the transient input map.
 2. ✅ **Done (v1.6.0):** shell-interpreter authorization is blocked unless the
    profile sets `allow_shell = true` — addresses R3.
-3. **Sign the audit log** (or ship to an append-only external sink) — R4.
-4. **Real XML parser** for STS — R5.
+3. ✅ **Done (v1.10.0):** the audit chain can be **HMAC-signed** via
+   `PROCTOR_AUDIT_KEY` — forgery requires the key, not just FS write. (Shipping to
+   an external append-only sink remains a further hardening.) — R4.
+4. ✅ **Done (v1.10.0):** STS responses parsed with a real XML parser
+   (`roxmltree`), scoped to `<Credentials>`, with clean errors on junk — R5.
 5. **External security review + fuzzing** of the parsers and the policy engine.
 6. ✅ **Done (v1.8.0):** `PROCTOR_TRUST=untrusted` refuses `run_command` when
    `isolation=none` — the config gate for untrusted contexts.

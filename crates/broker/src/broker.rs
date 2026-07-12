@@ -65,6 +65,17 @@ impl Broker {
         }
     }
 
+    /// Like [`Broker::with_audit_file`], but the on-disk chain is HMAC-signed
+    /// with `key` (forgery requires the key, not just FS write access).
+    pub fn with_audit_file_signed(policy: Policy, path: std::path::PathBuf, key: Vec<u8>) -> Self {
+        Broker {
+            policy,
+            audit: AuditLog::with_file_signed(path, key),
+            default_ttl: Duration::from_secs(600),
+            default_uses: 1,
+        }
+    }
+
     /// Request to *use* a credential. Returns an action/handle, never plaintext.
     pub fn request_use(
         &mut self,

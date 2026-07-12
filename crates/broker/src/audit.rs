@@ -1,8 +1,15 @@
 //! Append-only, hash-chained audit log. Every broker decision is recorded and
 //! the chain is tamper-evident: mutating any past entry breaks `verify()`.
+//!
+//! With a signing key (see [`AuditLog::with_file_signed`]), the chain is HMAC-ed
+//! rather than plain-SHA256, so an attacker with only filesystem write (no key)
+//! cannot forge a valid chain — tamper-*resistant*, not just tamper-evident.
 
+use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
 
 const GENESIS: &str = "GENESIS";
 
@@ -24,6 +31,8 @@ pub struct AuditLog {
     file: Option<std::path::PathBuf>,
     /// Set if a persistent-sink write ever failed (surfaced, not swallowed).
     write_failed: bool,
+    /// Optional HMAC key: when set, the chain is signed (forgery needs the key).
+    key: Option<Vec<u8>>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -34,15 +43,40 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-fn digest(seq: u64, item_id: &str, origin: &str, verb: &str, decision: &str, prev: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(seq.to_le_bytes());
-    h.update(item_id.as_bytes());
-    h.update(origin.as_bytes());
-    h.update(verb.as_bytes());
-    h.update(decision.as_bytes());
-    h.update(prev.as_bytes());
-    hex(&h.finalize())
+#[allow(clippy::too_many_arguments)]
+fn digest(
+    key: Option<&[u8]>,
+    seq: u64,
+    item_id: &str,
+    origin: &str,
+    verb: &str,
+    decision: &str,
+    prev: &str,
+) -> String {
+    match key {
+        // Signed chain: HMAC-SHA256 — an attacker without the key can't forge it.
+        Some(k) => {
+            let mut mac = HmacSha256::new_from_slice(k).expect("HMAC accepts any key length");
+            mac.update(&seq.to_le_bytes());
+            mac.update(item_id.as_bytes());
+            mac.update(origin.as_bytes());
+            mac.update(verb.as_bytes());
+            mac.update(decision.as_bytes());
+            mac.update(prev.as_bytes());
+            hex(&mac.finalize().into_bytes())
+        }
+        // Unsigned chain: plain SHA-256 — tamper-evident only.
+        None => {
+            let mut h = Sha256::new();
+            h.update(seq.to_le_bytes());
+            h.update(item_id.as_bytes());
+            h.update(origin.as_bytes());
+            h.update(verb.as_bytes());
+            h.update(decision.as_bytes());
+            h.update(prev.as_bytes());
+            hex(&h.finalize())
+        }
+    }
 }
 
 impl AuditLog {
@@ -56,6 +90,18 @@ impl AuditLog {
             entries: Vec::new(),
             file: Some(path),
             write_failed: false,
+            key: None,
+        }
+    }
+
+    /// Like [`AuditLog::with_file`], but the chain is HMAC-signed with `key` so
+    /// forgery requires the key (tamper-resistant, not just tamper-evident).
+    pub fn with_file_signed(path: std::path::PathBuf, key: Vec<u8>) -> Self {
+        AuditLog {
+            entries: Vec::new(),
+            file: Some(path),
+            write_failed: false,
+            key: Some(key),
         }
     }
 
@@ -72,7 +118,15 @@ impl AuditLog {
             .last()
             .map(|e| e.hash.clone())
             .unwrap_or_else(|| GENESIS.to_string());
-        let hash = digest(seq, item_id, origin, verb, decision, &prev);
+        let hash = digest(
+            self.key.as_deref(),
+            seq,
+            item_id,
+            origin,
+            verb,
+            decision,
+            &prev,
+        );
         let entry = AuditEntry {
             seq,
             item_id: item_id.to_string(),
@@ -110,7 +164,15 @@ impl AuditLog {
             if e.seq != i as u64 || e.prev_hash != prev {
                 return false;
             }
-            let expected = digest(e.seq, &e.item_id, &e.origin, &e.verb, &e.decision, &prev);
+            let expected = digest(
+                self.key.as_deref(),
+                e.seq,
+                &e.item_id,
+                &e.origin,
+                &e.verb,
+                &e.decision,
+                &prev,
+            );
             if expected != e.hash {
                 return false;
             }
@@ -127,6 +189,22 @@ impl AuditLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_chain_is_forgery_resistant() {
+        let mut log = AuditLog::with_file_signed(
+            std::env::temp_dir().join("proctor-signed-audit.jsonl"),
+            b"secret-audit-key".to_vec(),
+        );
+        let _ = std::fs::remove_file(std::env::temp_dir().join("proctor-signed-audit.jsonl"));
+        log.append("itm", "github.com", "Read", "ALLOW");
+        log.append("itm", "bank.com", "MoveMoney", "STEPUP");
+        assert!(log.verify());
+        // Re-signing a forged entry needs the key — verifying with a DIFFERENT key fails.
+        log.key = Some(b"attacker-guessed-key".to_vec());
+        assert!(!log.verify(), "chain verified under the wrong key");
+        let _ = std::fs::remove_file(std::env::temp_dir().join("proctor-signed-audit.jsonl"));
+    }
 
     #[test]
     fn chain_verifies_and_detects_tampering() {
