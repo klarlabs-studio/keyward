@@ -36,9 +36,16 @@ crates/
                             propose-not-commit, risk-tiered policy, hash-chained audit
   mint/     proctor-mint    mint short-lived scoped tokens + secretless execution
                             (MockMinter/MockExecutor + real GitHub App minter & executor)
+  profiles/ proctor-profiles external, pluggable provider profiles (TOML) — add a
+                            provider by dropping a file; no recompile
   mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
-  cli/      proctor         manage the vault (init/add/list) + broker demo
+  cli/      proctor         manage the vault (init/add/list) + list profiles + demo
 ```
+
+New providers are **external config**, not code. Drop a `<id>.toml` into
+`$PROCTOR_PROFILES` (see [`profiles/`](profiles/)) and `proctor profiles` picks it
+up — GitLab, Azure, Cloudflare, whatever arises. See
+[ADR-0002](docs/architecture/ADR-0002-scaling-credential-use.md).
 
 ```bash
 cargo test --workspace              # 37 tests: origin-binding, step-up, propose-not-commit exec, secretless no-leak, audit chain…

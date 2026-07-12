@@ -1,0 +1,6 @@
+id = "gitlab"
+description = "GitLab — personal / project / CI job token"
+env_var = "GITLAB_TOKEN"
+commands = ["glab", "terraform"]
+read_patterns = ['\b(list|view|get|show)\b']
+mutate_patterns = ['\b(create|delete|update|close|merge|approve|revoke)\b']

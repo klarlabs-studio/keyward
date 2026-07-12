@@ -10,6 +10,7 @@
 //!   proctor init
 //!   proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind]
 //!   proctor list
+//!   proctor profiles (list loaded provider profiles from $PROCTOR_PROFILES)
 //!   proctor demo     (in-memory broker walkthrough)
 
 use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy};
@@ -50,11 +51,40 @@ fn main() {
         "init" => cmd_init(),
         "add" => cmd_add(&args[1..]),
         "list" => cmd_list(),
+        "profiles" => cmd_profiles(),
         "demo" => demo(),
         other => {
-            eprintln!("unknown command: {other}\nusage: proctor <init|add|list|demo>");
+            eprintln!("unknown command: {other}\nusage: proctor <init|add|list|profiles|demo>");
             exit(2);
         }
+    }
+}
+
+fn profiles_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("PROCTOR_PROFILES") {
+        return p.into();
+    }
+    match std::env::var("HOME") {
+        Ok(home) => PathBuf::from(home).join(".proctor/profiles"),
+        Err(_) => PathBuf::from("profiles"),
+    }
+}
+
+fn cmd_profiles() {
+    let dir = profiles_dir();
+    let reg = proctor_profiles::Registry::load_dir(&dir).unwrap_or_else(|e| {
+        eprintln!("failed to load profiles from {}: {e}", dir.display());
+        exit(1);
+    });
+    if reg.is_empty() {
+        println!("no profiles in {} — drop <id>.toml files there to add providers", dir.display());
+        return;
+    }
+    println!("{} profile(s) from {}\n", reg.len(), dir.display());
+    println!("{:<12} {:<10} {}", "ID", "INJECT", "DESCRIPTION");
+    for p in reg.iter() {
+        let inject = if p.env_var.is_some() { "env_var" } else { "env_map" };
+        println!("{:<12} {:<10} {}", p.id, inject, p.description);
     }
 }
 

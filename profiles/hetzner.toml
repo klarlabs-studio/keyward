@@ -1,0 +1,6 @@
+id = "hetzner"
+description = "Hetzner Cloud — API token (long-lived; vault-read only)"
+env_var = "HCLOUD_TOKEN"
+commands = ["hcloud", "terraform"]
+read_patterns = ['\b(list|describe|get|ip)\b']
+mutate_patterns = ['\b(create|delete|rebuild|poweron|poweroff|attach|detach|enable|disable)\b']

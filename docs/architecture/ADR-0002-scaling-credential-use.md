@@ -88,6 +88,15 @@ Profiles are declarative, per-provider, community-extensible — a data registry
 like Homebrew formulae. The core carries the engine and a small seed set; the long
 tail lives in the registry and is safe to be incomplete (missing = gated).
 
+**Implemented (v1.1.0):** profiles are **external TOML files** loaded at runtime
+from `$PROCTOR_PROFILES` (or `~/.proctor/profiles`) by `proctor-profiles`. Adding a
+provider — GitLab, Azure, Cloudflare — is dropping a `<id>.toml` file; **no
+recompile**. Each profile declares the env mapping (`env_var` or `env_map`) and
+argv risk patterns (`read_patterns` / `mutate_patterns`, default-gate when
+unmatched). Seed profiles ship in [`profiles/`](../../profiles/) (aws, azure,
+github, gitlab, hetzner). `proctor profiles` lists what's loaded. See
+[`profiles/README.md`](../../profiles/README.md).
+
 ## Security model — the load-bearing caveat
 
 **Environment-variable injection is hygiene, not an isolation boundary.** An

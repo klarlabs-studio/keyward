@@ -1,0 +1,6 @@
+id = "github"
+description = "GitHub — personal access token or App installation token"
+env_var = "GITHUB_TOKEN"
+commands = ["gh", "terraform"]
+read_patterns = ['\b(list|view|status|get|ls)\b']
+mutate_patterns = ['\b(create|delete|merge|close|edit|rename|transfer)\b']

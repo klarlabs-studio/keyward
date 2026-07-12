@@ -3,6 +3,26 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.1.0] — 2026-07-12
+
+Providers become **external config** (ADR-0002 registry, made concrete).
+
+### Added
+- **`proctor-profiles`** — external, pluggable provider profiles loaded from TOML
+  at runtime (`$PROCTOR_PROFILES` or `~/.proctor/profiles`). A profile declares
+  how a credential is injected (`env_var` for single-token, `env_map` for
+  multi-field JSON credentials) and argv risk patterns
+  (`read_patterns` / `mutate_patterns`, **default-gate** when unmatched, so it's
+  safe when incomplete). One profile serves every tool that shares the provider's
+  env-var convention (the `aws` profile → aws-cli, Terraform, Pulumi, SDKs).
+- Seed profiles ship in `profiles/` (aws, azure, github, gitlab, hetzner) plus a
+  `profiles/README.md`. **Adding a provider is dropping a `<id>.toml` file — no
+  recompile.**
+- **`proctor profiles`** CLI command lists what's loaded (proves pluggability:
+  drop a file → it appears).
+
+
+
 ## [1.0.0] — 2026-07-12
 
 The Phase B wedge is complete end-to-end: the interactive approval loop closes

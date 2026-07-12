@@ -1,0 +1,13 @@
+id = "aws"
+description = "Amazon Web Services — access key (+ optional session token)"
+commands = ["aws", "terraform", "pulumi", "opentofu"]
+read_patterns = ['\b(describe|list|get|ls|head|lookup)\b']
+mutate_patterns = ['\b(create|delete|terminate|put|update|remove|rm|attach|detach|modify)\b']
+
+# Multi-field: the vault secret is a JSON object; each field maps to an env var.
+# One profile serves aws-cli, Terraform, Pulumi, OpenTofu, and every SDK.
+# (This table must come last — TOML absorbs later keys into it.)
+[env_map]
+access_key_id = "AWS_ACCESS_KEY_ID"
+secret_access_key = "AWS_SECRET_ACCESS_KEY"
+session_token = "AWS_SESSION_TOKEN"

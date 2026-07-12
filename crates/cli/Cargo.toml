@@ -12,3 +12,4 @@ path = "src/main.rs"
 [dependencies]
 proctor-vault = { path = "../vault" }
 proctor-broker = { path = "../broker" }
+proctor-profiles = { path = "../profiles" }

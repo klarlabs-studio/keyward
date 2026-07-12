@@ -1,0 +1,14 @@
+id = "azure"
+description = "Microsoft Azure — service principal (client id / secret / tenant)"
+commands = ["az", "terraform"]
+read_patterns = ['\b(list|show|get)\b']
+mutate_patterns = ['\b(create|delete|update|deploy|set|remove|purge)\b']
+
+# Multi-field: the vault secret is a JSON object with the SP credentials.
+# One profile serves the az CLI and the Terraform azurerm provider.
+# (This table must come last — TOML absorbs later keys into it.)
+[env_map]
+client_id = "ARM_CLIENT_ID"
+client_secret = "ARM_CLIENT_SECRET"
+tenant_id = "ARM_TENANT_ID"
+subscription_id = "ARM_SUBSCRIPTION_ID"
