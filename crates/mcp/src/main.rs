@@ -604,6 +604,7 @@ impl ProctorServer {
                     "provider": provider_id,
                     "command": argv.join(" "),
                     "isolation": self.isolation.label(),
+                    "egress": self.isolation.egress(),
                     "credential_source": cred_source,
                     "exit_code": r.code,
                     "stdout": redact(r.stdout),
@@ -615,6 +616,13 @@ impl ProctorServer {
                     if let Some(o) = out.as_object_mut() {
                         o.insert("shell_warning".into(), json!(
                             "authorized program is a shell interpreter; command-binding and argv risk classification cannot inspect the actual work — prefer authorizing specific tools (aws, terraform), not shells."
+                        ));
+                    }
+                }
+                if self.state.lock().await.broker.audit.write_failed() {
+                    if let Some(o) = out.as_object_mut() {
+                        o.insert("audit_warning".into(), json!(
+                            "persistent audit write has failed — the on-disk trail is incomplete."
                         ));
                     }
                 }
@@ -668,7 +676,8 @@ fn build_server() -> ProctorServer {
         );
     }
     if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
-        if !ep.is_empty() {
+        if !ep.is_empty() && require_https(&ep, "token-exchange") {
+            eprintln!("proctor-mcp: token-exchange endpoint {ep}");
             let mut m = TokenExchangeMinter::new(ep, ReqwestFormHttp::new());
             m.audience = std::env::var("PROCTOR_STS_AUDIENCE").ok();
             m.scope = std::env::var("PROCTOR_STS_SCOPE").ok();
@@ -691,7 +700,7 @@ fn build_server() -> ProctorServer {
 
     // Minter: RFC 8693 token-exchange (STS) > GitHub App > mock.
     let minter: Arc<dyn Minter> = if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
-        if !ep.is_empty() {
+        if !ep.is_empty() && require_https(&ep, "token-exchange") {
             eprintln!("proctor-mcp: using RFC 8693 token-exchange minter ({ep})");
             let mut m = TokenExchangeMinter::new(ep, ReqwestFormHttp::new());
             m.audience = std::env::var("PROCTOR_STS_AUDIENCE").ok();
@@ -734,9 +743,9 @@ fn build_server() -> ProctorServer {
     }
 
     let vault = std::env::var("PROCTOR_VAULT").map(PathBuf::from);
-    let master = std::env::var("PROCTOR_MASTER");
+    let master = read_master();
 
-    if let (Ok(path), Ok(master)) = (&vault, &master) {
+    if let (Ok(path), Some(master)) = (&vault, &master) {
         if path.exists() {
             match proctor_vault::load_from_file(path, master.as_bytes()) {
                 Ok(items) => {
@@ -781,12 +790,22 @@ fn build_server() -> ProctorServer {
 
 /// Parse run_command isolation from $PROCTOR_ISOLATION:
 ///   none (default) | bwrap | docker:<image> | podman:<image>
+///
+/// Network egress: `$PROCTOR_ISOLATION_NETWORK` if set, else **"none" in
+/// untrusted mode** (deny egress so an injected credential can't be exfiltrated
+/// over the network) and "bridge" in trusted mode.
 fn isolation_from_env() -> Isolation {
     let spec = std::env::var("PROCTOR_ISOLATION").unwrap_or_default();
-    let network = std::env::var("PROCTOR_ISOLATION_NETWORK").unwrap_or_else(|_| "bridge".into());
+    let untrusted = matches!(
+        std::env::var("PROCTOR_TRUST").unwrap_or_default().as_str(),
+        "untrusted" | "untrust"
+    );
+    let net_default = if untrusted { "none" } else { "bridge" };
+    let network = std::env::var("PROCTOR_ISOLATION_NETWORK").unwrap_or_else(|_| net_default.to_string());
+    let deny_net = network == "none";
     match spec.as_str() {
         "" | "none" => Isolation::None,
-        "bwrap" | "bubblewrap" => Isolation::Bubblewrap,
+        "bwrap" | "bubblewrap" => Isolation::Bubblewrap { deny_net },
         other => {
             for rt in ["docker", "podman"] {
                 if let Some(image) = other.strip_prefix(&format!("{rt}:")) {
@@ -800,6 +819,35 @@ fn isolation_from_env() -> Isolation {
             eprintln!("proctor-mcp: unknown PROCTOR_ISOLATION '{other}'; using none");
             Isolation::None
         }
+    }
+}
+
+/// Read the vault master secret. Prefers `$PROCTOR_MASTER_FILE` (a path) so the
+/// master isn't exposed via `/proc/<pid>/environ`; falls back to `$PROCTOR_MASTER`
+/// with a warning.
+fn read_master() -> Option<String> {
+    if let Ok(path) = std::env::var("PROCTOR_MASTER_FILE") {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => return Some(s.trim_end_matches(['\n', '\r']).to_string()),
+            Err(e) => eprintln!("proctor-mcp: cannot read PROCTOR_MASTER_FILE {path}: {e}"),
+        }
+    }
+    match std::env::var("PROCTOR_MASTER") {
+        Ok(m) if !m.is_empty() => {
+            eprintln!("proctor-mcp: PROCTOR_MASTER is set via env (readable via /proc); prefer PROCTOR_MASTER_FILE");
+            Some(m)
+        }
+        _ => None,
+    }
+}
+
+/// Require an https endpoint (reject cleartext, which would leak the token).
+fn require_https(url: &str, what: &str) -> bool {
+    if url.starts_with("https://") {
+        true
+    } else {
+        eprintln!("proctor-mcp: refusing non-https {what} endpoint '{url}'");
+        false
     }
 }
 
@@ -964,12 +1012,12 @@ mod tests {
 
     #[tokio::test]
     async fn vault_read_uses_stored_token_without_leaking_it() {
-        let v = server(false, "ghp_STORED_TOKEN", &["github.com"])
+        let v = server(false, "tk_STORED_TOKEN", &["github.com"])
             .handle_use(args("itm_github", "github.com", "Read", true), &no_approve())
             .await;
         assert_eq!(v["primitive"], "secretless_exec");
         assert_eq!(v["source"], "vault");
-        assert!(!v.to_string().contains("ghp_STORED_TOKEN"));
+        assert!(!v.to_string().contains("tk_STORED_TOKEN"));
     }
 
     #[tokio::test]
@@ -983,7 +1031,7 @@ mod tests {
 
     #[tokio::test]
     async fn ship_to_prod_is_proposed_not_committed() {
-        let v = server(false, "ghp_x", &["github.com"])
+        let v = server(false, "tk_x", &["github.com"])
             .handle_use(args("itm_github", "github.com", "ShipToProduction", true), &no_approve())
             .await;
         assert_eq!(v["decision"], "propose_not_commit");
@@ -994,7 +1042,7 @@ mod tests {
     async fn open_pr_executes_as_reviewable_artifact_with_params() {
         let mut a = args("itm_github", "github.com", "OpenPullRequest", true);
         a.params = json!({ "repo": "octo/infra", "title": "Automated fix" });
-        let v = server(false, "ghp_x", &["github.com"]).handle_use(a, &no_approve()).await;
+        let v = server(false, "tk_x", &["github.com"]).handle_use(a, &no_approve()).await;
         assert_eq!(v["primitive"], "secretless_exec");
         let s = v.to_string();
         assert!(s.contains("pull_request"));
@@ -1017,7 +1065,7 @@ mod tests {
     #[tokio::test]
     async fn step_up_approved_executes() {
         // Read on a bound-but-not-pre-approved origin, attended → step-up.
-        let v = server(false, "ghp_STORED", &["github.com"])
+        let v = server(false, "tk_STORED", &["github.com"])
             .handle_use(
                 args("itm_github", "api.github.com", "Read", false),
                 &MockApprover(ApprovalOutcome::Approved),
@@ -1025,12 +1073,12 @@ mod tests {
             .await;
         assert_eq!(v["primitive"], "secretless_exec");
         assert_eq!(v["approved_via"], "human elicitation");
-        assert!(!v.to_string().contains("ghp_STORED"));
+        assert!(!v.to_string().contains("tk_STORED"));
     }
 
     #[tokio::test]
     async fn step_up_rejected_denies() {
-        let v = server(false, "ghp_STORED", &["github.com"])
+        let v = server(false, "tk_STORED", &["github.com"])
             .handle_use(
                 args("itm_github", "api.github.com", "Read", false),
                 &MockApprover(ApprovalOutcome::Rejected),
@@ -1042,7 +1090,7 @@ mod tests {
 
     #[tokio::test]
     async fn step_up_unavailable_falls_back_to_note() {
-        let v = server(false, "ghp_STORED", &["github.com"])
+        let v = server(false, "tk_STORED", &["github.com"])
             .handle_use(
                 args("itm_github", "api.github.com", "Read", false),
                 &MockApprover(ApprovalOutcome::Unavailable),
@@ -1153,7 +1201,7 @@ mod tests {
             _url: &str,
             _form: &[(String, String)],
         ) -> Result<String, proctor_mint::MintError> {
-            Ok(r#"<r><Credentials><AccessKeyId>ASIA_LIVE</AccessKeyId><SecretAccessKey>sk_live</SecretAccessKey><SessionToken>st_live</SessionToken><Expiration>2026-07-12T12:00:00Z</Expiration></Credentials></r>"#.to_string())
+            Ok(r#"<r><Credentials><AccessKeyId>TKID_LIVE</AccessKeyId><SecretAccessKey>testsecretval</SecretAccessKey><SessionToken>testsessionval</SessionToken><Expiration>2026-07-12T12:00:00Z</Expiration></Credentials></r>"#.to_string())
         }
     }
 
@@ -1221,8 +1269,8 @@ mod tests {
         let s = v.to_string();
         // The minted AWS creds reached the env (echoed), then were redacted.
         assert!(s.contains("REDACTED"), "expected redaction: {s}");
-        assert!(!s.contains("ASIA_LIVE"), "minted access key leaked!");
-        assert!(!s.contains("st_live"), "minted session token leaked!");
+        assert!(!s.contains("TKID_LIVE"), "minted access key leaked!");
+        assert!(!s.contains("testsessionval"), "minted session token leaked!");
     }
 
     #[tokio::test]

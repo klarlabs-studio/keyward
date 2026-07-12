@@ -248,17 +248,17 @@ mod tests {
             MockSigner,
             MockHttp {
                 response: TokenHttpResponse {
-                    token: "ghs_installationtoken".into(),
+                    token: "tk_installationtoken".into(),
                     expires_at: "2026-07-12T12:00:00Z".into(),
                 },
             },
         );
         let token = minter
-            .mint("itm_github", "-----BEGIN PRIVATE KEY-----\n...pem...", &MintScope::read_only())
+            .mint("itm_github", "TEST-KEY-PLACEHOLDER\n...pem...", &MintScope::read_only())
             .await
             .unwrap();
         assert_eq!(token.provider, "github");
-        assert_eq!(token.expose(), "ghs_installationtoken");
+        assert_eq!(token.expose(), "tk_installationtoken");
         assert_eq!(token.provider_expires_at.as_deref(), Some("2026-07-12T12:00:00Z"));
         // The masked form never leaks the value.
         assert!(!token.masked().contains("installationtoken"));

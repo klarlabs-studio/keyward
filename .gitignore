@@ -2,3 +2,6 @@
 **/*.rs.bk
 Cargo.lock.orig
 .DS_Store
+# nox scan cache — keep the baseline (accepted false positives), ignore the rest
+.nox/*
+!.nox/baseline.json

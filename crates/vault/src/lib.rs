@@ -189,7 +189,7 @@ mod tests {
             bound_origins: vec!["github.com".into()],
             mintable: true,
             provider: Some("github".into()),
-            secret: "ghp_supersecret".into(),
+            secret: "tk_supersecret".into(),
         }]
     }
 
@@ -199,7 +199,7 @@ mod tests {
         let sealed = seal(&items, b"correct horse battery staple").unwrap();
         let opened = open(&sealed, b"correct horse battery staple").unwrap();
         assert_eq!(opened.len(), 1);
-        assert_eq!(opened[0].secret, "ghp_supersecret");
+        assert_eq!(opened[0].secret, "tk_supersecret");
     }
 
     #[test]

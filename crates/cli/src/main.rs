@@ -26,10 +26,23 @@ fn vault_path() -> PathBuf {
 }
 
 fn master() -> Vec<u8> {
+    // Prefer a file (PROCTOR_MASTER_FILE) so the master isn't exposed via /proc.
+    if let Ok(path) = std::env::var("PROCTOR_MASTER_FILE") {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => return s.trim_end_matches(['\n', '\r']).as_bytes().to_vec(),
+            Err(e) => {
+                eprintln!("error: cannot read PROCTOR_MASTER_FILE {path}: {e}");
+                exit(2);
+            }
+        }
+    }
     match std::env::var("PROCTOR_MASTER") {
-        Ok(m) if !m.is_empty() => m.into_bytes(),
+        Ok(m) if !m.is_empty() => {
+            eprintln!("note: PROCTOR_MASTER via env is readable via /proc; prefer PROCTOR_MASTER_FILE.");
+            m.into_bytes()
+        }
         _ => {
-            eprintln!("error: set PROCTOR_MASTER to your master secret.");
+            eprintln!("error: set PROCTOR_MASTER_FILE (preferred) or PROCTOR_MASTER.");
             exit(2);
         }
     }

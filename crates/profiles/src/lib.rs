@@ -141,6 +141,31 @@ impl Profile {
     }
 }
 
+/// Refuse a profile file that is group- or world-writable (an attacker with
+/// write access could authorize shells / wide commands). Unix-only; a no-op
+/// elsewhere.
+#[cfg(unix)]
+fn reject_if_writable(path: &Path) -> Result<(), ProfileError> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(path).map_err(|e| ProfileError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let mode = meta.permissions().mode();
+    if mode & 0o022 != 0 {
+        return Err(ProfileError::Invalid {
+            id: path.display().to_string(),
+            reason: format!("profile file is group/world-writable (mode {:o}); tighten to owner-only (chmod go-w)", mode & 0o777),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reject_if_writable(_path: &Path) -> Result<(), ProfileError> {
+    Ok(())
+}
+
 /// Programs that can execute arbitrary further commands, so argv risk patterns
 /// can't see the real work (e.g. `sh -c '…'`). Authorizing one in a profile
 /// effectively disables command-binding — the run surface flags it.
@@ -179,6 +204,9 @@ impl Registry {
             .collect();
         paths.sort();
         for path in paths {
+            // A writable profile file is code-equivalent trust (it can authorize
+            // shells or wide commands) — refuse group/world-writable ones.
+            reject_if_writable(&path)?;
             let text = std::fs::read_to_string(&path).map_err(|e| ProfileError::Io {
                 path: path.display().to_string(),
                 source: e,
@@ -308,6 +336,20 @@ mod tests {
     fn missing_dir_is_empty_not_error() {
         let reg = Registry::load_dir(Path::new("/no/such/proctor/dir")).unwrap();
         assert!(reg.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn world_writable_profile_is_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("proctor-perm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("evil.toml");
+        std::fs::write(&f, "id=\"evil\"\nenv_var=\"T\"\n").unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(Registry::load_dir(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

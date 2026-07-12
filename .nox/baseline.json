@@ -1,0 +1,93 @@
+{
+  "schema_version": "1.0.0",
+  "entries": [
+    {
+      "fingerprint": "7200fed41240905473bbee50d29c3c39991376aeffb38b905eb7a18d19af9466",
+      "rule_id": "SEC-446",
+      "file_path": "docs/architecture/ADR-0002-scaling-credential-use.md",
+      "severity": "high",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "cb0230219dcc7d6103575d00f404cdb4686d5f323c1b60d57137250c91d764de",
+      "rule_id": "SEC-446",
+      "file_path": "docs/architecture/ADR-0002-scaling-credential-use.md",
+      "severity": "high",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "161ed4bb85dfa7ca1fbdf0beeb85412968f5aad01e2593cf979a751bc9c9e139",
+      "rule_id": "SEC-446",
+      "file_path": "docs/architecture/ADR-0002-scaling-credential-use.md",
+      "severity": "high",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "a163338ea664e43bc3ab7719f9d9e0eef0a2fe44c64d9e001fc3d32b27c1e955",
+      "rule_id": "SEC-446",
+      "file_path": "docs/architecture/ADR-0002-scaling-credential-use.md",
+      "severity": "high",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "cd65351c10962a76f5af5579af98629f87e854406522d854571d9f622ee05c0c",
+      "rule_id": "SEC-446",
+      "file_path": "docs/architecture/ADR-0002-scaling-credential-use.md",
+      "severity": "high",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "c40852aaf260a300575b7f53c1ef62122513fc0a925eaa2a07a258d747b8830e",
+      "rule_id": "SEC-510",
+      "file_path": "docs/architecture/ADR-0002-scaling-credential-use.md",
+      "severity": "high",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "c076dd6149be8dbd958554f792aad9e233df36a541b3b265d2b3465fa77d2bf3",
+      "rule_id": "SEC-163",
+      "file_path": "crates/mcp/src/main.rs",
+      "severity": "medium",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "2263544526199cccd754d661c2ffd75a3b5230b9ae3b5569ae9b27d1531e380a",
+      "rule_id": "SEC-163",
+      "file_path": "crates/mint/src/exchange.rs",
+      "severity": "medium",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "44fb98d0cb900c6a1304d190ea6233d7cd47d5068416051e8c8d3a47dea69f27",
+      "rule_id": "SEC-163",
+      "file_path": "crates/mint/src/exchange.rs",
+      "severity": "medium",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "2d1bfeef161b09edfd4457e2ca2150ff048ab77616d9a3cdce13cb6cc0604b89",
+      "rule_id": "SEC-163",
+      "file_path": "crates/mint/src/exchange.rs",
+      "severity": "medium",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    },
+    {
+      "fingerprint": "39c5ec4f92a5b3d37b82acf1208521737e42d86a051db7eea0e98f45c79d66ef",
+      "rule_id": "SEC-163",
+      "file_path": "crates/mint/src/exchange.rs",
+      "severity": "medium",
+      "reason": "Verified false positives: ADR-0002 source-list URLs matched as Cloudflare/AWS keys; RFC 8693 URN constants (urn:ietf:params:oauth:*) and an audit format string matched as high-entropy secrets. No real credentials.",
+      "created_at": "2026-07-12T14:14:35.797612Z"
+    }
+  ]
+}

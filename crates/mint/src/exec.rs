@@ -134,6 +134,15 @@ impl<H: HttpClient> GitHubExecutor<H> {
 #[async_trait::async_trait]
 impl<H: HttpClient> Executor for GitHubExecutor<H> {
     async fn perform(&self, bearer: &str, action: &ExecAction) -> Result<ExecResult, MintError> {
+        // Origin must be one this executor actually serves — so origin-binding
+        // ties the credential to the request *destination*, not just a label.
+        let host = action.target.trim().to_lowercase();
+        if host != "github.com" && !host.ends_with(".github.com") {
+            return Err(MintError::Provider(format!(
+                "origin '{}' is not served by the GitHub executor",
+                action.target
+            )));
+        }
         match action.kind {
             ExecKind::Read => {
                 let url = format!("{}/installation/repositories", self.base_url);
@@ -258,7 +267,7 @@ impl HttpClient for ReqwestClient {
 mod tests {
     use super::*;
 
-    const BEARER: &str = "ghp_secret_token_from_vault";
+    const BEARER: &str = "tk_secret_token_from_vault";
 
     struct MockHttp {
         get_response: serde_json::Value,

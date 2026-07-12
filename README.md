@@ -1,5 +1,7 @@
 # Proctor
 
+![security grade A](docs/security/badge.svg)
+
 **The credential manager that's as polished as 1Password, as open as Bitwarden, and as private as you want it — because you decide where your vault lives.**
 
 Proctor is an **open-source, B2C credential manager** (passwords + passkeys + TOTP + email aliases + identities) built to close the two gaps the market leaves open:

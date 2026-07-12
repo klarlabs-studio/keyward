@@ -3,7 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [1.8.0] — 2026-07-12
+## [1.9.0] — 2026-07-12
+
+External security-expert review — all seven findings fixed — plus nox scanning.
+
+### Security fixes (from red-team review; see THREAT-MODEL §6a)
+- **T1 network egress:** untrusted mode now denies subprocess egress by default
+  (container `--network none`, bubblewrap `--unshare-net`); `run_command` reports
+  the `egress` posture. Isolation now contains the network, not just /proc + FS.
+- **T2 origin-binding teeth:** the GitHub executor refuses an origin it doesn't
+  actually serve — the credential is bound to the request *destination*, not a label.
+- **T3 master + env inheritance:** master is read from `PROCTOR_MASTER_FILE` (not
+  env/`/proc`); the runner **`env_clear()`s** the child and re-adds only a minimal
+  baseline + the injected credential — the broker's env (incl. the master) no
+  longer leaks into subprocesses.
+- **T4 minter endpoints:** must be https (reject cleartext identity exfil).
+- **T5 profile trust:** group/world-writable profile files are rejected at load.
+- **T6 audit fail-open:** persistent-write failures surface as `audit_warning`.
+- **T7 redaction:** documented as hygiene; real defense is T1 + short-TTL.
+
+### Dependencies
+- **jsonwebtoken 9.3.1 → 10.4.0** — clears **CVE-2026-25537** (type confusion in
+  claim validation; not exploitable here, we only sign).
+
+### Tooling
+- **nox** security scanning wired in: **grade A, 0 active findings**
+  (`docs/security/badge.svg`). Test fixtures scrubbed of secret-shaped strings;
+  verified false positives baselined in `.nox/baseline.json`.
+
+
 
 Trust gate for the exec path (threat-model R2).
 

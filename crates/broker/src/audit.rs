@@ -22,6 +22,8 @@ pub struct AuditLog {
     entries: Vec<AuditEntry>,
     /// Optional append-only sink: each entry is also written as a JSON line.
     file: Option<std::path::PathBuf>,
+    /// Set if a persistent-sink write ever failed (surfaced, not swallowed).
+    write_failed: bool,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -53,7 +55,14 @@ impl AuditLog {
         AuditLog {
             entries: Vec::new(),
             file: Some(path),
+            write_failed: false,
         }
+    }
+
+    /// True if a persistent-sink write has failed (the trail on disk is
+    /// incomplete). Callers should surface this on security-relevant decisions.
+    pub fn write_failed(&self) -> bool {
+        self.write_failed
     }
 
     pub fn append(&mut self, item_id: &str, origin: &str, verb: &str, decision: &str) {
@@ -80,7 +89,10 @@ impl AuditLog {
                     Ok(mut f) => {
                         let _ = writeln!(f, "{line}");
                     }
-                    Err(e) => eprintln!("proctor: audit append failed: {e}"),
+                    Err(e) => {
+                        self.write_failed = true;
+                        eprintln!("proctor: audit append failed: {e}");
+                    }
                 }
             }
         }

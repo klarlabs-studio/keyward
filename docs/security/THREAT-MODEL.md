@@ -135,6 +135,30 @@ result or a scoped handle, never a value.
 6. ✅ **Done (v1.8.0):** `PROCTOR_TRUST=untrusted` refuses `run_command` when
    `isolation=none` — the config gate for untrusted contexts.
 
+## 6a. External expert review — findings & remediation (v1.9.0)
+
+A red-team review surfaced seven issues beyond the self-assessment; all are fixed:
+
+| # | Finding | Fix (v1.9.0) |
+|---|---|---|
+| T1 | Injected credential exfiltratable via subprocess **network egress** (isolation contains /proc + FS, not network; container default was `bridge`) | Untrusted mode now defaults egress to **none** (`--network none` / bwrap `--unshare-net`); response reports `egress` |
+| T2 | Origin-binding was a **label check** — the GitHub executor called a fixed endpoint regardless of origin | Executor now **refuses an origin it does not serve** (destination-bound) |
+| T3 | `PROCTOR_MASTER` in env (readable via /proc) **and inherited by every `run_command` child** | Master read from `PROCTOR_MASTER_FILE`; the runner **`env_clear()`s** and re-adds only a minimal baseline + injected creds — the broker's env never reaches children |
+| T4 | Token-exchange minter POSTs the held identity to a configured endpoint (identity-exfil vector) | Endpoints must be **https**; endpoint logged |
+| T5 | Write access to `$PROCTOR_PROFILES` = command-binding bypass | **Group/world-writable profile files are rejected** at load |
+| T6 | Audit write was **fail-open and silent** | Write failures set a flag surfaced as `audit_warning` in responses |
+| T7 | Redaction defeated by transformation | Documented as hygiene; real defense is T1 egress control + short-TTL |
+
+## 6b. Automated scanning — nox (SCA + secrets)
+
+`nox` is wired in. Current status: **grade A, 0 active findings** (see
+`docs/security/badge.svg`). It caught one real dependency vuln —
+**jsonwebtoken < 10.3.0 (CVE-2026-25537**, type-confusion in claim validation;
+not exploitable here since Proctor only *signs*, never validates) — now updated to
+10.4.0. Verified false positives (test fixtures cleaned; ADR source-list URLs and
+RFC 8693 URN constants) are recorded in `.nox/baseline.json` so only *new*
+findings alert.
+
 ## 7. Reviewer checklist
 
 - [ ] Confirm no allow path can emit plaintext (grep the response builders).

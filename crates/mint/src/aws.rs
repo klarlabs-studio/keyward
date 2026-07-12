@@ -137,7 +137,7 @@ impl RawHttp for ReqwestRawHttp {
 mod tests {
     use super::*;
 
-    const STS_XML: &str = r#"<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>ASIA_EXAMPLE</AccessKeyId><SecretAccessKey>secret/key/value</SecretAccessKey><SessionToken>FwoGZXIvYXdz_session</SessionToken><Expiration>2026-07-12T12:00:00Z</Expiration></Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>"#;
+    const STS_XML: &str = r#"<AssumeRoleWithWebIdentityResponse><AssumeRoleWithWebIdentityResult><Credentials><AccessKeyId>TKID_EXAMPLE</AccessKeyId><SecretAccessKey>secret/key/value</SecretAccessKey><SessionToken>FwoGZXIvYXdz_session</SessionToken><Expiration>2026-07-12T12:00:00Z</Expiration></Credentials></AssumeRoleWithWebIdentityResult></AssumeRoleWithWebIdentityResponse>"#;
 
     struct MockRaw;
     #[async_trait::async_trait]
@@ -157,11 +157,11 @@ mod tests {
         assert_eq!(t.provider, "aws-sts");
         // The value is JSON composing into an env_map (AWS_* env vars).
         let v: serde_json::Value = serde_json::from_str(t.expose()).unwrap();
-        assert_eq!(v["access_key_id"], "ASIA_EXAMPLE");
+        assert_eq!(v["access_key_id"], "TKID_EXAMPLE");
         assert_eq!(v["secret_access_key"], "secret/key/value");
         assert_eq!(v["session_token"], "FwoGZXIvYXdz_session");
         assert_eq!(t.provider_expires_at.as_deref(), Some("2026-07-12T12:00:00Z"));
-        assert!(!t.masked().contains("ASIA_EXAMPLE"));
+        assert!(!t.masked().contains("TKID_EXAMPLE"));
     }
 
     #[test]

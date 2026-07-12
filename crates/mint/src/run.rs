@@ -44,10 +44,11 @@ pub enum Isolation {
     /// NOT safe for untrusted-content-driven autonomy.
     None,
     /// Linux user/pid/mount namespaces via bubblewrap (`bwrap`); remounts /proc.
-    Bubblewrap,
+    /// `deny_net` adds `--unshare-net` to cut the child's network egress.
+    Bubblewrap { deny_net: bool },
     /// A container runtime (`docker`/`podman`): separate /proc + filesystem, torn
     /// down after (`--rm`). The credential is passed with `--env NAME` (value from
-    /// the runtime's own env), never in argv.
+    /// the runtime's own env), never in argv. `network` = "none" denies egress.
     Container { runtime: String, image: String, network: String },
 }
 
@@ -65,8 +66,19 @@ impl Isolation {
     pub fn label(&self) -> String {
         match self {
             Isolation::None => "none".into(),
-            Isolation::Bubblewrap => "bwrap".into(),
+            Isolation::Bubblewrap { deny_net } => {
+                if *deny_net { "bwrap(no-net)".into() } else { "bwrap".into() }
+            }
             Isolation::Container { runtime, image, .. } => format!("{runtime}:{image}"),
+        }
+    }
+
+    /// The network egress posture of the spawned process (for visibility).
+    pub fn egress(&self) -> &str {
+        match self {
+            Isolation::None => "host (unisolated)",
+            Isolation::Bubblewrap { deny_net } => if *deny_net { "none" } else { "host" },
+            Isolation::Container { network, .. } => network,
         }
     }
 
@@ -79,14 +91,18 @@ impl Isolation {
                 args: args.to_vec(),
                 env: env.clone(),
             },
-            Isolation::Bubblewrap => {
+            Isolation::Bubblewrap { deny_net } => {
                 let mut a: Vec<String> = vec![
                     "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts",
-                    "--proc", "/proc", "--dev", "/dev", "--ro-bind", "/", "/", "--",
+                    "--proc", "/proc", "--dev", "/dev", "--ro-bind", "/", "/",
                 ]
                 .into_iter()
                 .map(String::from)
                 .collect();
+                if *deny_net {
+                    a.push("--unshare-net".into()); // cut network egress
+                }
+                a.push("--".into());
                 a.push(program.to_string());
                 a.extend(args.iter().cloned());
                 Plan { program: "bwrap".into(), args: a, env: env.clone() }
@@ -129,6 +145,15 @@ pub fn run_with_env(
 ) -> std::io::Result<RunResult> {
     let mut cmd = Command::new(program);
     cmd.args(args);
+    // Start from a CLEAN environment — never inherit the broker's own env
+    // (which holds PROCTOR_MASTER, endpoints, other secrets). Re-add only a
+    // minimal safe baseline, then the injected credential(s).
+    cmd.env_clear();
+    for key in ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "TZ"] {
+        if let Ok(v) = std::env::var(key) {
+            cmd.env(key, v);
+        }
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -208,13 +233,23 @@ mod tests {
     }
 
     #[test]
-    fn bubblewrap_remounts_proc_and_keeps_secret_out_of_argv() {
-        let plan = Isolation::Bubblewrap.wrap("aws", &["s3".into()], &secret_env());
+    fn bubblewrap_remounts_proc_cuts_net_and_keeps_secret_out_of_argv() {
+        let plan = Isolation::Bubblewrap { deny_net: true }.wrap("aws", &["s3".into()], &secret_env());
         assert_eq!(plan.program, "bwrap");
         let argv = plan.args.join(" ");
         assert!(argv.contains("--proc /proc"));
+        assert!(argv.contains("--unshare-net")); // egress cut
         assert!(argv.contains("-- aws s3"));
         assert!(!argv.contains("supersecret"));
+    }
+
+    #[test]
+    fn env_baseline_excludes_broker_secrets() {
+        // The child gets PATH etc. + injected creds, but NOT arbitrary parent env.
+        std::env::set_var("PROCTOR_TEST_SENTINEL", "should_not_be_inherited");
+        let r = run_with_env("sh", &["-c".into(), "echo [${PROCTOR_TEST_SENTINEL:-absent}]".into()], &BTreeMap::new()).unwrap();
+        assert!(r.stdout.contains("[absent]"), "parent env leaked to child: {}", r.stdout);
+        std::env::remove_var("PROCTOR_TEST_SENTINEL");
     }
 
     #[test]
