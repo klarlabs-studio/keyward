@@ -1,0 +1,24 @@
+[package]
+name = "proctor-mint"
+description = "Proctor credential minting — mint short-lived, narrowly-scoped tokens instead of handing out durable secrets."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zeroize = "1"
+thiserror = "1"
+jsonwebtoken = { version = "9", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+
+[features]
+default = ["net"]
+# Real RS256 JWT signing (jsonwebtoken) + real HTTP (reqwest). Off → mock-only,
+# fully offline. The MCP server enables this for live minting.
+net = ["dep:jsonwebtoken", "dep:reqwest"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
