@@ -108,11 +108,15 @@ executes as a **draft pull request** (`draft: true` — a reviewable artifact, n
 a merge) via a `pull_requests:write`-scoped credential. The never-unattended
 commit is never performed.
 
+As of **v0.5.0**, operation parameters flow from the tool through to the executor
+(`use_credential`'s `params` → `ExecAction`), so the GitHub draft-PR write is fully
+parameterized (`owner/repo/head/base/title`) — the POST is real code, still
+exercised offline via mock.
+
 **Not yet built:** OAuth Token Exchange (RFC 8693) / cloud STS minters,
-`elicitation`-based step-up approval, real PR parameters from tool args (today the
-GitHub write needs owner/repo/head/base/title; the mock demonstrates the flow),
-unattended-policy pre-authorization + out-of-band alerts, anomaly detection, and a
-**formal security review before any real use**.
+`elicitation`-based step-up approval, unattended-policy pre-authorization +
+out-of-band alerts, anomaly detection, and a **formal security review before any
+real use**.
 
 ## Consequences
 

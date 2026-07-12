@@ -88,19 +88,25 @@ impl Executor for MockExecutor {
                 ),
                 data: serde_json::json!({ "mock": true, "repositories": ["octo/demo"] }),
             }),
-            ExecKind::OpenPullRequest => Ok(ExecResult {
-                summary: format!(
-                    "opened (mock) a draft pull request on {} — a reviewable artifact, not a merge ({})",
-                    action.target,
-                    mask(bearer)
-                ),
-                data: serde_json::json!({
-                    "mock": true,
-                    "artifact": "pull_request",
-                    "url": "https://github.com/octo/demo/pull/1",
-                    "state": "open (draft, review required — not merged)"
-                }),
-            }),
+            ExecKind::OpenPullRequest => {
+                // Echo the threaded params so callers can see they flowed through.
+                let field = |k: &str| action.params.get(k).and_then(|v| v.as_str());
+                let title = field("title").unwrap_or("(no title)");
+                let repo = field("repo").unwrap_or("octo/demo");
+                Ok(ExecResult {
+                    summary: format!(
+                        "opened (mock) a draft pull request '{title}' on {repo} — a reviewable artifact, not a merge ({})",
+                        mask(bearer)
+                    ),
+                    data: serde_json::json!({
+                        "mock": true,
+                        "artifact": "pull_request",
+                        "title": title,
+                        "repo": repo,
+                        "state": "open (draft, review required — not merged)"
+                    }),
+                })
+            }
         }
     }
 
@@ -322,5 +328,18 @@ mod tests {
     async fn mock_executor_masks_the_credential() {
         let res = MockExecutor.perform(BEARER, &ExecAction::new(ExecKind::Read, "github.com")).await.unwrap();
         assert!(!res.summary.contains(BEARER));
+    }
+
+    #[tokio::test]
+    async fn mock_executor_echoes_pr_params() {
+        let action = ExecAction::with_params(
+            ExecKind::OpenPullRequest,
+            "github.com",
+            serde_json::json!({ "repo": "octo/infra", "title": "Bump deps" }),
+        );
+        let res = MockExecutor.perform(BEARER, &action).await.unwrap();
+        assert_eq!(res.data["title"], "Bump deps");
+        assert_eq!(res.data["repo"], "octo/infra");
+        assert!(res.summary.contains("Bump deps"));
     }
 }

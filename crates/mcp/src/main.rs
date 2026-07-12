@@ -84,6 +84,10 @@ struct UseCredentialArgs {
     /// Request the raw durable secret. Hard-denied by default.
     #[serde(default)]
     want_raw_secret: bool,
+    /// Operation parameters passed to the performed action, e.g. for
+    /// OpenPullRequest: { "owner", "repo", "head", "base", "title" }.
+    #[serde(default)]
+    params: serde_json::Value,
 }
 
 /// Which scope a minted token should carry for a given verb. Writes get a
@@ -144,7 +148,7 @@ impl ProctorServer {
     }
 
     #[tool(
-        description = "Request to USE a credential. Returns a scoped action/handle or a denial — never the plaintext secret. On an allowed mintable item, mints a fresh short-TTL scoped token held server-side. Enforces origin-binding (anti confused-deputy), propose-not-commit, and the never-unattended floor."
+        description = "Request to USE a credential. Returns a scoped action/handle or a denial — never the plaintext secret. On an allowed read/write the broker performs the action itself (secretless) using the vault token or a minted scoped token; `params` carries operation fields (e.g. OpenPullRequest: owner, repo, head, base, title). Enforces origin-binding (anti confused-deputy), propose-not-commit, and the never-unattended floor."
     )]
     async fn use_credential(
         &self,
@@ -174,12 +178,14 @@ impl ProctorServer {
                 scope: MintScope,
                 verb: ActionVerb,
                 origin: String,
+                params: serde_json::Value,
             },
             /// Use the durable token stored in the vault directly (mintable=false).
             UseStored {
                 base: Option<String>,
                 verb: ActionVerb,
                 origin: String,
+                params: serde_json::Value,
             },
         }
 
@@ -205,6 +211,7 @@ impl ProctorServer {
                             scope: scope_for(verb),
                             verb,
                             origin: action.target.0.clone(),
+                            params: args.params.clone(),
                         }
                     }
                     Primitive::Secretless => {
@@ -213,6 +220,7 @@ impl ProctorServer {
                             base,
                             verb,
                             origin: action.target.0.clone(),
+                            params: args.params.clone(),
                         }
                     }
                     Primitive::RawSecret => Next::Respond(json!({
@@ -242,7 +250,7 @@ impl ProctorServer {
         // Phase 2: mint outside the lock (network I/O), then store server-side.
         let out = match next {
             Next::Respond(v) => v,
-            Next::Mint { item_id, base, scope, verb, origin } => match base {
+            Next::Mint { item_id, base, scope, verb, origin, params } => match base {
                 None => json!({
                     "decision": "allow", "primitive": "minted",
                     "note": "decision allows minting, but no base secret is loaded (running without a vault). Load a vault (PROCTOR_VAULT/PROCTOR_MASTER) to mint."
@@ -253,7 +261,7 @@ impl ProctorServer {
                             // Secretless execution: use the minted token to perform the
                             // action ourselves and return only the sanitized result. The
                             // token never reaches the model.
-                            let exec_action = ExecAction::new(kind, origin);
+                            let exec_action = ExecAction::with_params(kind, origin, params);
                             match self.executor.perform(token.expose(), &exec_action).await {
                                 Ok(r) => json!({
                                     "decision": "allow",
@@ -291,14 +299,14 @@ impl ProctorServer {
             // Secretless: read the durable token from the vault and use it directly
             // (no minting, nothing fetched/created). The token performs the action
             // inside the broker and is never returned to the model.
-            Next::UseStored { base, verb, origin } => match base {
+            Next::UseStored { base, verb, origin, params } => match base {
                 None => json!({
                     "decision": "allow", "primitive": "secretless",
                     "note": "decision allows a secretless action, but no stored credential is loaded (running without a vault)."
                 }),
                 Some(secret) => {
                     if let Some(kind) = exec_kind_for(verb) {
-                        let exec_action = ExecAction::new(kind, origin);
+                        let exec_action = ExecAction::with_params(kind, origin, params);
                         match self.executor.perform(&secret, &exec_action).await {
                             Ok(r) => json!({
                                 "decision": "allow",
@@ -477,6 +485,7 @@ mod tests {
             verb: "Read".into(),
             unattended: true,
             want_raw_secret: false,
+            params: serde_json::Value::Null,
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         let s = body(&res);
@@ -517,6 +526,7 @@ mod tests {
             verb: "Read".into(),
             unattended: true,
             want_raw_secret: false,
+            params: serde_json::Value::Null,
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         let s = body(&res);
@@ -538,6 +548,7 @@ mod tests {
             verb: "MintReadToken".into(),
             unattended: true,
             want_raw_secret: false,
+            params: serde_json::Value::Null,
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         let s = body(&res);
@@ -556,6 +567,7 @@ mod tests {
             verb: "Read".into(),
             unattended: true,
             want_raw_secret: false,
+            params: serde_json::Value::Null,
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         assert!(body(&res).contains("origin mismatch"));
@@ -570,6 +582,7 @@ mod tests {
             verb: "ShipToProduction".into(),
             unattended: true,
             want_raw_secret: false,
+            params: serde_json::Value::Null,
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         let s = body(&res);
@@ -588,12 +601,15 @@ mod tests {
             verb: "OpenPullRequest".into(),
             unattended: true,
             want_raw_secret: false,
+            params: serde_json::json!({ "repo": "octo/infra", "title": "Automated fix" }),
         };
         let res = server.use_credential(Parameters(args)).await.unwrap();
         let s = body(&res);
         assert!(s.contains("secretless_exec"), "expected execution: {s}");
         assert!(s.contains("pull_request"), "expected a PR artifact: {s}");
         assert!(s.contains("not merged"), "must be a reviewable artifact, not a merge: {s}");
+        // The threaded params reached the executor.
+        assert!(s.contains("Automated fix"), "params did not flow through: {s}");
         assert!(!s.contains("SUPER_SECRET_BASE_PEM"));
     }
 }

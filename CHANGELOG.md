@@ -3,6 +3,26 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [0.5.0] — 2026-07-12
+
+Threads real operation parameters through the tool, making the GitHub write a
+genuine, parameterized action rather than a fixed demo.
+
+### Added
+- **`use_credential` accepts a `params` object** carried through to the performed
+  action — e.g. `OpenPullRequest`: `{ owner, repo, head, base, title }`. Verified
+  end-to-end (the PR title/repo reach the executor).
+- `ExecAction` params flow through both the minted and vault-read execution paths.
+
+### Changed
+- `GitHubExecutor::OpenPullRequest` now builds the draft PR from the supplied
+  params (the real POST is fully specified; still exercised offline via mock).
+- `MockExecutor` echoes the params so callers can confirm they flowed through.
+
+### Security invariants (tested)
+- Params flow to the executor while the credential still never appears in any
+  response.
+
 ## [0.4.0] — 2026-07-12
 
 Closes the **propose-not-commit** loop at runtime: an irreversible action is

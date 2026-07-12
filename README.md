@@ -39,7 +39,7 @@ crates/
 ```
 
 ```bash
-cargo test --workspace              # 31 tests: origin-binding, propose-not-commit exec, secretless no-leak, audit chain…
+cargo test --workspace              # 32 tests: origin-binding, propose-not-commit exec, secretless no-leak, audit chain…
 cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 
@@ -84,13 +84,15 @@ wrong origin and it's refused outright.
 
 ## Status
 
-**v0.4.0** closes the **propose-not-commit** loop: an unattended `ShipToProduction`
-is downgraded to `OpenPullRequest`, and that PR is performed as a reviewable draft
-— never a merge. On top of two credential-use models (vault-read *or* mint, per
-`mintable`), secretless read/write execution, the file-backed vault + CLI, the
-broker security model, and the vault-backed MCP server. 31 passing tests. Next:
-`elicitation`-based step-up through MCP, more executable operations, and the
-vault/sync surfaces. See the [CHANGELOG](CHANGELOG.md) and the PRD roadmap.
+**v0.5.0** threads real operation params (`use_credential`'s `params`) through to
+the performed action — the GitHub draft-PR write is now genuinely parameterized
+(`owner/repo/head/base/title`). On top of the closed **propose-not-commit** loop
+(unattended `ShipToProduction` → `OpenPullRequest` → reviewable draft), two
+credential-use models (vault-read *or* mint), secretless read/write execution, the
+file-backed vault + CLI, the broker security model, and the vault-backed MCP
+server. 32 passing tests. Next: `elicitation`-based step-up through MCP, more
+executable operations, and the vault/sync surfaces. See the
+[CHANGELOG](CHANGELOG.md) and the PRD roadmap.
 
 > A **formal security review is required before any real use.** GitHub network
 > paths are real code, exercised offline via injected mocks.
