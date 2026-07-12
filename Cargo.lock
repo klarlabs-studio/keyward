@@ -905,6 +905,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "proctor-broker",
+ "proctor-mint",
+ "proctor-vault",
  "rmcp",
  "serde",
  "serde_json",
