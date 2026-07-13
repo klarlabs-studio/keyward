@@ -42,6 +42,16 @@ domain is pure; all I/O lives behind ports, implemented by adapters:
 `passbook-cli` (filesystem `VaultRepository`, `SystemClock`, and the native
 bridge), `passbook-wasm` + `app/` (browser), and the `extension/`.
 
+### Sync (zero-knowledge cloud sync)
+A **supporting context** for the Passbook context. `proctor-sync` is the domain
+(the `SyncStore` port + `MemoryStore`/`FileStore` adapters + optimistic-concurrency
+rule); `proctor-sync-server` is a tiny HTTP adapter exposing it. The server stores
+an **opaque** sealed-vault blob per account and never sees plaintext, the master
+password, or the Secret Key — a stolen server yields only ciphertext (the 2SKD
+promise, extended to the cloud). It shares no domain model with Passbook: the blob
+is `proctor-passbook`'s `SealedVault` bytes, but to Sync it is just bytes
+(Published Language = "an opaque versioned blob").
+
 ### Credential Broker (developer wedge — Phase B)
 The AI-native broker: `proctor-vault` (its store), `proctor-broker` (capabilities,
 origin-binding, propose-not-commit, audit), `proctor-mint` (short-lived tokens),

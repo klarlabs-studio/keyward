@@ -49,6 +49,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ascii"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d92bec98840b8f03a5ff5413de5293bfcd8bf96467cf5452609f939ec6f5de16"
+
+[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -193,6 +199,12 @@ dependencies = [
  "serde",
  "windows-link",
 ]
+
+[[package]]
+name = "chunked_transfer"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
 
 [[package]]
 name = "cipher"
@@ -550,6 +562,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "httpdate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
 name = "hyper"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -889,7 +907,7 @@ checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
 name = "passbook-cli"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "proctor-passbook",
  "serde_json",
@@ -897,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-wasm"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "getrandom 0.2.17",
  "proctor-passbook",
@@ -992,7 +1010,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-broker"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "hmac",
  "serde",
@@ -1003,7 +1021,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-cli"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "proctor-broker",
  "proctor-profiles",
@@ -1012,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-crypto"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1023,7 +1041,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mcp"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1041,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mint"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -1056,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-passbook"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "base32",
  "chacha20poly1305",
@@ -1075,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-profiles"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "regex",
  "serde",
@@ -1085,8 +1103,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "proctor-sync"
+version = "1.18.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "proctor-sync-server"
+version = "1.18.0"
+dependencies = [
+ "proctor-sync",
+ "tiny_http",
+]
+
+[[package]]
 name = "proctor-vault"
-version = "1.17.0"
+version = "1.18.0"
 dependencies = [
  "proctor-crypto",
  "serde",
@@ -1733,6 +1768,18 @@ checksum = "c431b87111666e491a90baa837f914fb45cd5dc3c268591b0220ff5057f2085f"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tiny_http"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "389915df6413a2e74fb181895f933386023c71110878cd0825588928e64cdc82"
+dependencies = [
+ "ascii",
+ "chunked_transfer",
+ "httpdate",
+ "log",
 ]
 
 [[package]]

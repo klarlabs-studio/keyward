@@ -53,6 +53,10 @@ crates/
                             runs client-side in the browser
   mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
   cli/      proctor         manage the vault (init/add/list) + list profiles + demo
+  sync/     proctor-sync    zero-knowledge sync domain: versioned push/pull of an
+                            opaque sealed blob (SyncStore port + Memory/File adapters)
+  sync-server/ proctor-sync-server  tiny HTTP server for E2E sync — stores only
+                            ciphertext, never sees the master password or Secret Key
 ```
 
 The consumer product (**Phase A**, the 1Password equivalent) also ships:

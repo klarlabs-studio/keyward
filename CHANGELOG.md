@@ -3,6 +3,30 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.19.0] — 2026-07-13
+
+**Zero-knowledge cloud sync.** The PRD's flagship: choose where your vault lives.
+The server stores an *opaque* sealed-vault blob per account and never sees the
+master password, the device Secret Key, or the decrypted entries — a stolen
+server yields only ciphertext (the 2SKD promise, extended to the cloud). A new
+**Sync** bounded context.
+
+### Added — `proctor-sync` (domain)
+- `SyncStore` port + `MemoryStore`/`FileStore` adapters. Optimistic concurrency:
+  a client presents the version it last saw; a stale push is a `Conflict` telling
+  it to pull first. The store never interprets a blob (path-sanitized accounts).
+  6 tests (round-trip, conflict, first-push, path-traversal safety).
+
+### Added — `proctor-sync-server`
+- A tiny HTTP server (`GET`/`PUT /v1/vault`, bearer-token → account, `If-Match`
+  versioning, `X-Vault-Version`). The blob is never logged or inspected.
+- Verified headless with curl against a **real** 2SKD-sealed vault: first push →
+  v1, pull → byte-identical, correct-version push → v2, stale push → 409, no token
+  → 401, and the plaintext password is **absent** from server storage.
+
+### Changed
+- `docs/architecture/context-map.md` gains the Sync supporting context.
+
 ## [1.18.0] — 2026-07-13
 
 **DDD / hexagonal alignment.** A structural pass that makes the Domain-Driven
