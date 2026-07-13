@@ -48,6 +48,24 @@ export function vaultExists(): boolean {
   return localStorage.getItem(STORAGE_KEY) !== null;
 }
 
+/**
+ * The raw sealed vault blob exactly as persisted (the opaque `SealedVault` JSON
+ * string), or null if none exists. Used by cloud sync to move the ciphertext
+ * without re-sealing it.
+ */
+export function getRawVault(): string | null {
+  return localStorage.getItem(STORAGE_KEY);
+}
+
+/**
+ * Overwrite the local sealed vault with a raw blob (e.g. one pulled from the
+ * sync server). The blob is opaque ciphertext — callers must re-open it with the
+ * master password + Secret Key to use it.
+ */
+export function setRawVault(s: string): void {
+  localStorage.setItem(STORAGE_KEY, s);
+}
+
 /** Remove the local sealed vault AND the device Secret Key (full reset). */
 export function destroyVault(): void {
   localStorage.removeItem(STORAGE_KEY);

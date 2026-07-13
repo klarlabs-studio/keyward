@@ -55,9 +55,14 @@ crates/
   cli/      proctor         manage the vault (init/add/list) + list profiles + demo
   sync/     proctor-sync    zero-knowledge sync domain: versioned push/pull of an
                             opaque sealed blob (SyncStore port + Memory/File adapters)
-  sync-server/ proctor-sync-server  tiny HTTP server for E2E sync — stores only
-                            ciphertext, never sees the master password or Secret Key
+  sync-server/ proctor-sync-server  tiny HTTP server for E2E sync — accounts +
+                            per-device tokens + CORS; stores only ciphertext
 ```
+
+The **web vault** (`app/`) can turn on **cloud sync** (register an account, add
+devices, auto-push on every change with conflict handling) and also runs as a
+native **desktop app** via a Tauri v2 shell (`app/src-tauri/`, `npm run tauri dev`)
+that reuses the exact same Vue frontend.
 
 The consumer product (**Phase A**, the 1Password equivalent) also ships:
 

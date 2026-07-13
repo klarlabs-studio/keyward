@@ -15,6 +15,10 @@
 //!
 //! [`Conflict`]: SyncError::Conflict
 
+pub mod accounts;
+
+pub use accounts::{Account, AccountStore, FileAccountStore, MemoryAccountStore};
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

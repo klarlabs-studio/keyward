@@ -3,6 +3,35 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.20.0] — 2026-07-13
+
+**Cloud sync, end to end — plus a desktop app.** Three surfaces built in parallel
+and integrated: accounts on the server, sync in the web vault, and a Tauri
+desktop shell. Verified live in a headless browser against the running server.
+
+### Added — accounts + per-device tokens + CORS (`proctor-sync` / `proctor-sync-server`)
+- `AccountStore` (Memory/File adapters): `register` issues an account + device
+  token; `add_device` mints another token for the SAME account; tokens resolve to
+  accounts. Endpoints `POST /v1/register`, `POST /v1/devices`; the vault endpoints
+  now authenticate by device token. CORS on every response (incl. preflight) so a
+  browser can call it. Blobs still never logged/inspected.
+
+### Added — cloud sync in the web vault (`app/`)
+- A `sync` client (`app/src/lib/sync.ts`) + store integration: enabling registers
+  an account and pushes the sealed blob; every reseal auto-pushes with `If-Match`;
+  a 409 conflict pulls remote + re-opens + toasts; unlock pulls-and-adopts remote
+  first. A **Sync dialog** (On-device ↔ Cloud, account/status, Sync now, Add a
+  device → shows a token to enter on the other device) and a "· cloud" pill.
+- Verified live: enable → `register` + `PUT v1`; a favourite toggle auto-pushed
+  `v2`; add-device issued a second token; the stored blob contained no plaintext.
+
+### Added — desktop app (`app/src-tauri/`)
+- A Tauri v2 shell wrapping the exact Vue frontend (its own detached Cargo
+  workspace, so the core build is unaffected). `npm run tauri dev` / `build`.
+- Note: its Linux GTK backend pulls the known gtk-rs 0.18 advisory set — accepted
+  and tracked (desktop shell only; not in the core crates or server). See
+  `app/src-tauri/README.md`.
+
 ## [1.19.0] — 2026-07-13
 
 **Zero-knowledge cloud sync.** The PRD's flagship: choose where your vault lives.

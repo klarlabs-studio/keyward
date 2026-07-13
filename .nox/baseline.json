@@ -304,6 +304,166 @@
       "severity": "medium",
       "reason": "False positive on nox's own baseline.json — a prior baseline entry's reason text contains the example host user@GitHub.com; not a real email in source.",
       "created_at": "2026-07-13T04:00:23.715974Z"
+    },
+    {
+      "fingerprint": "4c6c6657d09f41bf4948016943c5ea4f8d882dc3d462e525b17c7ff3215b9270",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "d4df0064983c6be21b56d083e38838717e90d8b7efc9db777867ad45d337ed89",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "8000c4d0a07df1f7584b384bbe6437ff767da9756d0583ae68dbaaf678951cc5",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "226f3df06161995085ada5cbb21c65c6a37da07a66039e82d6db322419bfb9b0",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "d46bf02d10cb0244bf89c37b0fc5d1c87c8ac8a41c892ec37a4085ab93064c4e",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "f2452a25a708d577be091341d05d0a94067d4ffbbb686dedc32713c1fbb6af4d",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "bdc027d840015d06e5a9443e1f2c5f5cc2b94bc349f28e0e2784b9a9207eab69",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "2e50a84639bf1cf21095c1802b2839081a3ba58c02bfd4f4ca7a490737da5904",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "41f0f25c81220078a34ed87345b5e6b94a258292adef1da4b493b8e74bd037f7",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "e53018bf6ca8806d9bfa4d2dd6ba8d339a6c179e6b1a863c8c4d6ef24045ac21",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "1733f8fd4e19070e9559a510c0fc2cece0fdaa222ec74e61088cd4a36ce0ab21",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "d6d5430c04a1fb95ad4d83d0475912fca8dbb805d95ae0cd85ade482f06d4e2e",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "e9ce9e8b8a3766e9ad3647a2c106db4a68d4741bd8cbbbe71a45fe3a72d2414f",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "27611f25b3bdccc6f6e042fad9ad4faf1452125e6cf734702b0645a488413a2c",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "3df0c105906b5b369eb3d7751eb73494826d74de9f1f8203f0e78d87c243638b",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "b1f2ac37780ce70423fbd07d478c34f6b58bcd40e96902b2bee5f504f6c72067",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "1099d3db7673287b34bd063d0a8d2f5acc7f3258829881144e01f19706417738",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "b3f82638b6787ee9a10c18ba8d75df3293fb3af6ded39970c33e6ff6c462e509",
+      "rule_id": "VULN-001",
+      "file_path": "app/src-tauri/Cargo.lock",
+      "severity": "medium",
+      "reason": "Accepted+tracked: gtk-rs 0.18 / unic / proc-macro-error advisory set (RUSTSEC-2024-0411..0420, 0370, 0429; 2025-0075..0100; GHSA-wrw7-89jp-8q8g) pulled ONLY transitively by Tauri v2's Linux GTK GUI backend, in the DETACHED app/src-tauri desktop shell (its own workspace, not built by the core product/server). All are unmaintained/unsound advisories, not remote-exploitable; not on the macOS runtime path (WebKit backend). No core crate (passbook/sync/crypto/broker) or the sync-server is affected. Revisit when Tauri bumps its gtk-rs pins.",
+      "created_at": "2026-07-13T04:54:28.877867Z"
+    },
+    {
+      "fingerprint": "81d133bd805dd3ebb40d0e45361202761937604a7436b7b6eeeec637c9c9c3e4",
+      "rule_id": "DATA-001",
+      "file_path": "app/src/components/SyncDialog.vue",
+      "severity": "medium",
+      "reason": "False positives: SyncDialog.vue email field placeholder 'you@example.com' and an accounts.rs unit-test email — neither is a real hardcoded PII value.",
+      "created_at": "2026-07-13T04:54:44.54835Z"
+    },
+    {
+      "fingerprint": "a195ca6ad833f918a7ff8df6c84751cd36d8ec01cda627528a455e78e92909ea",
+      "rule_id": "DATA-001",
+      "file_path": "crates/sync/src/accounts.rs",
+      "severity": "medium",
+      "reason": "False positives: SyncDialog.vue email field placeholder 'you@example.com' and an accounts.rs unit-test email — neither is a real hardcoded PII value.",
+      "created_at": "2026-07-13T04:54:44.54835Z"
     }
   ]
 }

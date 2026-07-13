@@ -1,7 +1,7 @@
 {
   "name": "proctor-passbook-app",
   "private": true,
-  "version": "1.19.0",
+  "version": "1.20.0",
   "type": "module",
   "description": "Proctor Passbook — web vault (Vue 3 + Vite), backed by the passbook-wasm crypto core.",
   "scripts": {
@@ -9,13 +9,15 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "tsx scripts/roundtrip.test.ts"
+    "test": "tsx scripts/roundtrip.test.ts",
+    "tauri": "tauri"
   },
   "dependencies": {
     "pinia": "^2.2.6",
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/node": "^22.20.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "tsx": "^4.23.0",

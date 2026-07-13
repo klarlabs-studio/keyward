@@ -11,6 +11,7 @@ const emit = defineEmits<{
   (e: 'view-kit'): void;
   (e: 'import'): void;
   (e: 'export'): void;
+  (e: 'sync'): void;
 }>();
 
 const placeholder = computed(() => `Search ${vault.counts.all} items…`);
@@ -40,7 +41,7 @@ function toggleTheme(): void {
     </label>
     <div class="spacer"></div>
     <div class="vault-pill">
-      <span class="dot"></span>Family vault · on-device
+      <span class="dot"></span>Family vault · {{ vault.syncEnabled ? 'cloud' : 'on-device' }}
       <span v-if="vault.secretKeyProtected" class="pill-2skd" title="Protected by a device Secret Key (2SKD)">· 2SKD</span>
     </div>
     <button
@@ -72,6 +73,17 @@ function toggleTheme(): void {
         <path d="M4 21h16" />
       </svg>
     </button>
+    <button
+      class="icon-btn"
+      :class="{ 'sync-on': vault.syncEnabled, 'sync-err': vault.syncStatus === 'error' }"
+      :title="vault.syncEnabled ? 'Cloud sync settings' : 'Set up cloud sync'"
+      aria-label="Sync settings"
+      @click="emit('sync')"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.5 19a5 5 0 0 0 .5-9.9A6 6 0 0 0 6.5 8 4.5 4.5 0 0 0 7 17h10.5Z" />
+      </svg>
+    </button>
     <button class="icon-btn" title="Lock vault" aria-label="Lock vault" @click="vault.lock()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="4" y="10" width="16" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
@@ -91,5 +103,11 @@ function toggleTheme(): void {
   color: var(--accent-ink);
   font-weight: 700;
   letter-spacing: 0.02em;
+}
+.icon-btn.sync-on {
+  color: var(--accent-ink);
+}
+.icon-btn.sync-err {
+  color: var(--weak);
 }
 </style>
