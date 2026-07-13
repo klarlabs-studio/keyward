@@ -388,6 +388,40 @@ export const useVaultStore = defineStore('vault', {
     },
 
     /**
+     * Link THIS device to an existing account with a device token from another
+     * device, then adopt that account's vault. Pulls the remote sealed blob,
+     * replaces the local one, and drops any local Secret Key so the unlock gate
+     * prompts for the account's Secret Key (the 2SKD "add this device" flow).
+     * Locks afterwards so the user re-unlocks against the adopted vault. Returns
+     * true on success.
+     */
+    async linkAccount(serverUrl: string, deviceToken: string): Promise<boolean> {
+      this.syncStatus = 'syncing' as SyncStatus;
+      try {
+        await sync.linkAccount(serverUrl, deviceToken);
+        this.syncEnabled = true;
+        const remote = await sync.pull();
+        if (remote) {
+          setRawVault(remote.blob);
+          this.lastSyncedVersion = remote.version;
+          // This device likely lacks the account's Secret Key — clear any local
+          // one so unlock() routes into the "enter your Secret Key" flow.
+          clearSecretKey();
+        }
+        this.syncStatus = 'synced';
+        this.lock();
+        toast('Device linked — unlock with your master password and Secret Key');
+        return true;
+      } catch (e) {
+        sync.disableSync();
+        this.syncEnabled = false;
+        this.syncStatus = 'error';
+        toast(e instanceof Error ? e.message : 'Could not link this device');
+        return false;
+      }
+    },
+
+    /**
      * Provision a second device token for this account (the "add a device"
      * flow). Returns the token to show the user, or null on failure.
      */

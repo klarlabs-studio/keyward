@@ -8,18 +8,40 @@
 //! doing something irreversible — defeated by the *propose-not-commit* floor.
 //!
 //! See `docs/architecture/ADR-0001-broker-security-model.md`.
+//!
+//! ## Ports & adapters (hexagonal)
+//!
+//! This crate is the domain core of the Credential Broker context. Its *driven*
+//! dependencies — the things the core reaches out to — are inverted behind
+//! traits in [`ports`], so the domain never names a file or `SystemTime`:
+//!
+//! - [`ports::Clock`] — wall-clock time (also threaded in as the `now` argument
+//!   to [`Broker::request_use`]); the default adapter is [`adapters::SystemClock`].
+//! - [`ports::AuditSink`] — the durable destination of the hash-chained audit
+//!   trail; the chain construction stays domain logic in [`audit::AuditLog`],
+//!   while persistence is the [`adapters::FileAuditSink`] adapter (wired by
+//!   `AuditLog::with_file`, so behaviour is unchanged).
+//!
+//! The **Minter**/**Executor** are *named* here (the [`Primitive::Minted`]
+//! outcome) but owned as ports by `proctor-mint`; the executing host wires the
+//! concrete minter. See `docs/architecture/context-map.md` and
+//! `ADR-0003-ddd-hexagonal-structure.md`.
 
 pub mod action;
+pub mod adapters;
 pub mod audit;
 pub mod broker;
 pub mod capability;
 pub mod policy;
+pub mod ports;
 
 pub use action::{Action, ActionVerb, Consequence, Origin};
+pub use adapters::{FileAuditSink, SystemClock};
 pub use audit::{AuditEntry, AuditLog};
 pub use broker::{Broker, Denied, Grant, ItemRef};
 pub use capability::{Capability, Primitive};
 pub use policy::{Decision, Mode, Policy};
+pub use ports::{AuditSink, Clock};
 
 #[cfg(test)]
 mod tests {

@@ -4,7 +4,15 @@
 //! With a signing key (see [`AuditLog::with_file_signed`]), the chain is HMAC-ed
 //! rather than plain-SHA256, so an attacker with only filesystem write (no key)
 //! cannot forge a valid chain — tamper-*resistant*, not just tamper-evident.
+//!
+//! The chain construction here is domain logic; *where* each serialized line is
+//! durably persisted is a driven [`AuditSink`](crate::ports::AuditSink) port.
+//! The `with_file*` constructors wire the default
+//! [`FileAuditSink`](crate::adapters::FileAuditSink) adapter, so the public API
+//! and on-disk format are unchanged.
 
+use crate::adapters::FileAuditSink;
+use crate::ports::AuditSink;
 use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -27,8 +35,10 @@ pub struct AuditEntry {
 #[derive(Default)]
 pub struct AuditLog {
     entries: Vec<AuditEntry>,
-    /// Optional append-only sink: each entry is also written as a JSON line.
-    file: Option<std::path::PathBuf>,
+    /// Optional driven sink: each entry is also written to it as a JSON line.
+    /// The default adapter is a file (see [`AuditLog::with_file`]); any
+    /// [`AuditSink`] impl works.
+    sink: Option<Box<dyn AuditSink>>,
     /// Set if a persistent-sink write ever failed (surfaced, not swallowed).
     write_failed: bool,
     /// Optional HMAC key: when set, the chain is signed (forgery needs the key).
@@ -84,24 +94,28 @@ impl AuditLog {
         AuditLog::default()
     }
 
-    /// An audit log that also appends every entry to `path` as a JSON line.
+    /// An audit log that also appends every entry to `path` as a JSON line,
+    /// via the default [`FileAuditSink`] adapter.
     pub fn with_file(path: std::path::PathBuf) -> Self {
-        AuditLog {
-            entries: Vec::new(),
-            file: Some(path),
-            write_failed: false,
-            key: None,
-        }
+        AuditLog::with_sink(Box::new(FileAuditSink::new(path)), None)
     }
 
     /// Like [`AuditLog::with_file`], but the chain is HMAC-signed with `key` so
     /// forgery requires the key (tamper-resistant, not just tamper-evident).
     pub fn with_file_signed(path: std::path::PathBuf, key: Vec<u8>) -> Self {
+        AuditLog::with_sink(Box::new(FileAuditSink::new(path)), Some(key))
+    }
+
+    /// An audit log that persists every entry through an arbitrary [`AuditSink`]
+    /// adapter (a file, a socket, an object store…), optionally HMAC-signing the
+    /// chain with `key`. The `with_file*` constructors are thin wrappers over
+    /// this that inject the default file adapter.
+    pub fn with_sink(sink: Box<dyn AuditSink>, key: Option<Vec<u8>>) -> Self {
         AuditLog {
             entries: Vec::new(),
-            file: Some(path),
+            sink: Some(sink),
             write_failed: false,
-            key: Some(key),
+            key,
         }
     }
 
@@ -136,21 +150,11 @@ impl AuditLog {
             prev_hash: prev,
             hash,
         };
-        if let Some(path) = &self.file {
+        if let Some(sink) = &self.sink {
             if let Ok(line) = serde_json::to_string(&entry) {
-                use std::io::Write;
-                match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                {
-                    Ok(mut f) => {
-                        let _ = writeln!(f, "{line}");
-                    }
-                    Err(e) => {
-                        self.write_failed = true;
-                        eprintln!("proctor: audit append failed: {e}");
-                    }
+                if let Err(e) = sink.append_line(&line) {
+                    self.write_failed = true;
+                    eprintln!("proctor: audit append failed: {e}");
                 }
             }
         }

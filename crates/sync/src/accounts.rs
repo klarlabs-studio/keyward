@@ -11,6 +11,17 @@
 //! token is returned exactly once (at register / add-device) and never persisted.
 //! Devices can be listed and **revoked** (the lost-device story).
 //!
+//! Tokens may optionally **expire** (a `ttl_seconds` at mint time sets
+//! `expires_epoch = now + ttl`; omit it and the token never expires — the
+//! backward-compatible default). An expired token no longer authenticates:
+//! [`resolve_token`] takes the current time and returns `None` past expiry.
+//! A token can also be **rotated** ([`rotate_token`]) — the same device keeps
+//! its id, label, and expiry but gets a fresh secret, so the old one stops
+//! resolving (compromised-token recovery without re-pairing the device).
+//!
+//! [`resolve_token`]: AccountStore::resolve_token
+//! [`rotate_token`]: AccountStore::rotate_token
+//!
 //! Zero-knowledge is preserved: ids/tokens are random 128-bit hex unrelated to
 //! the master password or Secret Key, and this registry never touches the vault.
 //!
@@ -50,27 +61,46 @@ pub struct DeviceInfo {
     pub id: String,
     pub label: String,
     pub created_epoch: u64,
+    /// When this device's token expires (`None` = never expires).
+    pub expires_epoch: Option<u64>,
 }
 
 /// The driven port for accounts, per-device tokens, and device management.
 pub trait AccountStore {
     /// Register a new account (optional contact email) with its first device
-    /// (`label`, created at `now`). Returns the account id, one-time token, and
-    /// device id.
-    fn register(&self, email: Option<&str>, label: &str, now: u64) -> Result<Account, SyncError>;
+    /// (`label`, created at `now`). `ttl_seconds` sets an optional token
+    /// lifetime (`Some(ttl)` → expires at `now + ttl`; `None` → never expires).
+    /// Returns the account id, one-time token, and device id.
+    fn register(
+        &self,
+        email: Option<&str>,
+        label: &str,
+        now: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Result<Account, SyncError>;
 
     /// Mint an additional device for the account that `existing_token` belongs
-    /// to. `None` if the presented token is unknown.
+    /// to. `ttl_seconds` sets the new token's optional lifetime (see
+    /// [`register`]). `None` if the presented token is unknown or expired.
+    ///
+    /// [`register`]: AccountStore::register
     fn add_device(
         &self,
         existing_token: &str,
         label: &str,
         now: u64,
+        ttl_seconds: Option<u64>,
     ) -> Result<Option<Account>, SyncError>;
 
-    /// Resolve a device token to its account + device, or `None` if unknown or
-    /// revoked.
-    fn resolve_token(&self, token: &str) -> Result<Option<TokenIdentity>, SyncError>;
+    /// Resolve a device token to its account + device, or `None` if unknown,
+    /// revoked, or **expired** as of `now`.
+    fn resolve_token(&self, token: &str, now: u64) -> Result<Option<TokenIdentity>, SyncError>;
+
+    /// Rotate a device's token: mint a fresh secret for the SAME device (same
+    /// id, label, and expiry), so `old_token` stops resolving. Returns the new
+    /// [`Account`] (one-time token + unchanged device id), or `None` if
+    /// `old_token` is unknown or already expired as of `now`.
+    fn rotate_token(&self, old_token: &str, now: u64) -> Result<Option<Account>, SyncError>;
 
     /// List an account's devices (no secrets).
     fn list_devices(&self, account_id: &str) -> Result<Vec<DeviceInfo>, SyncError>;
@@ -93,13 +123,18 @@ fn token_hash(token: &str) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A stored device: its id, label, creation time, and the *hash* of its token.
+/// A stored device: its id, label, creation time, optional token expiry, and the
+/// *hash* of its token.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DeviceRecord {
     id: String,
     label: String,
     created_epoch: u64,
     token_hash: String,
+    /// Absolute epoch at which the token expires; `None` = never expires.
+    /// `#[serde(default)]` keeps pre-expiry `accounts.json` files loadable.
+    #[serde(default)]
+    expires_epoch: Option<u64>,
 }
 
 impl DeviceRecord {
@@ -108,7 +143,13 @@ impl DeviceRecord {
             id: self.id.clone(),
             label: self.label.clone(),
             created_epoch: self.created_epoch,
+            expires_epoch: self.expires_epoch,
         }
+    }
+
+    /// Whether this device's token is expired as of `now` (never, if no expiry).
+    fn is_expired(&self, now: u64) -> bool {
+        self.expires_epoch.is_some_and(|exp| exp < now)
     }
 }
 
@@ -126,7 +167,13 @@ struct Registry {
 }
 
 impl Registry {
-    fn new_device(&mut self, account_id: &str, label: &str, now: u64) -> Account {
+    fn new_device(
+        &mut self,
+        account_id: &str,
+        label: &str,
+        now: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Account {
         let device_token = random_hex_id();
         let device_id = random_hex_id();
         let record = DeviceRecord {
@@ -134,6 +181,7 @@ impl Registry {
             label: label.to_string(),
             created_epoch: now,
             token_hash: token_hash(&device_token),
+            expires_epoch: ttl_seconds.map(|ttl| now.saturating_add(ttl)),
         };
         self.accounts
             .entry(account_id.to_string())
@@ -147,7 +195,13 @@ impl Registry {
         }
     }
 
-    fn register(&mut self, email: Option<&str>, label: &str, now: u64) -> Account {
+    fn register(
+        &mut self,
+        email: Option<&str>,
+        label: &str,
+        now: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Account {
         let account_id = random_hex_id();
         self.accounts.insert(
             account_id.clone(),
@@ -156,20 +210,53 @@ impl Registry {
                 devices: Vec::new(),
             },
         );
-        self.new_device(&account_id, label, now)
+        self.new_device(&account_id, label, now, ttl_seconds)
     }
 
-    fn add_device(&mut self, existing_token: &str, label: &str, now: u64) -> Option<Account> {
-        let account_id = self.resolve(existing_token)?.account_id;
-        Some(self.new_device(&account_id, label, now))
+    fn add_device(
+        &mut self,
+        existing_token: &str,
+        label: &str,
+        now: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Option<Account> {
+        let account_id = self.resolve(existing_token, now)?.account_id;
+        Some(self.new_device(&account_id, label, now, ttl_seconds))
     }
 
-    fn resolve(&self, token: &str) -> Option<TokenIdentity> {
+    fn resolve(&self, token: &str, now: u64) -> Option<TokenIdentity> {
         let hash = token_hash(token);
         for (account_id, account) in &self.accounts {
-            if let Some(device) = account.devices.iter().find(|d| d.token_hash == hash) {
+            if let Some(device) = account
+                .devices
+                .iter()
+                .find(|d| d.token_hash == hash && !d.is_expired(now))
+            {
                 return Some(TokenIdentity {
                     account_id: account_id.clone(),
+                    device_id: device.id.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Rotate the token of the device that `old_token` currently belongs to:
+    /// replace its hash with a fresh secret, preserving id/label/expiry. `None`
+    /// if `old_token` is unknown or already expired as of `now`.
+    fn rotate(&mut self, old_token: &str, now: u64) -> Option<Account> {
+        let hash = token_hash(old_token);
+        for (account_id, account) in self.accounts.iter_mut() {
+            if let Some(device) = account
+                .devices
+                .iter_mut()
+                .find(|d| d.token_hash == hash && !d.is_expired(now))
+            {
+                let device_token = random_hex_id();
+                device.token_hash = token_hash(&device_token);
+                return Some(Account {
+                    account_id: account_id.clone(),
+                    device_token,
                     device_id: device.id.clone(),
                 });
             }
@@ -207,8 +294,18 @@ impl MemoryAccountStore {
 }
 
 impl AccountStore for MemoryAccountStore {
-    fn register(&self, email: Option<&str>, label: &str, now: u64) -> Result<Account, SyncError> {
-        Ok(self.inner.lock().unwrap().register(email, label, now))
+    fn register(
+        &self,
+        email: Option<&str>,
+        label: &str,
+        now: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Result<Account, SyncError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .register(email, label, now, ttl_seconds))
     }
 
     fn add_device(
@@ -216,16 +313,21 @@ impl AccountStore for MemoryAccountStore {
         existing_token: &str,
         label: &str,
         now: u64,
+        ttl_seconds: Option<u64>,
     ) -> Result<Option<Account>, SyncError> {
         Ok(self
             .inner
             .lock()
             .unwrap()
-            .add_device(existing_token, label, now))
+            .add_device(existing_token, label, now, ttl_seconds))
     }
 
-    fn resolve_token(&self, token: &str) -> Result<Option<TokenIdentity>, SyncError> {
-        Ok(self.inner.lock().unwrap().resolve(token))
+    fn resolve_token(&self, token: &str, now: u64) -> Result<Option<TokenIdentity>, SyncError> {
+        Ok(self.inner.lock().unwrap().resolve(token, now))
+    }
+
+    fn rotate_token(&self, old_token: &str, now: u64) -> Result<Option<Account>, SyncError> {
+        Ok(self.inner.lock().unwrap().rotate(old_token, now))
     }
 
     fn list_devices(&self, account_id: &str) -> Result<Vec<DeviceInfo>, SyncError> {
@@ -276,10 +378,16 @@ impl FileAccountStore {
 }
 
 impl AccountStore for FileAccountStore {
-    fn register(&self, email: Option<&str>, label: &str, now: u64) -> Result<Account, SyncError> {
+    fn register(
+        &self,
+        email: Option<&str>,
+        label: &str,
+        now: u64,
+        ttl_seconds: Option<u64>,
+    ) -> Result<Account, SyncError> {
         let _lock = self.guard.lock().unwrap();
         let mut registry = self.read()?;
-        let account = registry.register(email, label, now);
+        let account = registry.register(email, label, now, ttl_seconds);
         self.write(&registry)?;
         Ok(account)
     }
@@ -289,10 +397,11 @@ impl AccountStore for FileAccountStore {
         existing_token: &str,
         label: &str,
         now: u64,
+        ttl_seconds: Option<u64>,
     ) -> Result<Option<Account>, SyncError> {
         let _lock = self.guard.lock().unwrap();
         let mut registry = self.read()?;
-        match registry.add_device(existing_token, label, now) {
+        match registry.add_device(existing_token, label, now, ttl_seconds) {
             Some(account) => {
                 self.write(&registry)?;
                 Ok(Some(account))
@@ -301,9 +410,21 @@ impl AccountStore for FileAccountStore {
         }
     }
 
-    fn resolve_token(&self, token: &str) -> Result<Option<TokenIdentity>, SyncError> {
+    fn resolve_token(&self, token: &str, now: u64) -> Result<Option<TokenIdentity>, SyncError> {
         let _lock = self.guard.lock().unwrap();
-        Ok(self.read()?.resolve(token))
+        Ok(self.read()?.resolve(token, now))
+    }
+
+    fn rotate_token(&self, old_token: &str, now: u64) -> Result<Option<Account>, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        let mut registry = self.read()?;
+        match registry.rotate(old_token, now) {
+            Some(account) => {
+                self.write(&registry)?;
+                Ok(Some(account))
+            }
+            None => Ok(None),
+        }
     }
 
     fn list_devices(&self, account_id: &str) -> Result<Vec<DeviceInfo>, SyncError> {
@@ -329,40 +450,53 @@ mod tests {
     fn account_suite(store: &dyn AccountStore) {
         // Register issues a token resolving to the new account + a device.
         let alice = store
-            .register(Some("alice@example.com"), "Laptop", 100)
+            .register(Some("alice@example.com"), "Laptop", 100, None)
             .unwrap();
-        let id = store.resolve_token(&alice.device_token).unwrap().unwrap();
+        let id = store
+            .resolve_token(&alice.device_token, 100)
+            .unwrap()
+            .unwrap();
         assert_eq!(id.account_id, alice.account_id);
         assert_eq!(id.device_id, alice.device_id);
 
         // add_device issues a SECOND token on the SAME account, a new device.
         let phone = store
-            .add_device(&alice.device_token, "Phone", 200)
+            .add_device(&alice.device_token, "Phone", 200, None)
             .unwrap()
             .unwrap();
         assert_ne!(phone.device_token, alice.device_token);
         assert_eq!(phone.account_id, alice.account_id);
         assert_ne!(phone.device_id, alice.device_id);
 
-        // Two devices listed.
+        // Two devices listed, both with no expiry.
         let devices = store.list_devices(&alice.account_id).unwrap();
         assert_eq!(devices.len(), 2);
         assert!(devices.iter().any(|d| d.label == "Laptop"));
         assert!(devices.iter().any(|d| d.label == "Phone"));
+        assert!(devices.iter().all(|d| d.expires_epoch.is_none()));
 
         // Revoke the phone: its token stops resolving, the laptop still works.
         assert!(store
             .revoke_device(&alice.account_id, &phone.device_id)
             .unwrap());
-        assert!(store.resolve_token(&phone.device_token).unwrap().is_none());
-        assert!(store.resolve_token(&alice.device_token).unwrap().is_some());
+        assert!(store
+            .resolve_token(&phone.device_token, 300)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .resolve_token(&alice.device_token, 300)
+            .unwrap()
+            .is_some());
         assert_eq!(store.list_devices(&alice.account_id).unwrap().len(), 1);
         // Revoking an unknown device id is a no-op.
         assert!(!store.revoke_device(&alice.account_id, "nope").unwrap());
 
         // Unknown token resolves to None; add_device on it is None.
-        assert!(store.resolve_token("deadbeef").unwrap().is_none());
-        assert!(store.add_device("deadbeef", "x", 1).unwrap().is_none());
+        assert!(store.resolve_token("deadbeef", 300).unwrap().is_none());
+        assert!(store
+            .add_device("deadbeef", "x", 1, None)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -383,7 +517,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("proctor-acct-hash-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = FileAccountStore::new(&dir);
-        let acct = store.register(None, "Laptop", 1).unwrap();
+        let acct = store.register(None, "Laptop", 1, None).unwrap();
         let on_disk = std::fs::read_to_string(dir.join("accounts.json")).unwrap();
         // The plaintext token must NOT appear on disk — only its SHA-256 hash.
         assert!(!on_disk.contains(&acct.device_token));
@@ -395,5 +529,97 @@ mod tests {
     fn ids_are_128_bit_hex_and_hash_is_256_bit() {
         assert_eq!(random_hex_id().len(), 32);
         assert_eq!(token_hash("x").len(), 64);
+    }
+
+    #[test]
+    fn a_ttl_token_expires_and_stops_authenticating() {
+        let store = MemoryAccountStore::new();
+        // Mint at now=1000 with a 60s TTL → expires at 1060.
+        let acct = store.register(None, "Laptop", 1000, Some(60)).unwrap();
+        let devices = store.list_devices(&acct.account_id).unwrap();
+        assert_eq!(devices[0].expires_epoch, Some(1060));
+
+        // Before and at expiry it still resolves; strictly past expiry it does not.
+        assert!(store
+            .resolve_token(&acct.device_token, 1059)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .resolve_token(&acct.device_token, 1060)
+            .unwrap()
+            .is_some());
+        assert!(store
+            .resolve_token(&acct.device_token, 1061)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn a_no_ttl_token_never_expires() {
+        let store = MemoryAccountStore::new();
+        let acct = store.register(None, "Laptop", 1000, None).unwrap();
+        assert!(store.list_devices(&acct.account_id).unwrap()[0]
+            .expires_epoch
+            .is_none());
+        // Even far in the future it still authenticates.
+        assert!(store
+            .resolve_token(&acct.device_token, u64::MAX)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn an_expired_token_cannot_add_devices() {
+        let store = MemoryAccountStore::new();
+        let acct = store.register(None, "Laptop", 1000, Some(60)).unwrap();
+        // Past expiry, add_device treats the token as unknown.
+        assert!(store
+            .add_device(&acct.device_token, "Phone", 2000, None)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn rotate_invalidates_the_old_token_and_keeps_the_same_device() {
+        let store = MemoryAccountStore::new();
+        let acct = store.register(None, "Laptop", 1000, Some(60)).unwrap();
+
+        let rotated = store
+            .rotate_token(&acct.device_token, 1010)
+            .unwrap()
+            .unwrap();
+        // New secret, SAME device + account.
+        assert_ne!(rotated.device_token, acct.device_token);
+        assert_eq!(rotated.device_id, acct.device_id);
+        assert_eq!(rotated.account_id, acct.account_id);
+
+        // Old token no longer resolves; the new one resolves to the same device.
+        assert!(store
+            .resolve_token(&acct.device_token, 1010)
+            .unwrap()
+            .is_none());
+        let id = store
+            .resolve_token(&rotated.device_token, 1010)
+            .unwrap()
+            .unwrap();
+        assert_eq!(id.device_id, acct.device_id);
+
+        // Expiry is preserved across rotation (still 1060), and still only one device.
+        let devices = store.list_devices(&acct.account_id).unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].expires_epoch, Some(1060));
+    }
+
+    #[test]
+    fn rotating_an_unknown_or_expired_token_returns_none() {
+        let store = MemoryAccountStore::new();
+        assert!(store.rotate_token("deadbeef", 1).unwrap().is_none());
+
+        let acct = store.register(None, "Laptop", 1000, Some(60)).unwrap();
+        // Past expiry, rotation is refused too.
+        assert!(store
+            .rotate_token(&acct.device_token, 2000)
+            .unwrap()
+            .is_none());
     }
 }

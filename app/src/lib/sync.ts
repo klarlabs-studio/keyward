@@ -159,6 +159,36 @@ export async function register(
 }
 
 /**
+ * Link THIS device to an existing account using a device token minted elsewhere
+ * (via "add a device"). Validates the token against the server, then stores it as
+ * this device's sync config. The caller then pulls the account's vault and
+ * unlocks it with the master password + Secret Key. This is the cross-device
+ * migration / "restore from cloud" flow.
+ */
+export async function linkAccount(serverUrl: string, deviceToken: string): Promise<SyncConfig> {
+  const base = normalizeUrl(serverUrl);
+  if (!base) throw new Error('A server URL is required.');
+  const token = deviceToken.trim();
+  if (!token) throw new Error('A device token is required.');
+  // Validate the token by asking the server for this account's devices.
+  const res = await fetch(`${base}/v1/devices`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 401) throw new Error('That device token was not accepted by the server.');
+  if (!res.ok) throw new Error(`Could not reach the server (HTTP ${res.status}).`);
+  const config: SyncConfig = {
+    serverUrl: base,
+    accountId: '',
+    deviceToken: token,
+    lastVersion: null,
+    deviceId: null,
+  };
+  writeConfig(config);
+  return config;
+}
+
+/**
  * Provision a second device token for the same account (the "add a device"
  * flow). Returns the new token, which the user carries to the other device.
  */

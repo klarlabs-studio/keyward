@@ -19,6 +19,11 @@ const mode = ref<Mode>(vault.syncEnabled ? 'cloud' : 'device');
 const serverUrl = ref('http://localhost:8787');
 const email = ref('');
 const busy = ref(false);
+// When enabling cloud sync: create a fresh account, or link this device to an
+// existing one with a device token (the cross-device migration flow).
+type CloudMode = 'new' | 'link';
+const cloudMode = ref<CloudMode>('new');
+const linkToken = ref('');
 // The device token minted by "Add a device", shown once for the user to carry.
 const newToken = ref<string | null>(null);
 
@@ -85,6 +90,16 @@ async function doEnable(): Promise<void> {
   const ok = await vault.enableSync(serverUrl.value.trim(), email.value.trim() || undefined);
   busy.value = false;
   if (!ok) mode.value = 'cloud'; // keep the form visible so the user can retry
+}
+
+async function doLink(): Promise<void> {
+  if (busy.value || !serverUrl.value.trim() || !linkToken.value.trim()) return;
+  busy.value = true;
+  const ok = await vault.linkAccount(serverUrl.value.trim(), linkToken.value.trim());
+  busy.value = false;
+  // On success the store locks the vault; close so the unlock screen (which now
+  // asks for the account's Secret Key) takes over.
+  if (ok) emit('close');
 }
 
 async function doSyncNow(): Promise<void> {
@@ -240,8 +255,27 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           <button class="btn-ghost wide danger" @click="doDisable">Turn off cloud sync</button>
         </template>
 
-        <!-- Not enabled, cloud chosen: registration form. -->
+        <!-- Not enabled, cloud chosen: create a new account, or link an existing one. -->
         <template v-else-if="!vault.syncEnabled && mode === 'cloud'">
+          <div class="subtabs" role="tablist">
+            <button
+              class="subtab"
+              :class="{ sel: cloudMode === 'new' }"
+              role="tab"
+              @click="cloudMode = 'new'"
+            >
+              New account
+            </button>
+            <button
+              class="subtab"
+              :class="{ sel: cloudMode === 'link' }"
+              role="tab"
+              @click="cloudMode = 'link'"
+            >
+              Link this device
+            </button>
+          </div>
+
           <label class="field">
             <span>Server URL</span>
             <input
@@ -251,17 +285,45 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
               placeholder="http://localhost:8787"
             />
           </label>
-          <label class="field">
-            <span>Email <em>(optional)</em></span>
-            <input v-model="email" type="email" spellcheck="false" placeholder="you@example.com" />
-          </label>
-          <p class="note">
-            A new account is created on the server. It only ever stores your
-            <b>encrypted</b> vault — never your master password or Secret Key.
-          </p>
-          <button class="btn-add wide" :disabled="busy || !serverUrl.trim()" @click="doEnable">
-            {{ busy ? 'Enabling…' : 'Enable cloud sync' }}
-          </button>
+
+          <template v-if="cloudMode === 'new'">
+            <label class="field">
+              <span>Email <em>(optional)</em></span>
+              <input v-model="email" type="email" spellcheck="false" placeholder="you@example.com" />
+            </label>
+            <p class="note">
+              A new account is created on the server. It only ever stores your
+              <b>encrypted</b> vault — never your master password or Secret Key.
+            </p>
+            <button class="btn-add wide" :disabled="busy || !serverUrl.trim()" @click="doEnable">
+              {{ busy ? 'Enabling…' : 'Enable cloud sync' }}
+            </button>
+          </template>
+
+          <template v-else>
+            <label class="field">
+              <span>Device token</span>
+              <input
+                v-model="linkToken"
+                type="text"
+                spellcheck="false"
+                autocapitalize="off"
+                placeholder="Paste the token from “Add a device”"
+              />
+            </label>
+            <p class="note">
+              Links this device to an existing account and downloads its encrypted
+              vault. You'll then unlock it with your <b>master password</b> and
+              <b>Secret Key</b> — the token alone can't open it.
+            </p>
+            <button
+              class="btn-add wide"
+              :disabled="busy || !serverUrl.trim() || !linkToken.trim()"
+              @click="doLink"
+            >
+              {{ busy ? 'Linking…' : 'Link this device' }}
+            </button>
+          </template>
         </template>
 
         <!-- Not enabled, on-device chosen: the default resting state. -->
@@ -385,6 +447,27 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 }
 .status.syncing {
   color: var(--muted);
+}
+.subtabs {
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.25rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.subtab {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  border-radius: 7px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.subtab.sel {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
 }
 .field {
   display: flex;

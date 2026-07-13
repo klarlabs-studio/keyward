@@ -62,6 +62,15 @@ pub trait SyncStore {
         expected_version: Option<u64>,
         blob: Vec<u8>,
     ) -> Result<u64, SyncError>;
+
+    /// Delete an account's vault entirely (the account-closure / right-to-erasure
+    /// story). Idempotent: deleting an account with no vault is `Ok(())`. A
+    /// subsequent [`get`] returns `None`, and the next [`put`] starts again at
+    /// version 1 (expects `None`).
+    ///
+    /// [`get`]: SyncStore::get
+    /// [`put`]: SyncStore::put
+    fn delete(&self, account: &str) -> Result<(), SyncError>;
 }
 
 /// Decide the next version from the server's current state and the client's
@@ -104,6 +113,11 @@ impl SyncStore for MemoryStore {
         let version = next_version(current, expected_version)?;
         map.insert(account.to_string(), SyncEnvelope { version, blob });
         Ok(version)
+    }
+
+    fn delete(&self, account: &str) -> Result<(), SyncError> {
+        self.inner.lock().unwrap().remove(account);
+        Ok(())
     }
 }
 
@@ -168,6 +182,17 @@ impl SyncStore for FileStore {
         std::fs::write(self.path(account), serde_json::to_vec(&env)?)?;
         Ok(version)
     }
+
+    fn delete(&self, account: &str) -> Result<(), SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        let path = self.path(account);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            // Idempotent: a missing vault is already "deleted".
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e.into()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -199,6 +224,14 @@ mod tests {
 
         // A different account is independent.
         assert_eq!(store.put("bob", None, b"bob-1".to_vec()).unwrap(), 1);
+
+        // Delete removes alice's blob; a re-get is None and the next put restarts
+        // at version 1. Deleting again (now missing) is idempotent. Bob is intact.
+        store.delete("alice").unwrap();
+        assert!(store.get("alice").unwrap().is_none());
+        store.delete("alice").unwrap();
+        assert_eq!(store.put("alice", None, b"fresh".to_vec()).unwrap(), 1);
+        assert_eq!(store.get("bob").unwrap().unwrap().blob, b"bob-1");
     }
 
     #[test]

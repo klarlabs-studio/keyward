@@ -8,20 +8,25 @@
 //! (`If-Match`), so a stale push gets 409 and must pull first.
 //!
 //! Config (env):
-//!   PROCTOR_SYNC_ADDR    listen address (default 127.0.0.1:8787)
-//!   PROCTOR_SYNC_DIR     storage dir (FileStore + FileAccountStore); unset → in-memory
-//!   PROCTOR_SYNC_TOKENS  optional pre-seed "token1:account1,token2:account2"
-//!                        (the registry is the source of truth; this is a fallback
-//!                        for tests/bootstrapping)
+//!   PROCTOR_SYNC_ADDR       listen address (default 127.0.0.1:8787)
+//!   PROCTOR_SYNC_DIR        storage dir (FileStore + FileAccountStore); unset → in-memory
+//!   PROCTOR_SYNC_TOKENS     optional pre-seed "token1:account1,token2:account2"
+//!                           (the registry is the source of truth; this is a fallback
+//!                           for tests/bootstrapping)
+//!   PROCTOR_SYNC_TOKEN_TTL  optional device-token lifetime in seconds, applied on
+//!                           register / add-device (unset or 0 → tokens never expire,
+//!                           the backward-compatible default)
 //!
 //! API (every response, including errors, carries permissive CORS headers):
-//!   POST   /v1/register     -> 200 {account_id, device_token, device_id}    (no auth)
-//!   POST   /v1/devices      -> 200 {device_token, device_id} (same account) | 401
-//!   GET    /v1/devices      -> 200 {devices:[{id,label,created_epoch,current}]} | 401
-//!   DELETE /v1/devices/{id} -> 200 {revoked:true} | 404 | 401  (revoke a device)
-//!   GET    /v1/vault        -> 200 + blob (+ X-Vault-Version) | 404 | 401
-//!   PUT    /v1/vault        -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
-//!   OPTIONS *               -> 204 (CORS preflight)
+//!   POST   /v1/register       -> 200 {account_id, device_token, device_id}    (no auth)
+//!   POST   /v1/devices        -> 200 {device_token, device_id} (same account) | 401
+//!   POST   /v1/devices/rotate -> 200 {device_token, device_id} (same device)  | 401
+//!   GET    /v1/devices        -> 200 {devices:[{id,label,created_epoch,expires_epoch,current}]} | 401
+//!   DELETE /v1/devices/{id}   -> 200 {revoked:true} | 404 | 401  (revoke a device)
+//!   GET    /v1/vault          -> 200 + blob (+ X-Vault-Version) | 404 | 401
+//!   PUT    /v1/vault          -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
+//!   DELETE /v1/vault          -> 204 | 401  (erase this account's vault, idempotent)
+//!   OPTIONS *                 -> 204 (CORS preflight)
 //!   (If-Match: <version> on PUT; omit for the first upload.)
 
 use proctor_sync::{
@@ -47,11 +52,24 @@ struct App {
     /// Optional pre-seeded token→account map. The registry is authoritative;
     /// this is only consulted as a fallback.
     seed_tokens: HashMap<String, String>,
+    /// Optional device-token lifetime (seconds) applied on register/add-device.
+    /// `None` → tokens never expire (backward-compatible default).
+    token_ttl: Option<u64>,
+}
+
+/// Read `PROCTOR_SYNC_TOKEN_TTL` as an optional lifetime in seconds. Unset,
+/// unparseable, or `0` all mean "no expiry".
+fn token_ttl_from_env() -> Option<u64> {
+    std::env::var("PROCTOR_SYNC_TOKEN_TTL")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&ttl| ttl > 0)
 }
 
 fn main() {
     let addr = std::env::var("PROCTOR_SYNC_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let seed_tokens = parse_tokens(&std::env::var("PROCTOR_SYNC_TOKENS").unwrap_or_default());
+    let token_ttl = token_ttl_from_env();
 
     let (store, accounts): (
         Box<dyn SyncStore + Send + Sync>,
@@ -71,6 +89,7 @@ fn main() {
         store,
         accounts,
         seed_tokens,
+        token_ttl,
     };
 
     let server = Server::http(&addr).unwrap_or_else(|e| {
@@ -78,8 +97,12 @@ fn main() {
         std::process::exit(1);
     });
     eprintln!(
-        "proctor-sync-server listening on {addr} ({} pre-seeded token(s))",
-        app.seed_tokens.len()
+        "proctor-sync-server listening on {addr} ({} pre-seeded token(s), token ttl: {})",
+        app.seed_tokens.len(),
+        match app.token_ttl {
+            Some(ttl) => format!("{ttl}s"),
+            None => "none".to_string(),
+        }
     );
 
     for request in server.incoming_requests() {
@@ -160,7 +183,7 @@ fn bearer_token(request: &Request) -> Option<String> {
 /// authoritative; the static pre-seed map is a fallback for tests (no device id).
 fn identity_for(request: &Request, app: &App) -> Option<TokenIdentity> {
     let token = bearer_token(request)?;
-    if let Ok(Some(identity)) = app.accounts.resolve_token(&token) {
+    if let Ok(Some(identity)) = app.accounts.resolve_token(&token, now_unix()) {
         return Some(identity);
     }
     app.seed_tokens.get(&token).map(|account_id| TokenIdentity {
@@ -194,12 +217,14 @@ fn handle(request: Request, app: &App) {
 
     match (&method, url.as_str()) {
         (Method::Post, "/v1/register") => handle_register(request, app),
+        (Method::Post, "/v1/devices/rotate") => handle_rotate_device(request, app),
         (Method::Post, "/v1/devices") => handle_add_device(request, app),
         (Method::Get, "/v1/devices") => handle_list_devices(request, app),
         (Method::Delete, path) if path.starts_with("/v1/devices/") => {
             let device_id = path.trim_start_matches("/v1/devices/").to_string();
             handle_revoke_device(request, app, &device_id);
         }
+        (Method::Delete, "/v1/vault") => handle_delete_vault(request, app),
         (_, "/v1/vault") => handle_vault(request, app, method, &url),
         _ => respond(request, text("not found", 404)),
     }
@@ -223,7 +248,10 @@ fn handle_register(mut request: Request, app: &App) {
     let email = str_field(&body, "email");
     let label = str_field(&body, "label").unwrap_or_else(|| "This device".to_string());
 
-    match app.accounts.register(email.as_deref(), &label, now_unix()) {
+    match app
+        .accounts
+        .register(email.as_deref(), &label, now_unix(), app.token_ttl)
+    {
         Ok(account) => {
             eprintln!("POST /v1/register -> 200 account={}", account.account_id);
             let body = serde_json::json!({
@@ -249,11 +277,43 @@ fn handle_add_device(mut request: Request, app: &App) {
     };
     let label = str_field(&read_body_json(&mut request), "label")
         .unwrap_or_else(|| "New device".to_string());
-    match app.accounts.add_device(&token, &label, now_unix()) {
+    match app
+        .accounts
+        .add_device(&token, &label, now_unix(), app.token_ttl)
+    {
         Ok(Some(account)) => {
             eprintln!(
                 "POST /v1/devices -> 200 (new device for account={})",
                 account.account_id
+            );
+            let body = serde_json::json!({
+                "device_token": account.device_token,
+                "device_id": account.device_id,
+            })
+            .to_string();
+            respond(request, json(body, 200));
+        }
+        Ok(None) => respond(request, text("unauthorized", 401)),
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// POST /v1/devices/rotate — auth. Issue a fresh token for the SAME device that
+/// the presented token belongs to; the presented (old) token stops working. 401
+/// if it is unknown or expired.
+fn handle_rotate_device(request: Request, app: &App) {
+    let token = match bearer_token(&request) {
+        Some(t) => t,
+        None => {
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+    match app.accounts.rotate_token(&token, now_unix()) {
+        Ok(Some(account)) => {
+            eprintln!(
+                "POST /v1/devices/rotate -> 200 (rotated device={} account={})",
+                account.device_id, account.account_id
             );
             let body = serde_json::json!({
                 "device_token": account.device_token,
@@ -371,6 +431,26 @@ fn handle_vault(mut request: Request, app: &App, method: Method, url: &str) {
             }
         }
         _ => respond(request, text("method not allowed", 405)),
+    }
+}
+
+/// DELETE /v1/vault — auth. Erase the caller's account vault (idempotent — a
+/// missing vault still returns 204). Zero-knowledge: we delete opaque bytes.
+fn handle_delete_vault(request: Request, app: &App) {
+    let account = match identity_for(&request, app) {
+        Some(i) => i.account_id,
+        None => {
+            eprintln!("DELETE /v1/vault -> 401 (bad/missing token)");
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+    match app.store.delete(&account) {
+        Ok(()) => {
+            eprintln!("DELETE /v1/vault account={account} -> 204 (erased)");
+            respond(request, text("", 204));
+        }
+        Err(e) => respond_500(request, &e),
     }
 }
 

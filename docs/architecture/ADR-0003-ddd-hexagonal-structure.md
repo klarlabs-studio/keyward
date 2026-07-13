@@ -60,6 +60,8 @@ constructs:
   (ports) in the CLI. Judged worth it for the review surface and clarity.
 - **Deliberately not done:** we did not introduce a DI framework, application
   services layer, or CQRS — they would be ceremony here. Ports are plain traits.
-- **Follow-ups:** apply the same port/adapter treatment inside the broker context;
-  consider a shared-kernel home for common serde/zeroize helpers if duplication
-  reappears.
+- **Follow-ups:** the same port/adapter treatment has since been applied inside the
+  broker context (`proctor-broker::ports::{Clock, AuditSink}` with in-crate
+  `adapters::{SystemClock, FileAuditSink}`; the Minter/Executor remain ports owned
+  by `proctor-mint`) — see [context-map.md](context-map.md). Consider a
+  shared-kernel home for common serde/zeroize helpers if duplication reappears.

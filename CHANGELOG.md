@@ -3,6 +3,38 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.22.0] — 2026-07-13
+
+**Seamless cross-device migration, token lifecycle, and the broker's DDD pass.**
+Three lanes, built in parallel and integrated.
+
+### Added — cross-device migration (`app/`)
+- The Sync dialog can now **link this device to an existing account** with a
+  device token (not just create a new account). Linking pulls the account's
+  encrypted vault, clears any local Secret Key, and routes into the 2SKD
+  "enter your Secret Key" unlock — so a new device opens the same vault with the
+  master password + Secret Key (the token alone can't).
+- **Verified live across two browsers:** Device 1 deleted an item (6 items) and
+  enabled cloud; Device 2 (a fresh 7-item vault) linked with a token + entered
+  Device 1's master + Secret Key and saw **Device 1's exact 6-item vault**. This
+  is the flagship "choose cloud or on-device, migrate seamlessly" working end to
+  end.
+
+### Added — token lifecycle (`proctor-sync` / `proctor-sync-server`)
+- Optional **token expiry** (`PROCTOR_SYNC_TOKEN_TTL`; default: never expire —
+  backward compatible), **rotation** (`POST /v1/devices/rotate` mints a fresh
+  secret for the same device, invalidating the old), and **vault deletion**
+  (`DELETE /v1/vault`, idempotent — account closure / erasure). 13 crate tests +
+  a curl proof (rotate → old token 401; delete → 204 then 404).
+
+### Changed — Broker DDD alignment (`proctor-broker`)
+- The Credential Broker context gets the same ports & adapters treatment as
+  Passbook: a `ports` module (`Clock`, `AuditSink`) with in-crate
+  `adapters::{SystemClock, FileAuditSink}`. `AuditLog` now writes through the
+  `AuditSink` port (byte-identical on-disk format); the Minter/Executor remain
+  ports owned by `proctor-mint`. No behavior change — broker/mcp/vault/mint tests
+  all pass. Documented in the context map + ADR-0003.
+
 ## [1.21.0] — 2026-07-13
 
 **Sync auth hardening — hashed tokens + device revocation.** Two real security

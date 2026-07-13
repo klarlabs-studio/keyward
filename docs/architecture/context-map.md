@@ -71,4 +71,32 @@ generic subdomain** — external, pluggable provider config.
   `Entry` and a broker `Item` are different concepts and never leak across.
 - **Ports & Adapters (Hexagonal)** — within Passbook, `ports::VaultRepository` and
   `ports::Clock` are driven ports; concrete storage/time live in adapters, so the
-  domain never names a file, a browser API, or `SystemTime`.
+  domain never names a file, a browser API, or `SystemTime`. The **Broker** context
+  gets the same treatment (below).
+
+## Ports & adapters in the Broker context
+
+`proctor-broker` is the domain core of the developer-wedge context — capabilities,
+origin-binding, propose-not-commit, the risk-tiered policy, and the hash-chained
+audit trail. Its *driven* dependencies are inverted behind `proctor-broker::ports`,
+mirroring Passbook:
+
+- **`ports::Clock`** — wall-clock time. `Broker::request_use` already takes the
+  instant as a `now: SystemTime` argument (time is inverted at the call boundary);
+  the `Clock` trait names that seam and `adapters::SystemClock` is its real
+  adapter, so neither the domain nor its tests reach for ambient
+  `SystemTime::now()`.
+- **`ports::AuditSink`** — the durable destination of the audit trail. The chain
+  construction (SHA-256 hashing, optional HMAC signing, tamper-evidence) stays
+  domain logic in `audit::AuditLog`; *where* each serialized line is persisted is
+  the adapter's concern. `adapters::FileAuditSink` is the append-only JSON-lines
+  file adapter, wired unchanged by `AuditLog::with_file` / `with_file_signed`, so
+  the public API and on-disk format are identical. Any other sink (syslog, an
+  object store) is just another adapter via `AuditLog::with_sink`.
+
+The **Minter** and **Executor** are ports the broker only *names* rather than owns:
+they are traits in `proctor-mint` (`Minter`, `Executor`, `HttpClient`, …). The
+broker selects the `Primitive::Minted` outcome; the executing host (`proctor-mcp`,
+`proctor-cli`) supplies the concrete minter/executor adapter. This keeps the broker
+core free of provider HTTP and signing code (the anti-corruption boundary to
+`proctor-mint` and `proctor-profiles`).
