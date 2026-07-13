@@ -17,7 +17,9 @@
 
 pub mod accounts;
 
-pub use accounts::{Account, AccountStore, FileAccountStore, MemoryAccountStore};
+pub use accounts::{
+    Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, TokenIdentity,
+};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -7,6 +7,7 @@
 
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useVaultStore } from '@/stores/vault';
+import type { DeviceInfo } from '@/lib/sync';
 import { copyText } from '@/composables/useToast';
 
 const vault = useVaultStore();
@@ -20,6 +21,48 @@ const email = ref('');
 const busy = ref(false);
 // The device token minted by "Add a device", shown once for the user to carry.
 const newToken = ref<string | null>(null);
+
+// The account's linked devices, loaded when cloud sync is on.
+const devices = ref<DeviceInfo[]>([]);
+const devicesLoading = ref(false);
+// The id of the device currently being revoked, to disable just its button.
+const revokingId = ref<string | null>(null);
+
+/** True if `d` is this browser: the server's flag, or the locally stored id. */
+function isCurrentDevice(d: DeviceInfo): boolean {
+  return d.current || (vault.syncInfo?.deviceId != null && vault.syncInfo.deviceId === d.id);
+}
+
+/** A short "added N ago" label from a unix-seconds timestamp. */
+function addedAgo(epoch: number): string {
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - epoch));
+  if (secs < 60) return 'added just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `added ${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `added ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `added ${days} day${days === 1 ? '' : 's'} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `added ${months} month${months === 1 ? '' : 's'} ago`;
+  const years = Math.floor(days / 365);
+  return `added ${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+async function loadDevices(): Promise<void> {
+  if (!vault.syncEnabled) return;
+  devicesLoading.value = true;
+  devices.value = await vault.loadDevices();
+  devicesLoading.value = false;
+}
+
+async function doRevoke(d: DeviceInfo): Promise<void> {
+  if (revokingId.value || isCurrentDevice(d)) return;
+  revokingId.value = d.id;
+  const ok = await vault.revokeDevice(d.id);
+  revokingId.value = null;
+  if (ok) await loadDevices();
+}
 
 const statusText = computed(() => {
   switch (vault.syncStatus) {
@@ -56,6 +99,7 @@ async function doAddDevice(): Promise<void> {
   busy.value = true;
   newToken.value = await vault.addSyncDevice();
   busy.value = false;
+  if (newToken.value) await loadDevices();
 }
 
 function doDisable(): void {
@@ -67,7 +111,10 @@ function doDisable(): void {
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') emit('close');
 }
-onMounted(() => window.addEventListener('keydown', onKey));
+onMounted(() => {
+  window.addEventListener('keydown', onKey);
+  if (vault.syncEnabled) void loadDevices();
+});
 onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 </script>
 
@@ -144,6 +191,43 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                 alongside your <b>Secret Key</b> and master password. It is shown once.
               </p>
             </template>
+          </div>
+
+          <div class="devices">
+            <div class="devices-hd">
+              <h3>Devices</h3>
+              <button
+                class="icon-btn"
+                title="Refresh devices"
+                aria-label="Refresh devices"
+                :disabled="devicesLoading"
+                @click="loadDevices"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M20 11A8 8 0 1 0 12 20M20 4v7h-7" />
+                </svg>
+              </button>
+            </div>
+
+            <p v-if="devicesLoading && devices.length === 0" class="note">Loading devices…</p>
+            <p v-else-if="devices.length === 0" class="note">No devices linked yet.</p>
+            <ul v-else class="dev-list">
+              <li v-for="d in devices" :key="d.id" class="dev">
+                <div class="dev-main">
+                  <b class="dev-label">{{ d.label }}</b>
+                  <span class="dev-meta">{{ addedAgo(d.created_epoch) }}</span>
+                </div>
+                <span v-if="isCurrentDevice(d)" class="badge">This device</span>
+                <button
+                  v-else
+                  class="btn-ghost sm danger"
+                  :disabled="revokingId === d.id"
+                  @click="doRevoke(d)"
+                >
+                  {{ revokingId === d.id ? 'Revoking…' : 'Revoke' }}
+                </button>
+              </li>
+            </ul>
           </div>
         </template>
 
@@ -367,6 +451,78 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
   color: var(--muted);
   font-size: 0.82rem;
   line-height: 1.55;
+}
+.devices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.85rem;
+}
+.devices-hd {
+  display: flex;
+  align-items: center;
+}
+.devices-hd h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.devices-hd .icon-btn {
+  margin-left: auto;
+}
+.devices-hd .icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.dev-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.dev {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.dev-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+.dev-label {
+  font-weight: 600;
+  font-size: 0.86rem;
+  color: var(--ink);
+  word-break: break-word;
+}
+.dev-meta {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.badge {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+}
+.btn-ghost.sm {
+  flex: none;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.8rem;
 }
 .dlg-ft {
   display: flex;

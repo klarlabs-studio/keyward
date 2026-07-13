@@ -1,53 +1,83 @@
 //! Accounts and per-device tokens — the identity side of Sync.
 //!
-//! An **account** owns exactly one sealed-vault blob (see [`SyncStore`]). A
-//! **device token** is an opaque bearer secret that resolves to an account: a
-//! user registers once to get their first token, then mints an additional token
-//! per new device via the add-a-device flow. Every token of an account maps to
-//! the same `account_id`, so all a user's devices read and write the one vault.
+//! An **account** owns exactly one sealed-vault blob (see [`SyncStore`]). Each
+//! **device** has an opaque bearer **token** that resolves to its account; a user
+//! registers once for their first device+token, then mints one per new device.
+//! All of an account's devices read and write the one vault.
 //!
-//! Zero-knowledge is preserved: tokens and account ids are random 128-bit hex
-//! with no relationship to the master password or Secret Key, and this registry
-//! never touches the vault blob itself.
+//! Tokens are secrets, so — like passwords — the registry stores only their
+//! **SHA-256 hash**. A breached `accounts.json` yields no usable tokens: an
+//! attacker cannot reverse a hash back into a bearer credential. The plaintext
+//! token is returned exactly once (at register / add-device) and never persisted.
+//! Devices can be listed and **revoked** (the lost-device story).
 //!
-//! [`AccountStore`] is the port; [`MemoryAccountStore`] and [`FileAccountStore`]
-//! are the adapters. The [`FileAccountStore`] persists to `accounts.json` in the
-//! same directory the [`FileStore`] uses.
+//! Zero-knowledge is preserved: ids/tokens are random 128-bit hex unrelated to
+//! the master password or Secret Key, and this registry never touches the vault.
+//!
+//! [`AccountStore`] is the port; [`MemoryAccountStore`]/[`FileAccountStore`] are
+//! the adapters (the latter persists `accounts.json` beside the [`FileStore`]).
 //!
 //! [`SyncStore`]: crate::SyncStore
 //! [`FileStore`]: crate::FileStore
 
 use crate::SyncError;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// The result of registering: an account and its first device token.
+/// The result of register / add-device: the account, the device's one-time
+/// plaintext token, and the device id.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Account {
     pub account_id: String,
-    /// Opaque bearer secret for the freshly registered device.
+    /// Opaque bearer secret — shown once, never stored (only its hash is).
     pub device_token: String,
+    pub device_id: String,
 }
 
-/// The driven port for accounts and per-device tokens.
-///
-/// Implementations map opaque device tokens to account ids. A token is a
-/// secret; it is never derived from user data and only ever compared for
-/// equality — never logged.
+/// What a presented token resolves to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenIdentity {
+    pub account_id: String,
+    pub device_id: String,
+}
+
+/// A device as shown in the management list — no token or hash.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub label: String,
+    pub created_epoch: u64,
+}
+
+/// The driven port for accounts, per-device tokens, and device management.
 pub trait AccountStore {
-    /// Register a new account with an optional contact email, returning the
-    /// account id and its first device token.
-    fn register(&self, email: Option<&str>) -> Result<Account, SyncError>;
+    /// Register a new account (optional contact email) with its first device
+    /// (`label`, created at `now`). Returns the account id, one-time token, and
+    /// device id.
+    fn register(&self, email: Option<&str>, label: &str, now: u64) -> Result<Account, SyncError>;
 
-    /// Mint an additional device token for the account that `existing_token`
-    /// already belongs to. Returns the new token, or `None` if the presented
-    /// token is unknown.
-    fn add_device(&self, existing_token: &str) -> Result<Option<String>, SyncError>;
+    /// Mint an additional device for the account that `existing_token` belongs
+    /// to. `None` if the presented token is unknown.
+    fn add_device(
+        &self,
+        existing_token: &str,
+        label: &str,
+        now: u64,
+    ) -> Result<Option<Account>, SyncError>;
 
-    /// Resolve a device token to its `account_id`, or `None` if unknown.
-    fn account_for_token(&self, token: &str) -> Result<Option<String>, SyncError>;
+    /// Resolve a device token to its account + device, or `None` if unknown or
+    /// revoked.
+    fn resolve_token(&self, token: &str) -> Result<Option<TokenIdentity>, SyncError>;
+
+    /// List an account's devices (no secrets).
+    fn list_devices(&self, account_id: &str) -> Result<Vec<DeviceInfo>, SyncError>;
+
+    /// Revoke a device (cut off a lost/stolen device's token). Returns whether a
+    /// matching device existed.
+    fn revoke_device(&self, account_id: &str, device_id: &str) -> Result<bool, SyncError>;
 }
 
 /// Generate a random 128-bit identifier as lowercase hex (32 chars).
@@ -56,38 +86,111 @@ fn random_hex_id() -> String {
     format!("{bits:032x}")
 }
 
-/// The registry's serializable state: which tokens map to which accounts, and
-/// each account's optional email. Kept minimal — no vault data ever lives here.
+/// SHA-256 of a token, as 64-char lowercase hex — what we store instead of the
+/// token itself.
+fn token_hash(token: &str) -> String {
+    let digest = Sha256::digest(token.as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A stored device: its id, label, creation time, and the *hash* of its token.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DeviceRecord {
+    id: String,
+    label: String,
+    created_epoch: u64,
+    token_hash: String,
+}
+
+impl DeviceRecord {
+    fn info(&self) -> DeviceInfo {
+        DeviceInfo {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            created_epoch: self.created_epoch,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct AccountRecord {
+    email: Option<String>,
+    devices: Vec<DeviceRecord>,
+}
+
+/// The registry state: accounts, each holding its devices (by token hash). No
+/// plaintext token and no vault data ever lives here.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct Registry {
-    /// device token -> account id
-    tokens: HashMap<String, String>,
-    /// account id -> optional contact email
-    emails: HashMap<String, Option<String>>,
+    accounts: HashMap<String, AccountRecord>,
 }
 
 impl Registry {
-    fn register(&mut self, email: Option<&str>) -> Account {
-        let account_id = random_hex_id();
+    fn new_device(&mut self, account_id: &str, label: &str, now: u64) -> Account {
         let device_token = random_hex_id();
-        self.tokens.insert(device_token.clone(), account_id.clone());
-        self.emails
-            .insert(account_id.clone(), email.map(str::to_string));
+        let device_id = random_hex_id();
+        let record = DeviceRecord {
+            id: device_id.clone(),
+            label: label.to_string(),
+            created_epoch: now,
+            token_hash: token_hash(&device_token),
+        };
+        self.accounts
+            .entry(account_id.to_string())
+            .or_default()
+            .devices
+            .push(record);
         Account {
-            account_id,
+            account_id: account_id.to_string(),
             device_token,
+            device_id,
         }
     }
 
-    fn add_device(&mut self, existing_token: &str) -> Option<String> {
-        let account_id = self.tokens.get(existing_token)?.clone();
-        let device_token = random_hex_id();
-        self.tokens.insert(device_token.clone(), account_id);
-        Some(device_token)
+    fn register(&mut self, email: Option<&str>, label: &str, now: u64) -> Account {
+        let account_id = random_hex_id();
+        self.accounts.insert(
+            account_id.clone(),
+            AccountRecord {
+                email: email.map(str::to_string),
+                devices: Vec::new(),
+            },
+        );
+        self.new_device(&account_id, label, now)
     }
 
-    fn account_for_token(&self, token: &str) -> Option<String> {
-        self.tokens.get(token).cloned()
+    fn add_device(&mut self, existing_token: &str, label: &str, now: u64) -> Option<Account> {
+        let account_id = self.resolve(existing_token)?.account_id;
+        Some(self.new_device(&account_id, label, now))
+    }
+
+    fn resolve(&self, token: &str) -> Option<TokenIdentity> {
+        let hash = token_hash(token);
+        for (account_id, account) in &self.accounts {
+            if let Some(device) = account.devices.iter().find(|d| d.token_hash == hash) {
+                return Some(TokenIdentity {
+                    account_id: account_id.clone(),
+                    device_id: device.id.clone(),
+                });
+            }
+        }
+        None
+    }
+
+    fn list_devices(&self, account_id: &str) -> Vec<DeviceInfo> {
+        self.accounts
+            .get(account_id)
+            .map(|a| a.devices.iter().map(DeviceRecord::info).collect())
+            .unwrap_or_default()
+    }
+
+    fn revoke_device(&mut self, account_id: &str, device_id: &str) -> bool {
+        if let Some(account) = self.accounts.get_mut(account_id) {
+            let before = account.devices.len();
+            account.devices.retain(|d| d.id != device_id);
+            return account.devices.len() != before;
+        }
+        false
     }
 }
 
@@ -104,23 +207,42 @@ impl MemoryAccountStore {
 }
 
 impl AccountStore for MemoryAccountStore {
-    fn register(&self, email: Option<&str>) -> Result<Account, SyncError> {
-        Ok(self.inner.lock().unwrap().register(email))
+    fn register(&self, email: Option<&str>, label: &str, now: u64) -> Result<Account, SyncError> {
+        Ok(self.inner.lock().unwrap().register(email, label, now))
     }
 
-    fn add_device(&self, existing_token: &str) -> Result<Option<String>, SyncError> {
-        Ok(self.inner.lock().unwrap().add_device(existing_token))
+    fn add_device(
+        &self,
+        existing_token: &str,
+        label: &str,
+        now: u64,
+    ) -> Result<Option<Account>, SyncError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .add_device(existing_token, label, now))
     }
 
-    fn account_for_token(&self, token: &str) -> Result<Option<String>, SyncError> {
-        Ok(self.inner.lock().unwrap().account_for_token(token))
+    fn resolve_token(&self, token: &str) -> Result<Option<TokenIdentity>, SyncError> {
+        Ok(self.inner.lock().unwrap().resolve(token))
+    }
+
+    fn list_devices(&self, account_id: &str) -> Result<Vec<DeviceInfo>, SyncError> {
+        Ok(self.inner.lock().unwrap().list_devices(account_id))
+    }
+
+    fn revoke_device(&self, account_id: &str, device_id: &str) -> Result<bool, SyncError> {
+        Ok(self
+            .inner
+            .lock()
+            .unwrap()
+            .revoke_device(account_id, device_id))
     }
 }
 
-/// Filesystem-backed account registry: the whole [`Registry`] is persisted as a
-/// single `accounts.json` under `dir` (the same directory the [`FileStore`]
-/// uses). A process mutex serializes read-modify-write so concurrent requests
-/// don't clobber each other.
+/// Filesystem-backed registry: the whole [`Registry`] persisted as a single
+/// `accounts.json` under `dir`. A process mutex serializes read-modify-write.
 ///
 /// [`FileStore`]: crate::FileStore
 pub struct FileAccountStore {
@@ -154,29 +276,49 @@ impl FileAccountStore {
 }
 
 impl AccountStore for FileAccountStore {
-    fn register(&self, email: Option<&str>) -> Result<Account, SyncError> {
+    fn register(&self, email: Option<&str>, label: &str, now: u64) -> Result<Account, SyncError> {
         let _lock = self.guard.lock().unwrap();
         let mut registry = self.read()?;
-        let account = registry.register(email);
+        let account = registry.register(email, label, now);
         self.write(&registry)?;
         Ok(account)
     }
 
-    fn add_device(&self, existing_token: &str) -> Result<Option<String>, SyncError> {
+    fn add_device(
+        &self,
+        existing_token: &str,
+        label: &str,
+        now: u64,
+    ) -> Result<Option<Account>, SyncError> {
         let _lock = self.guard.lock().unwrap();
         let mut registry = self.read()?;
-        match registry.add_device(existing_token) {
-            Some(token) => {
+        match registry.add_device(existing_token, label, now) {
+            Some(account) => {
                 self.write(&registry)?;
-                Ok(Some(token))
+                Ok(Some(account))
             }
             None => Ok(None),
         }
     }
 
-    fn account_for_token(&self, token: &str) -> Result<Option<String>, SyncError> {
+    fn resolve_token(&self, token: &str) -> Result<Option<TokenIdentity>, SyncError> {
         let _lock = self.guard.lock().unwrap();
-        Ok(self.read()?.account_for_token(token))
+        Ok(self.read()?.resolve(token))
+    }
+
+    fn list_devices(&self, account_id: &str) -> Result<Vec<DeviceInfo>, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        Ok(self.read()?.list_devices(account_id))
+    }
+
+    fn revoke_device(&self, account_id: &str, device_id: &str) -> Result<bool, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        let mut registry = self.read()?;
+        let revoked = registry.revoke_device(account_id, device_id);
+        if revoked {
+            self.write(&registry)?;
+        }
+        Ok(revoked)
     }
 }
 
@@ -185,70 +327,73 @@ mod tests {
     use super::*;
 
     fn account_suite(store: &dyn AccountStore) {
-        // Register issues a token that resolves back to the new account.
-        let alice = store.register(Some("alice@example.com")).unwrap();
-        assert_eq!(
-            store.account_for_token(&alice.device_token).unwrap(),
-            Some(alice.account_id.clone())
-        );
+        // Register issues a token resolving to the new account + a device.
+        let alice = store
+            .register(Some("alice@example.com"), "Laptop", 100)
+            .unwrap();
+        let id = store.resolve_token(&alice.device_token).unwrap().unwrap();
+        assert_eq!(id.account_id, alice.account_id);
+        assert_eq!(id.device_id, alice.device_id);
 
-        // add_device issues a SECOND token resolving to the SAME account.
-        let second = store.add_device(&alice.device_token).unwrap().unwrap();
-        assert_ne!(second, alice.device_token);
-        assert_eq!(
-            store.account_for_token(&second).unwrap(),
-            Some(alice.account_id.clone())
-        );
+        // add_device issues a SECOND token on the SAME account, a new device.
+        let phone = store
+            .add_device(&alice.device_token, "Phone", 200)
+            .unwrap()
+            .unwrap();
+        assert_ne!(phone.device_token, alice.device_token);
+        assert_eq!(phone.account_id, alice.account_id);
+        assert_ne!(phone.device_id, alice.device_id);
 
-        // An unknown token resolves to None.
-        assert_eq!(store.account_for_token("deadbeef").unwrap(), None);
-        // add_device on an unknown token is a no-op returning None.
-        assert_eq!(store.add_device("deadbeef").unwrap(), None);
+        // Two devices listed.
+        let devices = store.list_devices(&alice.account_id).unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices.iter().any(|d| d.label == "Laptop"));
+        assert!(devices.iter().any(|d| d.label == "Phone"));
 
-        // Two registrations get distinct accounts.
-        let bob = store.register(None).unwrap();
-        assert_ne!(bob.account_id, alice.account_id);
-        assert_ne!(bob.device_token, alice.device_token);
-        assert_eq!(
-            store.account_for_token(&bob.device_token).unwrap(),
-            Some(bob.account_id)
-        );
+        // Revoke the phone: its token stops resolving, the laptop still works.
+        assert!(store
+            .revoke_device(&alice.account_id, &phone.device_id)
+            .unwrap());
+        assert!(store.resolve_token(&phone.device_token).unwrap().is_none());
+        assert!(store.resolve_token(&alice.device_token).unwrap().is_some());
+        assert_eq!(store.list_devices(&alice.account_id).unwrap().len(), 1);
+        // Revoking an unknown device id is a no-op.
+        assert!(!store.revoke_device(&alice.account_id, "nope").unwrap());
+
+        // Unknown token resolves to None; add_device on it is None.
+        assert!(store.resolve_token("deadbeef").unwrap().is_none());
+        assert!(store.add_device("deadbeef", "x", 1).unwrap().is_none());
     }
 
     #[test]
-    fn memory_account_store_register_add_device_resolve() {
+    fn memory_store_full_lifecycle() {
         account_suite(&MemoryAccountStore::new());
     }
 
     #[test]
-    fn file_account_store_register_add_device_resolve() {
-        let dir =
-            std::env::temp_dir().join(format!("proctor-accounts-test-{}", std::process::id()));
+    fn file_store_full_lifecycle() {
+        let dir = std::env::temp_dir().join(format!("proctor-accounts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        account_suite(&FileAccountStore::new(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn tokens_are_stored_hashed_not_in_the_clear() {
+        let dir = std::env::temp_dir().join(format!("proctor-acct-hash-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = FileAccountStore::new(&dir);
-        account_suite(&store);
+        let acct = store.register(None, "Laptop", 1).unwrap();
+        let on_disk = std::fs::read_to_string(dir.join("accounts.json")).unwrap();
+        // The plaintext token must NOT appear on disk — only its SHA-256 hash.
+        assert!(!on_disk.contains(&acct.device_token));
+        assert!(on_disk.contains(&token_hash(&acct.device_token)));
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn file_account_store_persists_across_instances() {
-        let dir =
-            std::env::temp_dir().join(format!("proctor-accounts-persist-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let token = {
-            let store = FileAccountStore::new(&dir);
-            store.register(None).unwrap().device_token
-        };
-        // A fresh instance over the same dir still resolves the token.
-        let reopened = FileAccountStore::new(&dir);
-        assert!(reopened.account_for_token(&token).unwrap().is_some());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn ids_and_tokens_are_128_bit_hex() {
-        let id = random_hex_id();
-        assert_eq!(id.len(), 32);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
+    fn ids_are_128_bit_hex_and_hash_is_256_bit() {
+        assert_eq!(random_hex_id().len(), 32);
+        assert_eq!(token_hash("x").len(), 64);
     }
 }

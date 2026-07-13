@@ -20,6 +20,19 @@ export interface SyncConfig {
   // The last server version this device successfully pushed/pulled, or null if
   // it has never synced a vault yet (so the first push omits If-Match).
   lastVersion: string | null;
+  // This device's own id on the server, when known. The server's `current` flag
+  // on GET /v1/devices is the source of truth for "this device"; this is a local
+  // fallback so the UI can still identify itself if that flag is ever missing.
+  deviceId?: string | null;
+}
+
+/** One device linked to the account, as returned by GET /v1/devices. */
+export interface DeviceInfo {
+  id: string;
+  label: string;
+  created_epoch: number;
+  // True for the device making the request (i.e. this browser).
+  current: boolean;
 }
 
 /** Thrown by `push` when the server rejects the write on a version conflict. */
@@ -46,6 +59,7 @@ export function syncConfig(): SyncConfig | null {
         accountId: parsed.accountId,
         deviceToken: parsed.deviceToken,
         lastVersion: typeof parsed.lastVersion === 'string' ? parsed.lastVersion : null,
+        deviceId: typeof parsed.deviceId === 'string' ? parsed.deviceId : null,
       };
     }
   } catch {
@@ -80,27 +94,65 @@ function authHeaders(config: SyncConfig): HeadersInit {
 }
 
 /**
+ * Derive a short, human-friendly label for the current device from the browser's
+ * user agent (e.g. "Chrome on macOS"). A best-effort default the caller can send
+ * when registering or adding a device so the devices list is legible.
+ */
+export function defaultDeviceLabel(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  if (!ua) return 'Web vault';
+
+  let browser = 'Browser';
+  if (/\bEdg\//.test(ua)) browser = 'Edge';
+  else if (/\bOPR\/|\bOpera\b/.test(ua)) browser = 'Opera';
+  else if (/\bFirefox\//.test(ua)) browser = 'Firefox';
+  else if (/\bChrome\//.test(ua)) browser = 'Chrome';
+  else if (/\bSafari\//.test(ua)) browser = 'Safari';
+
+  let os = '';
+  if (/\bWindows\b/.test(ua)) os = 'Windows';
+  else if (/\b(iPhone|iPad|iPod)\b/.test(ua)) os = 'iOS';
+  else if (/\bMac OS X\b|\bMacintosh\b/.test(ua)) os = 'macOS';
+  else if (/\bAndroid\b/.test(ua)) os = 'Android';
+  else if (/\bLinux\b/.test(ua)) os = 'Linux';
+
+  return os ? `${browser} on ${os}` : browser;
+}
+
+/**
  * Register a new account on `serverUrl` (optionally attaching `email`), store the
  * returned account id + device token as the sync config, and return the config.
  * This is the "enable cloud sync on the first device" flow.
  */
-export async function register(serverUrl: string, email?: string): Promise<SyncConfig> {
+export async function register(
+  serverUrl: string,
+  email?: string,
+  label?: string,
+): Promise<SyncConfig> {
   const base = normalizeUrl(serverUrl);
   if (!base) throw new Error('A server URL is required.');
+  const deviceLabel = label?.trim() || defaultDeviceLabel();
+  const payload: Record<string, string> = { label: deviceLabel };
+  if (email) payload.email = email;
   const res = await fetch(`${base}/v1/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(email ? { email } : {}),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     throw new Error(`Registration failed (HTTP ${res.status}).`);
   }
-  const body = (await res.json()) as { account_id: string; device_token: string };
+  const body = (await res.json()) as {
+    account_id: string;
+    device_token: string;
+    device_id?: string;
+  };
   const config: SyncConfig = {
     serverUrl: base,
     accountId: body.account_id,
     deviceToken: body.device_token,
     lastVersion: null,
+    deviceId: body.device_id ?? null,
   };
   writeConfig(config);
   return config;
@@ -110,18 +162,56 @@ export async function register(serverUrl: string, email?: string): Promise<SyncC
  * Provision a second device token for the same account (the "add a device"
  * flow). Returns the new token, which the user carries to the other device.
  */
-export async function addDevice(): Promise<string> {
+export async function addDevice(label?: string): Promise<string> {
   const config = syncConfig();
   if (config === null) throw new Error('Cloud sync is not enabled on this device.');
+  const deviceLabel = label?.trim() || defaultDeviceLabel();
   const res = await fetch(`${config.serverUrl}/v1/devices`, {
     method: 'POST',
-    headers: authHeaders(config),
+    headers: { ...(authHeaders(config) as Record<string, string>), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ label: deviceLabel }),
   });
   if (!res.ok) {
     throw new Error(`Could not add a device (HTTP ${res.status}).`);
   }
-  const body = (await res.json()) as { device_token: string };
+  const body = (await res.json()) as { device_token: string; device_id?: string };
   return body.device_token;
+}
+
+/**
+ * List every device linked to this account. Each carries a `current` flag set by
+ * the server for the device making the request, so the UI can mark "this device"
+ * and forbid revoking it.
+ */
+export async function listDevices(): Promise<DeviceInfo[]> {
+  const config = syncConfig();
+  if (config === null) throw new Error('Cloud sync is not enabled on this device.');
+  const res = await fetch(`${config.serverUrl}/v1/devices`, {
+    method: 'GET',
+    headers: authHeaders(config),
+  });
+  if (!res.ok) {
+    throw new Error(`Could not load devices (HTTP ${res.status}).`);
+  }
+  const body = (await res.json()) as { devices?: DeviceInfo[] };
+  return body.devices ?? [];
+}
+
+/**
+ * Revoke another device's token (the lost-device flow). That device can no longer
+ * sync until it is re-linked. Throws on any non-2xx response, including a 404 for
+ * an unknown device id.
+ */
+export async function revokeDevice(id: string): Promise<void> {
+  const config = syncConfig();
+  if (config === null) throw new Error('Cloud sync is not enabled on this device.');
+  const res = await fetch(`${config.serverUrl}/v1/devices/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: authHeaders(config),
+  });
+  if (!res.ok) {
+    throw new Error(`Could not revoke device (HTTP ${res.status}).`);
+  }
 }
 
 /** Disable cloud sync on this device by clearing its config (local data stays). */

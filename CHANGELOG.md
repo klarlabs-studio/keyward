@@ -3,6 +3,28 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.21.0] — 2026-07-13
+
+**Sync auth hardening — hashed tokens + device revocation.** Two real security
+gaps in cloud sync, closed and verified.
+
+### Changed — `proctor-sync` / `proctor-sync-server`
+- **Device tokens are stored only as their SHA-256 hash.** Like passwords, the
+  plaintext token is returned once (at register / add-device) and never
+  persisted — a breached `accounts.json` yields no usable credentials. Verified:
+  the plaintext token is absent from the on-disk registry.
+- **Device management (the lost-device flow):** each token is now a named
+  *device* (label + created time). New endpoints `GET /v1/devices` (list, flags
+  the current one) and `DELETE /v1/devices/{id}` (revoke). A revoked token stops
+  authenticating immediately; other devices are unaffected. Verified end-to-end
+  with curl (register → hash-only at rest → add device → list → revoke → revoked
+  token gets 401).
+- `register`/`add-device` responses now include `device_id`; `AccountStore` gains
+  `resolve_token`/`list_devices`/`revoke_device`. 8 crate tests.
+
+### Added — web vault (`app/`)
+- The Sync dialog lists your devices and lets you **revoke** a lost one.
+
 ## [1.20.0] — 2026-07-13
 
 **Cloud sync, end to end — plus a desktop app.** Three surfaces built in parallel

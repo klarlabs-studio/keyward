@@ -50,7 +50,10 @@ an **opaque** sealed-vault blob per account and never sees plaintext, the master
 password, or the Secret Key — a stolen server yields only ciphertext (the 2SKD
 promise, extended to the cloud). It shares no domain model with Passbook: the blob
 is `proctor-passbook`'s `SealedVault` bytes, but to Sync it is just bytes
-(Published Language = "an opaque versioned blob").
+(Published Language = "an opaque versioned blob"). Identity is an `AccountStore`
+with per-device bearer tokens stored **only as SHA-256 hashes** (a breached
+registry yields no usable credentials), and devices can be listed and **revoked**
+(the lost-device flow).
 
 ### Credential Broker (developer wedge — Phase B)
 The AI-native broker: `proctor-vault` (its store), `proctor-broker` (capabilities,

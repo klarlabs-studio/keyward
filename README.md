@@ -56,7 +56,8 @@ crates/
   sync/     proctor-sync    zero-knowledge sync domain: versioned push/pull of an
                             opaque sealed blob (SyncStore port + Memory/File adapters)
   sync-server/ proctor-sync-server  tiny HTTP server for E2E sync — accounts +
-                            per-device tokens + CORS; stores only ciphertext
+                            per-device tokens (stored as SHA-256 hashes) with
+                            device list/revoke + CORS; stores only ciphertext
 ```
 
 The **web vault** (`app/`) can turn on **cloud sync** (register an account, add

@@ -3,8 +3,9 @@
 //! A tiny HTTP API over [`proctor_sync`]. It stores an opaque sealed-vault blob
 //! per account and never inspects it — no plaintext, master password, or Secret
 //! Key ever reaches this process. Per-device bearer tokens map to accounts via
-//! the [`AccountStore`]; versioning is optimistic (`If-Match`), so a stale push
-//! gets 409 and must pull first.
+//! the [`AccountStore`], which stores only the SHA-256 hash of each token (a
+//! breached registry yields no usable credentials). Versioning is optimistic
+//! (`If-Match`), so a stale push gets 409 and must pull first.
 //!
 //! Config (env):
 //!   PROCTOR_SYNC_ADDR    listen address (default 127.0.0.1:8787)
@@ -14,20 +15,30 @@
 //!                        for tests/bootstrapping)
 //!
 //! API (every response, including errors, carries permissive CORS headers):
-//!   POST /v1/register  -> 200 {account_id, device_token}                 (no auth)
-//!   POST /v1/devices   -> 200 {device_token} (new token, same account)   | 401
-//!   GET  /v1/vault     -> 200 + blob (+ X-Vault-Version) | 404 | 401
-//!   PUT  /v1/vault     -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
-//!   OPTIONS *          -> 204 (CORS preflight)
+//!   POST   /v1/register     -> 200 {account_id, device_token, device_id}    (no auth)
+//!   POST   /v1/devices      -> 200 {device_token, device_id} (same account) | 401
+//!   GET    /v1/devices      -> 200 {devices:[{id,label,created_epoch,current}]} | 401
+//!   DELETE /v1/devices/{id} -> 200 {revoked:true} | 404 | 401  (revoke a device)
+//!   GET    /v1/vault        -> 200 + blob (+ X-Vault-Version) | 404 | 401
+//!   PUT    /v1/vault        -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
+//!   OPTIONS *               -> 204 (CORS preflight)
 //!   (If-Match: <version> on PUT; omit for the first upload.)
 
 use proctor_sync::{
     AccountStore, FileAccountStore, FileStore, MemoryAccountStore, MemoryStore, SyncError,
-    SyncStore,
+    SyncStore, TokenIdentity,
 };
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server};
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 /// Bundle of the two driven ports plus the optional static token pre-seed.
 struct App {
@@ -98,7 +109,10 @@ fn cors_headers() -> [Header; 4] {
             "Authorization, If-Match, Content-Type",
         ),
         h("Access-Control-Expose-Headers", "X-Vault-Version"),
-        h("Access-Control-Allow-Methods", "GET, PUT, POST, OPTIONS"),
+        h(
+            "Access-Control-Allow-Methods",
+            "GET, PUT, POST, DELETE, OPTIONS",
+        ),
     ]
 }
 
@@ -142,14 +156,17 @@ fn bearer_token(request: &Request) -> Option<String> {
         .map(|t| t.trim().to_string())
 }
 
-/// Resolve a request's bearer token to an account id. The registry is
-/// authoritative; the static pre-seed map is a fallback for tests.
-fn account_for(request: &Request, app: &App) -> Option<String> {
+/// Resolve a request's bearer token to an account + device. The registry is
+/// authoritative; the static pre-seed map is a fallback for tests (no device id).
+fn identity_for(request: &Request, app: &App) -> Option<TokenIdentity> {
     let token = bearer_token(request)?;
-    if let Ok(Some(account)) = app.accounts.account_for_token(&token) {
-        return Some(account);
+    if let Ok(Some(identity)) = app.accounts.resolve_token(&token) {
+        return Some(identity);
     }
-    app.seed_tokens.get(&token).cloned()
+    app.seed_tokens.get(&token).map(|account_id| TokenIdentity {
+        account_id: account_id.clone(),
+        device_id: String::new(),
+    })
 }
 
 fn if_match(request: &Request) -> Option<u64> {
@@ -178,28 +195,41 @@ fn handle(request: Request, app: &App) {
     match (&method, url.as_str()) {
         (Method::Post, "/v1/register") => handle_register(request, app),
         (Method::Post, "/v1/devices") => handle_add_device(request, app),
+        (Method::Get, "/v1/devices") => handle_list_devices(request, app),
+        (Method::Delete, path) if path.starts_with("/v1/devices/") => {
+            let device_id = path.trim_start_matches("/v1/devices/").to_string();
+            handle_revoke_device(request, app, &device_id);
+        }
         (_, "/v1/vault") => handle_vault(request, app, method, &url),
         _ => respond(request, text("not found", 404)),
     }
 }
 
-/// POST /v1/register — no auth. Optional JSON body `{"email":"..."}`.
-fn handle_register(mut request: Request, app: &App) {
+/// Read a small JSON request body into a `Value`, tolerating an empty/absent body.
+fn read_body_json(request: &mut Request) -> serde_json::Value {
     let mut body = Vec::new();
-    if request.as_reader().read_to_end(&mut body).is_err() {
-        respond(request, text("bad body", 400));
-        return;
-    }
-    let email = serde_json::from_slice::<serde_json::Value>(&body)
-        .ok()
-        .and_then(|v| v.get("email").and_then(|e| e.as_str()).map(str::to_string));
+    let _ = request.as_reader().read_to_end(&mut body);
+    serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
+}
 
-    match app.accounts.register(email.as_deref()) {
+/// A string field from a parsed body, or `None`.
+fn str_field(body: &serde_json::Value, field: &str) -> Option<String> {
+    body.get(field).and_then(|e| e.as_str()).map(str::to_string)
+}
+
+/// POST /v1/register — no auth. Optional JSON body `{"email":"...","label":"..."}`.
+fn handle_register(mut request: Request, app: &App) {
+    let body = read_body_json(&mut request);
+    let email = str_field(&body, "email");
+    let label = str_field(&body, "label").unwrap_or_else(|| "This device".to_string());
+
+    match app.accounts.register(email.as_deref(), &label, now_unix()) {
         Ok(account) => {
             eprintln!("POST /v1/register -> 200 account={}", account.account_id);
             let body = serde_json::json!({
                 "account_id": account.account_id,
                 "device_token": account.device_token,
+                "device_id": account.device_id,
             })
             .to_string();
             respond(request, json(body, 200));
@@ -208,26 +238,81 @@ fn handle_register(mut request: Request, app: &App) {
     }
 }
 
-/// POST /v1/devices — auth. Mints a second token for the SAME account.
-fn handle_add_device(request: Request, app: &App) {
+/// POST /v1/devices — auth. Mints a new device+token for the SAME account.
+fn handle_add_device(mut request: Request, app: &App) {
     let token = match bearer_token(&request) {
         Some(t) => t,
         None => {
-            eprintln!("POST /v1/devices -> 401 (missing token)");
             respond(request, text("unauthorized", 401));
             return;
         }
     };
-    match app.accounts.add_device(&token) {
-        Ok(Some(new_token)) => {
-            eprintln!("POST /v1/devices -> 200 (new device token issued)");
-            let body = serde_json::json!({ "device_token": new_token }).to_string();
+    let label = str_field(&read_body_json(&mut request), "label")
+        .unwrap_or_else(|| "New device".to_string());
+    match app.accounts.add_device(&token, &label, now_unix()) {
+        Ok(Some(account)) => {
+            eprintln!(
+                "POST /v1/devices -> 200 (new device for account={})",
+                account.account_id
+            );
+            let body = serde_json::json!({
+                "device_token": account.device_token,
+                "device_id": account.device_id,
+            })
+            .to_string();
             respond(request, json(body, 200));
         }
-        Ok(None) => {
-            eprintln!("POST /v1/devices -> 401 (unknown token)");
+        Ok(None) => respond(request, text("unauthorized", 401)),
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// GET /v1/devices — auth. List the account's devices (no secrets), flagging the
+/// one making this request as `current`.
+fn handle_list_devices(request: Request, app: &App) {
+    let identity = match identity_for(&request, app) {
+        Some(i) => i,
+        None => {
             respond(request, text("unauthorized", 401));
+            return;
         }
+    };
+    match app.accounts.list_devices(&identity.account_id) {
+        Ok(devices) => {
+            let items: Vec<serde_json::Value> = devices
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "id": d.id,
+                        "label": d.label,
+                        "created_epoch": d.created_epoch,
+                        "current": d.id == identity.device_id,
+                    })
+                })
+                .collect();
+            let body = serde_json::json!({ "devices": items }).to_string();
+            respond(request, json(body, 200));
+        }
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// DELETE /v1/devices/{id} — auth. Revoke a device of the caller's OWN account
+/// (you can only manage your own devices).
+fn handle_revoke_device(request: Request, app: &App, device_id: &str) {
+    let identity = match identity_for(&request, app) {
+        Some(i) => i,
+        None => {
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+    match app.accounts.revoke_device(&identity.account_id, device_id) {
+        Ok(true) => {
+            eprintln!("DELETE /v1/devices/{device_id} -> 200 (revoked)");
+            respond(request, json(r#"{"revoked":true}"#.to_string(), 200));
+        }
+        Ok(false) => respond(request, text("no such device", 404)),
         Err(e) => respond_500(request, &e),
     }
 }
@@ -235,8 +320,8 @@ fn handle_add_device(request: Request, app: &App) {
 /// GET/PUT /v1/vault — auth. Zero-knowledge blob get/put with optimistic
 /// concurrency; the blob is never logged or inspected.
 fn handle_vault(mut request: Request, app: &App, method: Method, url: &str) {
-    let account = match account_for(&request, app) {
-        Some(a) => a,
+    let account = match identity_for(&request, app) {
+        Some(i) => i.account_id,
         None => {
             eprintln!("{method} {url} -> 401 (bad/missing token)");
             respond(request, text("unauthorized", 401));

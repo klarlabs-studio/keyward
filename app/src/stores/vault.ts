@@ -401,6 +401,34 @@ export const useVaultStore = defineStore('vault', {
       }
     },
 
+    /**
+     * List the devices linked to this account (for the Sync dialog). Returns an
+     * empty array on failure so the UI can show a toast without crashing.
+     */
+    async loadDevices(): Promise<sync.DeviceInfo[]> {
+      try {
+        return await sync.listDevices();
+      } catch {
+        toast('Could not load devices');
+        return [];
+      }
+    },
+
+    /**
+     * Revoke another device's token (the lost-device flow). Returns true on
+     * success. Never throws — surfaces failures as a toast.
+     */
+    async revokeDevice(id: string): Promise<boolean> {
+      try {
+        await sync.revokeDevice(id);
+        toast('Device revoked');
+        return true;
+      } catch {
+        toast('Could not revoke device');
+        return false;
+      }
+    },
+
     /** Turn off cloud sync on this device (local vault and Secret Key stay). */
     disableSync() {
       sync.disableSync();

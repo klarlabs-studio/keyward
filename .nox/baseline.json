@@ -464,6 +464,14 @@
       "severity": "medium",
       "reason": "False positives: SyncDialog.vue email field placeholder 'you@example.com' and an accounts.rs unit-test email — neither is a real hardcoded PII value.",
       "created_at": "2026-07-13T04:54:44.54835Z"
+    },
+    {
+      "fingerprint": "7fbe5cebc1a75da4e0163c3c3815bcfa0439ed6578bfe58196e7a92de45426c6",
+      "rule_id": "DATA-001",
+      "file_path": ".nox/baseline.json",
+      "severity": "medium",
+      "reason": "False positive on nox's own baseline.json — a prior baseline entry's reason text contains an example email (alice@example.com); not a real email in source.",
+      "created_at": "2026-07-13T05:28:22.984648Z"
     }
   ]
 }
