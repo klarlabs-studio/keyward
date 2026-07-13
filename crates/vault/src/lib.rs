@@ -11,12 +11,9 @@
 //! folded into KDF (two-secret key derivation), tuned Argon2 parameters,
 //! per-item keys, authenticated associated data, and a formal review.
 
-use argon2::Argon2;
-use chacha20poly1305::{
-    aead::{Aead, KeyInit},
-    XChaCha20Poly1305, XNonce,
+use proctor_crypto::{
+    aead_open, aead_seal, derive_key_argon2id, random_array, NONCE_LEN, SALT_LEN,
 };
-use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -123,30 +120,19 @@ pub struct SealedVault {
     ciphertext: Vec<u8>,
 }
 
+/// Derive the vault key from the user's secret and salt via the shared kernel.
 fn derive_key(secret: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, VaultError> {
-    let mut key = Zeroizing::new([0u8; 32]);
-    Argon2::default()
-        .hash_password_into(secret, salt, key.as_mut())
-        .map_err(|_| VaultError::KeyDerivation)?;
-    Ok(key)
+    derive_key_argon2id(secret, salt).map_err(|_| VaultError::KeyDerivation)
 }
 
 /// Seal a set of items under the user's secret material.
 pub fn seal(items: &[Item], secret: &[u8]) -> Result<SealedVault, VaultError> {
-    let mut salt = [0u8; 16];
-    let mut nonce = [0u8; 24];
-    OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut nonce);
-
+    let salt = random_array::<SALT_LEN>();
+    let nonce = random_array::<NONCE_LEN>();
     let key = derive_key(secret, &salt)?;
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
-
     let plaintext = Zeroizing::new(serde_json::to_vec(items)?);
-    let ciphertext = cipher
-        .encrypt(XNonce::from_slice(&nonce), plaintext.as_slice())
-        .map_err(|_| VaultError::Decrypt)?;
-
+    let ciphertext =
+        aead_seal(&key, &nonce, plaintext.as_slice()).map_err(|_| VaultError::Decrypt)?;
     Ok(SealedVault {
         salt,
         nonce,
@@ -157,18 +143,11 @@ pub fn seal(items: &[Item], secret: &[u8]) -> Result<SealedVault, VaultError> {
 /// Open a sealed vault. Fails on wrong secret or any tampering (AEAD auth).
 pub fn open(sealed: &SealedVault, secret: &[u8]) -> Result<Vec<Item>, VaultError> {
     let key = derive_key(secret, &sealed.salt)?;
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(key.as_ref()).map_err(|_| VaultError::KeyDerivation)?;
     let plaintext = Zeroizing::new(
-        cipher
-            .decrypt(
-                XNonce::from_slice(&sealed.nonce),
-                sealed.ciphertext.as_ref(),
-            )
+        aead_open(&key, &sealed.nonce, sealed.ciphertext.as_ref())
             .map_err(|_| VaultError::Decrypt)?,
     );
-    let items = serde_json::from_slice(&plaintext)?;
-    Ok(items)
+    Ok(serde_json::from_slice(&plaintext)?)
 }
 
 /// Seal `items` and write the sealed blob to `path` as JSON.

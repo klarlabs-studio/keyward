@@ -18,13 +18,16 @@
 //!   passbook emergency-kit
 
 use proctor_passbook::{
-    open, seal, totp, watchtower, Category, Content, Entry, Issue, Login, SealedVault, SecretKey,
+    open, seal, totp, watchtower, Category, Clock, Content, Entry, Issue, Login, PassbookError,
+    SealedVault, SecretKey, VaultRepository,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::exit;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+mod adapters;
 mod bridge;
+
+use adapters::{FileVaultRepository, SystemClock};
 
 const TOTP_STEP: u64 = 30;
 
@@ -144,55 +147,46 @@ fn load_secret_key() -> Option<SecretKey> {
 }
 
 fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    SystemClock.now_unix()
 }
 
 // ---------------------------------------------------------------------------
 // Vault persistence
 // ---------------------------------------------------------------------------
 
-fn read_sealed(path: &PathBuf) -> SealedVault {
-    if !path.exists() {
+/// Read the sealed vault through the [`VaultRepository`] port, turning port
+/// errors into the CLI's clean messages (absent vault vs corrupt vs unreadable).
+fn read_sealed(path: &Path) -> SealedVault {
+    let repo = FileVaultRepository::new(path.to_path_buf());
+    if !repo.exists() {
         eprintln!(
             "error: no vault at {} — run `passbook init` first.",
             path.display()
         );
         exit(1);
     }
-    let bytes = std::fs::read(path).unwrap_or_else(|e| {
-        eprintln!("error: cannot read vault {}: {e}", path.display());
-        exit(1);
-    });
-    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
-        eprintln!("error: vault {} is corrupt: {e}", path.display());
+    repo.load().unwrap_or_else(|e| {
+        match e {
+            PassbookError::Serde(err) => {
+                eprintln!("error: vault {} is corrupt: {err}", path.display())
+            }
+            other => eprintln!("error: cannot read vault {}: {other}", path.display()),
+        }
         exit(1);
     })
 }
 
-fn write_sealed(path: &PathBuf, sealed: &SealedVault) {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).unwrap_or_else(|e| {
-                eprintln!("error: cannot create {}: {e}", parent.display());
-                exit(1);
-            });
-        }
-    }
-    let json = serde_json::to_vec_pretty(sealed).unwrap_or_else(|e| {
-        eprintln!("error: cannot serialize vault: {e}");
-        exit(1);
-    });
-    std::fs::write(path, json).unwrap_or_else(|e| {
-        eprintln!("error: cannot write vault {}: {e}", path.display());
-        exit(1);
-    });
+fn write_sealed(path: &Path, sealed: &SealedVault) {
+    FileVaultRepository::new(path.to_path_buf())
+        .save(sealed)
+        .unwrap_or_else(|e| {
+            eprintln!("error: cannot write vault {}: {e}", path.display());
+            exit(1);
+        });
 }
 
 /// Open the on-disk vault into entries, mapping crypto failures to a clean message.
-fn load_entries(path: &PathBuf, master: &[u8], sk: Option<&SecretKey>) -> Vec<Entry> {
+fn load_entries(path: &Path, master: &[u8], sk: Option<&SecretKey>) -> Vec<Entry> {
     let sealed = read_sealed(path);
     open(&sealed, master, sk).unwrap_or_else(|e| {
         eprintln!("error: cannot open vault: {e}");
@@ -200,7 +194,7 @@ fn load_entries(path: &PathBuf, master: &[u8], sk: Option<&SecretKey>) -> Vec<En
     })
 }
 
-fn reseal(path: &PathBuf, entries: &[Entry], master: &[u8], sk: Option<&SecretKey>) {
+fn reseal(path: &Path, entries: &[Entry], master: &[u8], sk: Option<&SecretKey>) {
     let sealed = seal(entries, master, sk).unwrap_or_else(|e| {
         eprintln!("error: cannot seal vault: {e}");
         exit(1);

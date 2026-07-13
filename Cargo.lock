@@ -1011,6 +1011,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "proctor-crypto"
+version = "1.17.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "rand 0.8.7",
+ "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
 name = "proctor-mcp"
 version = "1.17.0"
 dependencies = [
@@ -1047,11 +1058,11 @@ dependencies = [
 name = "proctor-passbook"
 version = "1.17.0"
 dependencies = [
- "argon2",
  "base32",
  "chacha20poly1305",
  "hkdf",
  "hmac",
+ "proctor-crypto",
  "rand 0.8.7",
  "serde",
  "serde_json",
@@ -1077,9 +1088,7 @@ dependencies = [
 name = "proctor-vault"
 version = "1.17.0"
 dependencies = [
- "argon2",
- "chacha20poly1305",
- "rand 0.8.7",
+ "proctor-crypto",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

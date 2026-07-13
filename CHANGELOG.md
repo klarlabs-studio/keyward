@@ -3,6 +3,32 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.18.0] — 2026-07-13
+
+**DDD / hexagonal alignment.** A structural pass that makes the Domain-Driven
+Design explicit — no behavior change, all tests green throughout, and the
+sealed-vault byte format unchanged (verified: a vault sealed before the refactor
+still opens after).
+
+### Added — `proctor-crypto` (shared kernel)
+- New crate: the Argon2id KDF + XChaCha20-Poly1305 AEAD + CSPRNG primitives,
+  previously duplicated in `proctor-vault` and `proctor-passbook`. Both contexts
+  now depend on it; the construction is defined once. 5 tests.
+
+### Changed — `proctor-passbook` (domain core)
+- Split the single `lib.rs` into DDD modules: `domain` (entities + value
+  objects), `sealing` (sealing service + `SealedVault` aggregate, on the shared
+  kernel), `watchtower` (analysis service), plus existing `sharing` / `totp`. The
+  crate root re-exports the public API, so downstream code is unchanged.
+- New `ports` module: `VaultRepository` and `Clock` driven ports.
+- `proctor-vault` refactored onto the shared kernel too.
+
+### Added — adapters + docs
+- `passbook-cli::adapters`: `FileVaultRepository` and `SystemClock` implement the
+  ports; the CLI's persistence + time now go through them.
+- `docs/architecture/`: **ubiquitous-language.md**, **context-map.md**, and
+  **ADR-0003** (the DDD/hexagonal decision), linked from the README.
+
 ## [1.17.0] — 2026-07-12
 
 **Real autofill — the browser extension talks to the vault.** The last "demo

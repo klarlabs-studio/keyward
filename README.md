@@ -34,7 +34,9 @@ switch — all driveable from Claude Code over MCP, all tested.
 
 ```
 crates/
-  vault/    proctor-vault   encrypted vault (Argon2id + XChaCha20-Poly1305), file-backed — PROTOTYPE
+  crypto/   proctor-crypto  shared cryptographic kernel (Argon2id KDF + XChaCha20-Poly1305
+                            AEAD + CSPRNG) — used by both vault contexts
+  vault/    proctor-vault   encrypted vault (on the shared kernel), file-backed — PROTOTYPE
   broker/   proctor-broker  the security model: capabilities, origin-binding,
                             propose-not-commit, risk-tiered policy, hash-chained audit
   mint/     proctor-mint    mint short-lived scoped tokens + secretless execution
@@ -70,6 +72,12 @@ The consumer product (**Phase A**, the 1Password equivalent) also ships:
 
 The vault crypto core (`proctor-passbook`) compiles to WebAssembly so the same
 tested Rust runs in the CLI, the MCP server, and the browser.
+
+**Architecture** follows Domain-Driven Design + hexagonal (ports & adapters): two
+bounded contexts (Passbook, Broker) over one shared crypto kernel, a pure domain
+core, and I/O behind ports. See [context map](docs/architecture/context-map.md),
+[ubiquitous language](docs/architecture/ubiquitous-language.md), and
+[ADR-0003](docs/architecture/ADR-0003-ddd-hexagonal-structure.md).
 
 New providers are **external config**, not code. Drop a `<id>.toml` into
 `$PROCTOR_PROFILES` (see [`profiles/`](profiles/)) and `proctor profiles` picks it

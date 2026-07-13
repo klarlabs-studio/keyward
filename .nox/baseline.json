@@ -296,6 +296,14 @@
       "severity": "medium",
       "reason": "Test fixture in bridge.rs host_of() unit test: \"user@GitHub.com:443\" exercises credential/port stripping in URL host normalization — not a real email address.",
       "created_at": "2026-07-12T21:08:13.900895Z"
+    },
+    {
+      "fingerprint": "02a69a847a4b2e3414297fcdd3184aa1284cf74b07a2551a836e63b49ec943b5",
+      "rule_id": "DATA-001",
+      "file_path": ".nox/baseline.json",
+      "severity": "medium",
+      "reason": "False positive on nox's own baseline.json — a prior baseline entry's reason text contains the example host user@GitHub.com; not a real email in source.",
+      "created_at": "2026-07-13T04:00:23.715974Z"
     }
   ]
 }

@@ -1,0 +1,13 @@
+[package]
+name = "proctor-crypto"
+description = "Proctor shared cryptographic kernel — Argon2id KDF + XChaCha20-Poly1305 AEAD primitives shared by the vault contexts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+thiserror = "1"
