@@ -3,6 +3,42 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.28.0] — 2026-07-17
+
+**Family sharing, slice 1: the zero-knowledge relay is real and reachable.**
+
+The sharing *crypto* (`crates/passbook/src/sharing.rs`) existed and was tested but
+was wired to nothing — no server, no UI. This begins wiring it into a usable
+feature. See **[ADR-0004](docs/architecture/ADR-0004-family-sharing.md)** for the
+architecture, the STRIDE threat model, and the increment plan.
+
+### Added — share-group store (`proctor-sync::groups`)
+- A `ShareGroupStore` port with `MemoryShareGroupStore` + `FileShareGroupStore`
+  adapters. A **share group** holds a public member directory (X25519 *public*
+  keys + names), single-use TTL'd invites stored as SHA-256 *hashes* of the code,
+  the opaque per-member **wrapped keys**, and the opaque shared **content** blob —
+  the last two each versioned for optimistic concurrency. Invite redemption
+  (expiry + single-use) and both version bumps are atomic under the store lock.
+  Fully unit-tested (memory + file, plus path-traversal safety).
+
+### Added — share-group HTTP relay (`proctor-sync-server`)
+- `POST /v1/groups`, `GET /v1/groups/{id}`, `POST .../invites`, `POST .../members`
+  (redeem), `GET|PUT .../keys`, `GET|PUT .../vault`, `DELETE .../members/{mid}`.
+  Auth reuses per-device bearer tokens; membership/owner checks run against the
+  public directory; `/keys` and `/vault` use the same `If-Match`/`X-Vault-Version`
+  optimistic-concurrency contract as the personal vault. **Zero-knowledge
+  preserved:** the server only ever sees public keys, hashed invite codes, and
+  opaque ciphertext — never a vault key, master password, or Secret Key. Verified
+  end-to-end (create → invite → join → single-use rejection → non-member 403 →
+  keys/content round-trip → stale-write 409 → owner-only revoke → post-revoke
+  lockout).
+
+### Note
+- This is the server slice. The client crypto surface (vault-key indirection in
+  `sealing`, member keypairs, WASM bindings) and the app UX (invite/accept flow,
+  member list, "Manage sharing") are the next increments (v1.29.0 / v1.30.0). A
+  formal external review of the sharing crypto remains a hard gate before GA.
+
 ## [1.27.0] — 2026-07-17
 
 **Links + responsive polish, and the browser extension goes demo-free too.**

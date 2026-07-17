@@ -28,10 +28,25 @@
 //!   DELETE /v1/vault          -> 204 | 401  (erase this account's vault, idempotent)
 //!   OPTIONS *                 -> 204 (CORS preflight)
 //!   (If-Match: <version> on PUT; omit for the first upload.)
+//!
+//! Family sharing — the zero-knowledge share-group relay (all auth'd):
+//!   POST   /v1/groups                     -> 200 {group_id} (owner from body member)
+//!   GET    /v1/groups/{id}                -> 200 {group_id,members,keys_version,content_version} | 403/404
+//!   POST   /v1/groups/{id}/invites        -> 200 {invite_code,expires_epoch} (member; body {ttl_seconds})
+//!   POST   /v1/groups/{id}/members        -> 200 {joined:true} | 403 (invitee; body {code,member_id,name,public_key})
+//!   GET    /v1/groups/{id}/keys           -> 200 + wrapped-keys blob (+ X-Vault-Version) | 404
+//!   PUT    /v1/groups/{id}/keys           -> 200 + version | 409 (member; If-Match)
+//!   GET    /v1/groups/{id}/vault          -> 200 + shared blob (+ X-Vault-Version) | 404
+//!   PUT    /v1/groups/{id}/vault          -> 200 + version | 409 (member; If-Match)
+//!   DELETE /v1/groups/{id}/members/{mid}  -> 200 {removed:true} | 403 (owner only)
+//!   The server sees only public keys, opaque wrapped keys, opaque blobs, and
+//!   hashed invite codes — never a vault key, master password, or Secret Key.
 
+use proctor_sync::groups::{self, GroupInvite, GroupMember};
 use proctor_sync::{
-    AccountStore, FileAccountStore, FileStore, MemoryAccountStore, MemoryStore, SyncError,
-    SyncStore, TokenIdentity,
+    AccountStore, FileAccountStore, FileShareGroupStore, FileStore, MemoryAccountStore,
+    MemoryShareGroupStore, MemoryStore, RedeemOutcome, ShareGroupStore, SyncError, SyncStore,
+    TokenIdentity,
 };
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
@@ -49,6 +64,9 @@ fn now_unix() -> u64 {
 struct App {
     store: Box<dyn SyncStore + Send + Sync>,
     accounts: Box<dyn AccountStore + Send + Sync>,
+    /// Share-group relay for family sharing (zero-knowledge: public keys + opaque
+    /// wrapped keys + opaque content blob only).
+    groups: Box<dyn ShareGroupStore + Send + Sync>,
     /// Optional pre-seeded token→account map. The registry is authoritative;
     /// this is only consulted as a fallback.
     seed_tokens: HashMap<String, String>,
@@ -71,23 +89,27 @@ fn main() {
     let seed_tokens = parse_tokens(&std::env::var("PROCTOR_SYNC_TOKENS").unwrap_or_default());
     let token_ttl = token_ttl_from_env();
 
-    let (store, accounts): (
+    let (store, accounts, groups): (
         Box<dyn SyncStore + Send + Sync>,
         Box<dyn AccountStore + Send + Sync>,
+        Box<dyn ShareGroupStore + Send + Sync>,
     ) = match std::env::var("PROCTOR_SYNC_DIR") {
         Ok(dir) if !dir.is_empty() => (
             Box::new(FileStore::new(&dir)),
             Box::new(FileAccountStore::new(&dir)),
+            Box::new(FileShareGroupStore::new(&dir)),
         ),
         _ => (
             Box::new(MemoryStore::new()),
             Box::new(MemoryAccountStore::new()),
+            Box::new(MemoryShareGroupStore::new()),
         ),
     };
 
     let app = App {
         store,
         accounts,
+        groups,
         seed_tokens,
         token_ttl,
     };
@@ -226,6 +248,9 @@ fn handle(request: Request, app: &App) {
         }
         (Method::Delete, "/v1/vault") => handle_delete_vault(request, app),
         (_, "/v1/vault") => handle_vault(request, app, method, &url),
+        (_, path) if path == "/v1/groups" || path.starts_with("/v1/groups/") => {
+            handle_groups(request, app, method, &url);
+        }
         _ => respond(request, text("not found", 404)),
     }
 }
@@ -451,6 +476,298 @@ fn handle_delete_vault(request: Request, app: &App) {
             respond(request, text("", 204));
         }
         Err(e) => respond_500(request, &e),
+    }
+}
+
+/// Which versioned blob of a group a `/keys` or `/vault` request targets.
+#[derive(Clone, Copy)]
+enum Blob {
+    Keys,
+    Content,
+}
+
+/// Dispatch every `/v1/groups...` route. All group routes require a valid token;
+/// finer authorization (member vs. owner) is enforced per-handler against the
+/// group's public membership directory.
+fn handle_groups(request: Request, app: &App, method: Method, url: &str) {
+    let account = match identity_for(&request, app) {
+        Some(i) => i.account_id,
+        None => {
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+    let path = url.split('?').next().unwrap_or(url);
+
+    if path == "/v1/groups" {
+        match method {
+            Method::Post => handle_group_create(request, app, &account),
+            _ => respond(request, text("method not allowed", 405)),
+        }
+        return;
+    }
+
+    let rest = path.trim_start_matches("/v1/groups/");
+    let segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
+    match (segs.as_slice(), &method) {
+        ([id], Method::Get) => handle_group_get(request, app, &account, id),
+        ([id, "invites"], Method::Post) => handle_group_invite(request, app, &account, id),
+        ([id, "members"], Method::Post) => handle_group_join(request, app, &account, id),
+        ([id, "members", mid], Method::Delete) => {
+            handle_group_remove(request, app, &account, id, mid)
+        }
+        ([id, "keys"], _) => handle_group_blob(request, app, &account, id, method, Blob::Keys),
+        ([id, "vault"], _) => handle_group_blob(request, app, &account, id, method, Blob::Content),
+        _ => respond(request, text("not found", 404)),
+    }
+}
+
+/// POST /v1/groups — create a group; the caller becomes its owner. Body:
+/// `{member_id, name, public_key}` (the owner's public member identity).
+fn handle_group_create(mut request: Request, app: &App, account: &str) {
+    let body = read_body_json(&mut request);
+    let (Some(member_id), Some(public_key)) = (
+        str_field(&body, "member_id"),
+        str_field(&body, "public_key"),
+    ) else {
+        respond(request, text("member_id and public_key required", 400));
+        return;
+    };
+    let owner = GroupMember {
+        member_id,
+        account_id: account.to_string(),
+        name: str_field(&body, "name").unwrap_or_default(),
+        public_key,
+        is_owner: true,
+        added_epoch: now_unix(),
+    };
+    let group_id = groups::new_id();
+    match app.groups.create(&group_id, owner) {
+        Ok(_) => {
+            eprintln!("POST /v1/groups -> 200 group={group_id} owner_account={account}");
+            respond(
+                request,
+                json(serde_json::json!({ "group_id": group_id }).to_string(), 200),
+            );
+        }
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// GET /v1/groups/{id} — members + versions (members only).
+fn handle_group_get(request: Request, app: &App, account: &str, id: &str) {
+    let group = match app.groups.get(id) {
+        Ok(Some(g)) => g,
+        Ok(None) => {
+            respond(request, text("no such group", 404));
+            return;
+        }
+        Err(e) => {
+            respond_500(request, &e);
+            return;
+        }
+    };
+    if !group.is_member(account) {
+        respond(request, text("not a member", 403));
+        return;
+    }
+    let body = serde_json::json!({
+        "group_id": group.group_id,
+        "members": group.members,
+        "keys_version": group.keys_version,
+        "content_version": group.content_version,
+    })
+    .to_string();
+    respond(request, json(body, 200));
+}
+
+/// POST /v1/groups/{id}/invites — mint a single-use, TTL'd invite (members only).
+/// Body: `{ttl_seconds?}`. Returns the plaintext `invite_code` (shown once); the
+/// server keeps only its hash.
+fn handle_group_invite(mut request: Request, app: &App, account: &str, id: &str) {
+    // Membership check.
+    match app.groups.get(id) {
+        Ok(Some(g)) if g.is_member(account) => {}
+        Ok(Some(_)) => {
+            respond(request, text("not a member", 403));
+            return;
+        }
+        Ok(None) => {
+            respond(request, text("no such group", 404));
+            return;
+        }
+        Err(e) => {
+            respond_500(request, &e);
+            return;
+        }
+    }
+    let ttl = read_body_json(&mut request)
+        .get("ttl_seconds")
+        .and_then(|v| v.as_u64())
+        .filter(|&t| t > 0)
+        .unwrap_or(24 * 60 * 60); // default: 24h
+    let code = groups::new_id();
+    let now = now_unix();
+    let invite = GroupInvite {
+        code_hash: groups::hash_code(&code),
+        created_epoch: now,
+        expires_epoch: now.saturating_add(ttl),
+        redeemed_by: None,
+    };
+    match app.groups.add_invite(id, invite) {
+        Ok(true) => {
+            eprintln!("POST /v1/groups/{id}/invites -> 200 (minted, ttl {ttl}s)");
+            let body = serde_json::json!({
+                "invite_code": code,
+                "expires_epoch": now.saturating_add(ttl),
+            })
+            .to_string();
+            respond(request, json(body, 200));
+        }
+        Ok(false) => respond(request, text("no such group", 404)),
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// POST /v1/groups/{id}/members — redeem an invite and join. Body:
+/// `{code, member_id, name, public_key}`. The caller joins as their own account.
+fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
+    let body = read_body_json(&mut request);
+    let (Some(code), Some(member_id), Some(public_key)) = (
+        str_field(&body, "code"),
+        str_field(&body, "member_id"),
+        str_field(&body, "public_key"),
+    ) else {
+        respond(
+            request,
+            text("code, member_id and public_key required", 400),
+        );
+        return;
+    };
+    let new_member = GroupMember {
+        member_id,
+        account_id: account.to_string(),
+        name: str_field(&body, "name").unwrap_or_default(),
+        public_key,
+        is_owner: false,
+        added_epoch: now_unix(),
+    };
+    match app
+        .groups
+        .redeem_invite(id, &groups::hash_code(&code), new_member, now_unix())
+    {
+        Ok(RedeemOutcome::Added) => {
+            eprintln!("POST /v1/groups/{id}/members -> 200 (account={account} joined)");
+            respond(request, json(r#"{"joined":true}"#.to_string(), 200));
+        }
+        Ok(RedeemOutcome::Expired) => respond(request, text("invite expired", 403)),
+        Ok(RedeemOutcome::InvalidOrUsed) => {
+            respond(request, text("invalid or already-used invite", 403))
+        }
+        Ok(RedeemOutcome::NoSuchGroup) => respond(request, text("no such group", 404)),
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// DELETE /v1/groups/{id}/members/{mid} — remove a member (owner only). True
+/// revocation also requires the client to rotate the vault key and re-push
+/// `/keys` + `/vault`; the server only drops the directory entry.
+fn handle_group_remove(request: Request, app: &App, account: &str, id: &str, member_id: &str) {
+    match app.groups.get(id) {
+        Ok(Some(g)) if g.is_owner(account) => {}
+        Ok(Some(_)) => {
+            respond(request, text("owner only", 403));
+            return;
+        }
+        Ok(None) => {
+            respond(request, text("no such group", 404));
+            return;
+        }
+        Err(e) => {
+            respond_500(request, &e);
+            return;
+        }
+    }
+    match app.groups.remove_member(id, member_id) {
+        Ok(true) => {
+            eprintln!("DELETE /v1/groups/{id}/members/{member_id} -> 200 (removed)");
+            respond(request, json(r#"{"removed":true}"#.to_string(), 200));
+        }
+        Ok(false) => respond(request, text("no such member", 404)),
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// GET/PUT the group's wrapped-keys or shared-content blob (members only), with
+/// the same optimistic-concurrency (`If-Match` + `X-Vault-Version`) contract as
+/// the personal vault. The blobs are opaque — never logged or inspected.
+fn handle_group_blob(
+    mut request: Request,
+    app: &App,
+    account: &str,
+    id: &str,
+    method: Method,
+    which: Blob,
+) {
+    let group = match app.groups.get(id) {
+        Ok(Some(g)) => g,
+        Ok(None) => {
+            respond(request, text("no such group", 404));
+            return;
+        }
+        Err(e) => {
+            respond_500(request, &e);
+            return;
+        }
+    };
+    if !group.is_member(account) {
+        respond(request, text("not a member", 403));
+        return;
+    }
+
+    match method {
+        Method::Get => {
+            let (blob, version) = match which {
+                Blob::Keys => (group.wrapped_keys, group.keys_version),
+                Blob::Content => (group.content, group.content_version),
+            };
+            if version == 0 {
+                respond(request, text("nothing uploaded yet", 404));
+                return;
+            }
+            let resp = Response::from_data(blob)
+                .with_status_code(200)
+                .with_header(version_header(version));
+            respond(request, resp);
+        }
+        Method::Put => {
+            let expected = if_match(&request);
+            let mut blob = Vec::new();
+            if request.as_reader().read_to_end(&mut blob).is_err() {
+                respond(request, text("bad body", 400));
+                return;
+            }
+            let result = match which {
+                Blob::Keys => app.groups.put_keys(id, expected, blob),
+                Blob::Content => app.groups.put_content(id, expected, blob),
+            };
+            match result {
+                Ok(version) => {
+                    let resp = Response::from_string(version.to_string())
+                        .with_status_code(200)
+                        .with_header(version_header(version));
+                    respond(request, resp);
+                }
+                Err(SyncError::Conflict { server_version }) => {
+                    let resp = Response::from_string("version conflict — pull first")
+                        .with_status_code(409)
+                        .with_header(version_header(server_version));
+                    respond(request, resp);
+                }
+                Err(e) => respond_500(request, &e),
+            }
+        }
+        _ => respond(request, text("method not allowed", 405)),
     }
 }
 

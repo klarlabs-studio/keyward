@@ -16,9 +16,14 @@
 //! [`Conflict`]: SyncError::Conflict
 
 pub mod accounts;
+pub mod groups;
 
 pub use accounts::{
     Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, TokenIdentity,
+};
+pub use groups::{
+    FileShareGroupStore, GroupInvite, GroupMember, MemoryShareGroupStore, RedeemOutcome,
+    ShareGroup, ShareGroupStore,
 };
 
 use serde::{Deserialize, Serialize};
@@ -75,7 +80,7 @@ pub trait SyncStore {
 
 /// Decide the next version from the server's current state and the client's
 /// expectation — the optimistic-concurrency rule, factored out and pure.
-fn next_version(current: Option<u64>, expected: Option<u64>) -> Result<u64, SyncError> {
+pub(crate) fn next_version(current: Option<u64>, expected: Option<u64>) -> Result<u64, SyncError> {
     if expected == current {
         Ok(current.unwrap_or(0) + 1)
     } else {
