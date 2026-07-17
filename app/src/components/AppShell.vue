@@ -22,10 +22,12 @@ const showKit = ref(false);
 const showImport = ref(false);
 const showExport = ref(false);
 const showSync = ref(false);
+// Mobile drawer for the category rail (hidden by the responsive layout otherwise).
+const navOpen = ref(false);
 </script>
 
 <template>
-  <div class="app">
+  <div class="app" :class="{ 'nav-open': navOpen }">
     <BrandBar />
     <TopBar
       @new-item="showAdd = true"
@@ -33,8 +35,10 @@ const showSync = ref(false);
       @import="showImport = true"
       @export="showExport = true"
       @sync="showSync = true"
+      @toggle-nav="navOpen = !navOpen"
     />
-    <SideNav />
+    <div v-if="navOpen" class="nav-backdrop" @click="navOpen = false"></div>
+    <SideNav :open="navOpen" @navigate="navOpen = false" />
     <ItemList />
     <WatchtowerView v-if="vault.filter === 'watchtower'" />
     <ItemDetail v-else />

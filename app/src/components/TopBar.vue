@@ -12,6 +12,7 @@ const emit = defineEmits<{
   (e: 'import'): void;
   (e: 'export'): void;
   (e: 'sync'): void;
+  (e: 'toggle-nav'): void;
 }>();
 
 const placeholder = computed(() => `Search ${vault.counts.all} items…`);
@@ -27,6 +28,11 @@ function toggleTheme(): void {
 
 <template>
   <div class="top">
+    <button class="icon-btn nav-toggle" title="Menu" aria-label="Open menu" @click="emit('toggle-nav')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M4 6h16M4 12h16M4 18h16" />
+      </svg>
+    </button>
     <label class="search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
@@ -109,5 +115,15 @@ function toggleTheme(): void {
 }
 .icon-btn.sync-err {
   color: var(--weak);
+}
+/* The hamburger only exists on the narrow layout, where the rail is a drawer. */
+.nav-toggle {
+  display: none;
+  flex: none;
+}
+@media (max-width: 900px) {
+  .nav-toggle {
+    display: grid;
+  }
 }
 </style>

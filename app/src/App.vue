@@ -38,9 +38,40 @@ const vault = useVaultStore();
     grid-template-rows: 56px auto 1fr;
     grid-template-areas: 'top' 'list' 'detail';
   }
-  .nav,
   .brand {
     display: none;
+  }
+  /* The category rail becomes an off-canvas drawer, opened by the top-bar menu. */
+  .nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(280px, 82vw);
+    z-index: 60;
+    border-right: 1px solid var(--line);
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    will-change: transform;
+  }
+  .nav.open {
+    transform: translateX(0);
+    box-shadow: var(--shadow);
+  }
+  .nav-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 16, 15, 0.45);
+    z-index: 55;
+  }
+}
+/* On desktop the drawer machinery is inert. */
+.nav-backdrop {
+  display: none;
+}
+@media (max-width: 900px) {
+  .nav-backdrop {
+    display: block;
   }
 }
 

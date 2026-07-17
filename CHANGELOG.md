@@ -3,6 +3,14 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.25.0] — 2026-07-17
+
+**Fix: the category nav is reachable on small screens.** Below 900px the layout
+hid the entire left rail with no fallback, so Watchtower and the category filters
+were unreachable. The rail is now an off-canvas **drawer** opened by a top-bar
+hamburger (with a backdrop); selecting an item closes it. Verified live at a
+narrow viewport: the menu opens the drawer and Watchtower is reachable again.
+
 ## [1.24.0] — 2026-07-17
 
 **Generator in the CLI + a whole-vault breach scan.**
