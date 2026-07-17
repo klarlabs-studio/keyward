@@ -6,6 +6,7 @@
 import { computed, ref, watch } from 'vue';
 import { useVaultStore, avatarColor, initials, subtitleOf } from '@/stores/vault';
 import { copyText } from '@/composables/useToast';
+import { breachCount } from '@/lib/passbook';
 import TotpField from './TotpField.vue';
 
 const vault = useVaultStore();
@@ -13,14 +14,33 @@ const vault = useVaultStore();
 const revealPw = ref(false);
 const revealCvv = ref(false);
 
-// Reset masked fields whenever the selection changes.
+type BreachState = 'idle' | 'checking' | 'safe' | 'pwned' | 'error';
+const breach = ref<{ state: BreachState; count: number }>({ state: 'idle', count: 0 });
+
+// Reset masked fields + breach status whenever the selection changes.
 watch(
   () => vault.selectedId,
   () => {
     revealPw.value = false;
     revealCvv.value = false;
+    breach.value = { state: 'idle', count: 0 };
   },
 );
+
+/**
+ * Check the login password against HaveIBeenPwned via k-anonymity — only a SHA-1
+ * prefix leaves the device. Degrades to an error state if the service is down.
+ */
+async function checkBreach(): Promise<void> {
+  if (!login.value) return;
+  breach.value = { state: 'checking', count: 0 };
+  try {
+    const n = await breachCount(login.value.password);
+    breach.value = n > 0 ? { state: 'pwned', count: n } : { state: 'safe', count: 0 };
+  } catch {
+    breach.value = { state: 'error', count: 0 };
+  }
+}
 
 const entry = computed(() => vault.selected);
 
@@ -104,6 +124,25 @@ function strengthLabel(b: number): string {
                   <i :style="{ width: Math.min(100, bits) + '%', background: strengthColor(bits) }"></i>
                 </div>
                 <small :style="{ color: strengthColor(bits) }">{{ strengthLabel(bits) }} · {{ bits }} bits</small>
+              </div>
+              <div class="breach">
+                <button
+                  type="button"
+                  class="linkbtn"
+                  :disabled="breach.state === 'checking'"
+                  @click="checkBreach"
+                >
+                  {{ breach.state === 'checking' ? 'Checking…' : 'Check for breaches' }}
+                </button>
+                <span v-if="breach.state === 'pwned'" class="breach-bad">
+                  Found in {{ breach.count.toLocaleString() }} breaches — change it
+                </span>
+                <span v-else-if="breach.state === 'safe'" class="breach-ok">
+                  ✓ Not found in known breaches
+                </span>
+                <span v-else-if="breach.state === 'error'" class="breach-err">
+                  Couldn't reach the breach service
+                </span>
               </div>
             </div>
             <div class="act">
@@ -270,3 +309,38 @@ function strengthLabel(b: number): string {
     <p v-else class="empty">Select an item to view its details.</p>
   </div>
 </template>
+
+<style scoped>
+.breach {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+}
+.linkbtn {
+  color: var(--accent-ink);
+  font-weight: 600;
+  font-size: 0.78rem;
+  padding: 0;
+}
+.linkbtn:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.linkbtn:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+.breach-bad {
+  color: var(--weak);
+  font-weight: 600;
+}
+.breach-ok {
+  color: var(--strong);
+  font-weight: 600;
+}
+.breach-err {
+  color: var(--muted);
+}
+</style>

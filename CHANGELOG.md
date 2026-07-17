@@ -3,6 +3,29 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.23.0] — 2026-07-17
+
+**Password generator + breach check.** Two core password-manager features, in the
+shared Rust core so the CLI, WASM, and web vault all get them.
+
+### Added — `proctor-passbook` `generate` module
+- **Password generator:** configurable length + character classes (upper / lower /
+  digits / symbols), "avoid look-alikes", and a **passphrase** mode from an
+  embedded word list. Unbiased selection (rejection sampling over the shared
+  kernel's CSPRNG); a generated password always contains one of each selected
+  class. 6 tests.
+- **`sha1_hex`** — the SHA-1 primitive for HaveIBeenPwned's k-anonymity API
+  (verified against the classic `"password"` vector).
+- Exposed via `passbook-wasm` (`generate_pw` / `generate_pp` / `password_sha1`).
+
+### Added — web vault (`app/`)
+- **Generate password** in the Add-login dialog: length slider, class toggles, and
+  passphrase mode, with live strength. Verified: a 20-char generated password read
+  131 bits; a 5-word passphrase read 164 bits.
+- **Check for breaches** on any login: a HaveIBeenPwned k-anonymity check — only
+  the first 5 chars of the password's SHA-1 leave the device. Verified **live**:
+  `summer2024` → "Found in 561 breaches", a random password → "Not found".
+
 ## [1.22.0] — 2026-07-13
 
 **Seamless cross-device migration, token lifecycle, and the broker's DDD pass.**

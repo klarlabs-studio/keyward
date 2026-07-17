@@ -23,6 +23,7 @@
 //! + Secret Key). Needs a formal review before real use — see the threat model.
 
 pub mod domain;
+pub mod generate;
 pub mod ports;
 pub mod sealing;
 pub mod sharing;
@@ -30,6 +31,7 @@ pub mod totp;
 pub mod watchtower;
 
 pub use domain::{Card, Category, Content, Entry, Identity, Login, SecretKey};
+pub use generate::{generate_passphrase, generate_password, sha1_hex, PasswordOptions};
 pub use ports::{Clock, VaultRepository};
 pub use sealing::{open, seal, SealedVault};
 pub use watchtower::{strength_bits, watchtower, Issue};

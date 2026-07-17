@@ -8,8 +8,11 @@
 // only ciphertext is persisted.
 
 import init, {
+  generate_pp,
+  generate_pw,
   generate_secret_key,
   open_vault,
+  password_sha1,
   password_strength,
   seal_vault,
   secret_key_is_valid,
@@ -161,6 +164,51 @@ export async function totpCode(secretBase32: string): Promise<string | null> {
 export async function totpSecondsRemaining(): Promise<number> {
   await ensureReady();
   return totp_seconds_remaining(nowUnix());
+}
+
+/** Options for the password generator. */
+export interface GenOptions {
+  length: number;
+  lowercase: boolean;
+  uppercase: boolean;
+  digits: boolean;
+  symbols: boolean;
+  avoidAmbiguous: boolean;
+}
+
+/** Generate a random password from the given character-class options. */
+export async function generatePassword(o: GenOptions): Promise<string> {
+  await ensureReady();
+  return generate_pw(o.length, o.lowercase, o.uppercase, o.digits, o.symbols, o.avoidAmbiguous);
+}
+
+/** Generate a passphrase of `words` random words joined by `separator`. */
+export async function generatePassphrase(words: number, separator = '-'): Promise<string> {
+  await ensureReady();
+  return generate_pp(words, separator);
+}
+
+/**
+ * Check a password against HaveIBeenPwned via k-anonymity: only the first 5 chars
+ * of its SHA-1 (computed locally in WASM) are sent; the full password never
+ * leaves the device. Returns how many times it appears in known breaches
+ * (0 = not found). Throws on a network/HTTP failure so the caller can degrade.
+ */
+export async function breachCount(password: string): Promise<number> {
+  await ensureReady();
+  const hash = password_sha1(password); // uppercase hex SHA-1
+  const prefix = hash.slice(0, 5);
+  const suffix = hash.slice(5);
+  const res = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
+    headers: { 'Add-Padding': 'true' },
+  });
+  if (!res.ok) throw new Error(`Breach check failed (HTTP ${res.status}).`);
+  const body = await res.text();
+  for (const line of body.split('\n')) {
+    const [suf, count] = line.trim().split(':');
+    if (suf === suffix) return Number.parseInt(count, 10) || 0;
+  }
+  return 0;
 }
 
 /** Run Watchtower over `entries`, returning the parsed findings. */

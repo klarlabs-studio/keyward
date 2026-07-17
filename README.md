@@ -45,7 +45,8 @@ crates/
                             provider by dropping a file; no recompile
   passbook/ proctor-passbook consumer credential manager (Phase A): rich item model,
                             TOTP (RFC 6238), Secret Key (2SKD), Watchtower,
-                            family sharing (X25519 sealed-box) — PROTOTYPE
+                            family sharing (X25519 sealed-box), password generator +
+                            HIBP k-anonymity breach check — PROTOTYPE
   passbook-cli/ passbook    manage the consumer vault from the terminal
                             (init/add-login/list/show/totp/watchtower/emergency-kit)
                             + `passbook bridge` — the browser native-messaging host

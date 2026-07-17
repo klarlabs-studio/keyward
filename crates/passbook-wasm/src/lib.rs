@@ -12,7 +12,8 @@
 //! [`seal_vault`].
 
 use proctor_passbook::{
-    open, seal, strength_bits, totp, watchtower, Entry, Issue, SealedVault, SecretKey,
+    generate_passphrase, generate_password, open, seal, sha1_hex, strength_bits, totp, watchtower,
+    Entry, Issue, PasswordOptions, SealedVault, SecretKey,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -24,6 +25,39 @@ const TOTP_STEP_SECONDS: u64 = 30;
 #[wasm_bindgen]
 pub fn password_strength(password: &str) -> u32 {
     strength_bits(password)
+}
+
+/// Generate a random password with the given classes and length.
+#[wasm_bindgen]
+pub fn generate_pw(
+    length: u32,
+    lowercase: bool,
+    uppercase: bool,
+    digits: bool,
+    symbols: bool,
+    avoid_ambiguous: bool,
+) -> String {
+    generate_password(&PasswordOptions {
+        length: length as usize,
+        lowercase,
+        uppercase,
+        digits,
+        symbols,
+        avoid_ambiguous,
+    })
+}
+
+/// Generate a passphrase of `words` random words joined by `separator`.
+#[wasm_bindgen]
+pub fn generate_pp(words: u32, separator: &str) -> String {
+    generate_passphrase(words as usize, separator)
+}
+
+/// SHA-1 (uppercase hex) of a password — for HaveIBeenPwned k-anonymity. The
+/// caller sends only the first 5 chars to the API and matches the suffix locally.
+#[wasm_bindgen]
+pub fn password_sha1(password: &str) -> String {
+    sha1_hex(password)
 }
 
 /// The current 6-digit / 30-second TOTP code for a base32 secret.
