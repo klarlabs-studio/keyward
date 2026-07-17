@@ -3,6 +3,52 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.29.0] — 2026-07-17
+
+**Family sharing, slice 2: the client crypto surface — sharing runs in the browser.**
+
+The [v1.28.0] server relay can now be driven from the client: the browser can mint
+a member keypair, wrap/unwrap the vault key, seal/open shared content, and add or
+remove members — all client-side, plaintext never leaving the device.
+
+### Added — sharing primitives (`proctor-passbook::sharing`)
+- `Member::from_secret` / `secret_bytes` — a member's X25519 secret can now be
+  exported for encrypted-at-rest storage in their *own* vault and rebuilt from it,
+  so a sharing identity is stable across devices and master-password changes.
+- `ContentBlob` + `new_vault_key` / `seal_content` / `open_content` — the shared
+  vault content, sealed **directly** under the 32-byte vault key a `SharedVault`
+  distributes. Every member decrypts it with the key they unwrapped.
+- The `sharing` module is now re-exported from the crate root (it was previously
+  reachable only by full path and easy to miss).
+
+### Added — WASM bindings (`passbook-wasm`)
+- `member_new`, `member_public_key`, `generate_vault_key`, `seal_group_content`,
+  `open_group_content`, `share_vault_key`, `unwrap_vault_key`, `grant_group_access`,
+  `revoke_group_member`. Binary values cross as hex; `SharedVault`/`ContentBlob`
+  cross as opaque JSON the app relays without inspecting.
+
+### Design note — the personal vault is untouched
+- A refinement over ADR-0004's original sketch: sharing needed **no** change to the
+  personal `SealedVault` and **no** migration. The owner is just member #0 of the
+  `SharedVault` (so everyone recovers the vault key from their own X25519 wrap),
+  the shared content is a standalone keyed blob, and each member's X25519 secret is
+  stored as ordinary encrypted data inside their existing vault. See the
+  implementation-refinement note in
+  [ADR-0004](docs/architecture/ADR-0004-family-sharing.md).
+
+### Verified
+- Rust: member secret-bytes round-trip, content seal/open (+ wrong-key + tamper
+  rejection), and an owner→member end-to-end read. **Full flow re-verified through
+  the real JS↔WASM boundary** (Node): keypair gen, key recovery, share, member
+  unwrap+decrypt, grant, revoke, rotation, and wrong-key rejection all pass.
+- The browser bundle grows ~130 KB (x25519 + HKDF) — expected for client-side
+  sharing crypto.
+
+### Next
+- **v1.30.0** — the app UX: invite/accept flow, member list, "Manage sharing",
+  revoke-with-rotate, and the out-of-band safety-number verification step. A formal
+  external crypto review remains a hard gate before GA.
+
 ## [1.28.0] — 2026-07-17
 
 **Family sharing, slice 1: the zero-knowledge relay is real and reachable.**

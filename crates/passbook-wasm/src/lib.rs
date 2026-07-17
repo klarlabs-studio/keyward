@@ -12,10 +12,11 @@
 //! [`seal_vault`].
 
 use proctor_passbook::{
-    generate_passphrase, generate_password, open, seal, sha1_hex, strength_bits, totp, watchtower,
-    Entry, Issue, PasswordOptions, SealedVault, SecretKey,
+    generate_passphrase, generate_password, new_vault_key, open, open_content, seal, seal_content,
+    sha1_hex, strength_bits, totp, watchtower, ContentBlob, Entry, Issue, Member, MemberPublic,
+    PasswordOptions, SealedVault, SecretKey, SharedVault,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 /// 30-second TOTP window (RFC 6238 default), matching `totp::code_now`.
@@ -169,6 +170,164 @@ pub fn open_vault(
     let sk = parse_secret_key(secret_key)?;
     let entries = open(&sealed, master.as_bytes(), sk.as_ref()).map_err(js_err)?;
     serde_json::to_string(&entries).map_err(js_err)
+}
+
+// ---- Family sharing --------------------------------------------------------
+//
+// Binary values (32-byte vault keys, X25519 secret/public keys) cross the JS
+// boundary as lowercase hex. Opaque aggregates (`SharedVault`, `ContentBlob`)
+// cross as their JSON — the app treats them as blobs it stores/relays, never
+// inspecting them.
+
+/// Lowercase hex of `bytes`.
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Parse exactly 32 bytes of lowercase hex (a vault key or X25519 key).
+fn from_hex_32(s: &str) -> Result<[u8; 32], JsValue> {
+    let s = s.trim();
+    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(js_err("expected 64 hex characters"));
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(js_err)?;
+    }
+    Ok(out)
+}
+
+/// A member's public identity as it crosses the JS boundary (public key in hex).
+#[derive(Deserialize)]
+struct MemberPublicJson {
+    id: String,
+    name: String,
+    public_key: String,
+}
+
+impl MemberPublicJson {
+    fn into_domain(self) -> Result<MemberPublic, JsValue> {
+        Ok(MemberPublic {
+            id: self.id,
+            name: self.name,
+            public_key: from_hex_32(&self.public_key)?,
+        })
+    }
+}
+
+/// Generate a fresh member X25519 keypair. Returns
+/// `{id, name, public_key, secret}` — `public_key` is published to the group,
+/// `secret` is stored ENCRYPTED in the member's own vault (never sent to a server).
+#[wasm_bindgen]
+pub fn member_new(id: &str, name: &str) -> String {
+    let m = Member::generate(id, name);
+    serde_json::json!({
+        "id": id,
+        "name": name,
+        "public_key": to_hex(&m.public().public_key),
+        "secret": to_hex(&m.secret_bytes()),
+    })
+    .to_string()
+}
+
+/// Recompute a member's public key (hex) from their stored secret (hex) — used
+/// when re-publishing an existing identity.
+#[wasm_bindgen]
+pub fn member_public_key(secret_hex: &str) -> Result<String, JsValue> {
+    let secret = from_hex_32(secret_hex)?;
+    Ok(to_hex(
+        &Member::from_secret("", "", secret).public().public_key,
+    ))
+}
+
+/// A fresh random 32-byte vault key (hex) — the key the shared content is sealed
+/// under and that a `SharedVault` distributes to members.
+#[wasm_bindgen]
+pub fn generate_vault_key() -> String {
+    to_hex(&new_vault_key())
+}
+
+/// Seal a JSON array of entries under a vault key (hex), returning a `ContentBlob`
+/// as JSON. This is the shared group content every member decrypts.
+#[wasm_bindgen]
+pub fn seal_group_content(entries_json: &str, vault_key_hex: &str) -> Result<String, JsValue> {
+    let entries: Vec<Entry> = serde_json::from_str(entries_json).map_err(js_err)?;
+    let key = from_hex_32(vault_key_hex)?;
+    let plaintext = serde_json::to_vec(&entries).map_err(js_err)?;
+    let blob = seal_content(&key, &plaintext).map_err(js_err)?;
+    serde_json::to_string(&blob).map_err(js_err)
+}
+
+/// Open a shared `ContentBlob` (JSON) with a vault key (hex), returning the
+/// entries as JSON. Fails on a wrong key or any tampering.
+#[wasm_bindgen]
+pub fn open_group_content(blob_json: &str, vault_key_hex: &str) -> Result<String, JsValue> {
+    let blob: ContentBlob = serde_json::from_str(blob_json).map_err(js_err)?;
+    let key = from_hex_32(vault_key_hex)?;
+    let plaintext = open_content(&blob, &key).map_err(js_err)?;
+    let entries: Vec<Entry> = serde_json::from_slice(&plaintext).map_err(js_err)?;
+    serde_json::to_string(&entries).map_err(js_err)
+}
+
+/// Wrap a vault key (hex) to each member, returning a `SharedVault` as JSON (the
+/// opaque per-member wrapped keys the group relay stores). `members_json` is an
+/// array of `{id, name, public_key}` (public_key in hex).
+#[wasm_bindgen]
+pub fn share_vault_key(vault_key_hex: &str, members_json: &str) -> Result<String, JsValue> {
+    let key = from_hex_32(vault_key_hex)?;
+    let members: Vec<MemberPublicJson> = serde_json::from_str(members_json).map_err(js_err)?;
+    let recipients: Vec<MemberPublic> = members
+        .into_iter()
+        .map(MemberPublicJson::into_domain)
+        .collect::<Result<_, _>>()?;
+    let shared = SharedVault::share_to(&key, &recipients).map_err(js_err)?;
+    serde_json::to_string(&shared).map_err(js_err)
+}
+
+/// Recover the vault key (hex) from a `SharedVault` (JSON) using this member's
+/// stored secret (hex) and id. Fails if this member is not a recipient.
+#[wasm_bindgen]
+pub fn unwrap_vault_key(
+    shared_json: &str,
+    member_secret_hex: &str,
+    member_id: &str,
+) -> Result<String, JsValue> {
+    let shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    let secret = from_hex_32(member_secret_hex)?;
+    let member = Member::from_secret(member_id, "", secret);
+    let key = shared.unwrap_for(&member).map_err(js_err)?;
+    Ok(to_hex(&key))
+}
+
+/// Add a new member to a `SharedVault` (JSON) — an existing member re-wraps the
+/// vault key to `new_member_json` (`{id, name, public_key}`) without the owner.
+/// Returns the updated `SharedVault` as JSON.
+#[wasm_bindgen]
+pub fn grant_group_access(
+    shared_json: &str,
+    existing_secret_hex: &str,
+    existing_id: &str,
+    new_member_json: &str,
+) -> Result<String, JsValue> {
+    let mut shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    let secret = from_hex_32(existing_secret_hex)?;
+    let existing = Member::from_secret(existing_id, "", secret);
+    let new_member: MemberPublicJson = serde_json::from_str(new_member_json).map_err(js_err)?;
+    shared
+        .grant_access(&existing, &new_member.into_domain()?)
+        .map_err(js_err)?;
+    serde_json::to_string(&shared).map_err(js_err)
+}
+
+/// Remove a member's wrapped copy from a `SharedVault` (JSON), returning the
+/// updated JSON. For TRUE revocation the caller must also rotate the vault key
+/// (`generate_vault_key` → `seal_group_content` → `share_vault_key` to the
+/// remaining members), since a removed member may retain a key they already read.
+#[wasm_bindgen]
+pub fn revoke_group_member(shared_json: &str, member_id: &str) -> Result<String, JsValue> {
+    let mut shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    shared.revoke(member_id);
+    serde_json::to_string(&shared).map_err(js_err)
 }
 
 /// Map any `Display` error into a `JsValue` (thrown as a JS exception).

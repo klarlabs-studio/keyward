@@ -28,6 +28,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
 };
 use hkdf::Hkdf;
+use proctor_crypto::{aead_open, aead_seal, random_array, NONCE_LEN};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -56,6 +57,39 @@ pub enum SharingError {
 
 type Result<T> = std::result::Result<T, SharingError>;
 
+/// The shared vault **content**, encrypted directly under the 32-byte vault key
+/// that [`SharedVault`] distributes.
+///
+/// Unlike a personal [`crate::sealing::SealedVault`] (which derives its key from a
+/// master password + Secret Key), a shared content blob is keyed *only* by the
+/// vault key. Every member decrypts it with the vault key they unwrapped from
+/// their own [`SharedVault`] entry — there is no per-account wrapping here, and
+/// the personal-vault format is left completely untouched. The member's X25519
+/// secret is what is stored (encrypted) in their personal vault; the shared
+/// content lives separately, at the group relay.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContentBlob {
+    nonce: [u8; NONCE_LEN],
+    ciphertext: Vec<u8>,
+}
+
+/// Generate a fresh random 32-byte vault key (the key a [`SharedVault`] wraps).
+pub fn new_vault_key() -> [u8; VAULT_KEY_LEN] {
+    random_array::<VAULT_KEY_LEN>()
+}
+
+/// Seal opaque `plaintext` (e.g. serialized entries) under `vault_key`.
+pub fn seal_content(vault_key: &[u8; VAULT_KEY_LEN], plaintext: &[u8]) -> Result<ContentBlob> {
+    let nonce = random_array::<NONCE_LEN>();
+    let ciphertext = aead_seal(vault_key, &nonce, plaintext).map_err(|_| SharingError::Unwrap)?;
+    Ok(ContentBlob { nonce, ciphertext })
+}
+
+/// Open a [`ContentBlob`] with `vault_key`. Fails on a wrong key or any tampering.
+pub fn open_content(blob: &ContentBlob, vault_key: &[u8; VAULT_KEY_LEN]) -> Result<Vec<u8>> {
+    aead_open(vault_key, &blob.nonce, &blob.ciphertext).map_err(|_| SharingError::Unwrap)
+}
+
 /// A family member and their X25519 keypair.
 ///
 /// This is the *private* half — it holds the member's X25519 secret and stays on
@@ -78,6 +112,25 @@ impl Member {
             name: name.to_owned(),
             secret: StaticSecret::random_from_rng(OsRng),
         }
+    }
+
+    /// Reconstruct a member from a stored 32-byte X25519 secret. The inverse of
+    /// [`Member::secret_bytes`]; the secret is kept encrypted-at-rest inside the
+    /// member's *own* vault, so their sharing identity is stable across devices
+    /// and master-password changes.
+    pub fn from_secret(id: &str, name: &str, secret: [u8; 32]) -> Self {
+        Member {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            secret: StaticSecret::from(secret),
+        }
+    }
+
+    /// Export the raw X25519 secret for encrypted-at-rest storage in the member's
+    /// own vault. Treat as secret material — it unwraps every vault shared to this
+    /// member.
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
     }
 
     /// The shareable public half of this member's identity.
@@ -271,6 +324,54 @@ mod tests {
         let mut k = [0u8; VAULT_KEY_LEN];
         OsRng.fill_bytes(&mut k);
         k
+    }
+
+    #[test]
+    fn member_survives_a_secret_bytes_round_trip() {
+        let vault_key = sample_vault_key();
+        let alice = Member::generate("alice", "Alice");
+        let shared = SharedVault::share_to(&vault_key, &[alice.public()]).unwrap();
+
+        // Persist Alice's secret (as her vault would), then rebuild her from it.
+        let stored = alice.secret_bytes();
+        let restored = Member::from_secret("alice", "Alice", stored);
+
+        // The rebuilt member has the same public key and can still unwrap.
+        assert_eq!(restored.public().public_key, alice.public().public_key);
+        assert_eq!(shared.unwrap_for(&restored).unwrap(), vault_key);
+    }
+
+    #[test]
+    fn content_seals_and_opens_under_the_vault_key() {
+        let vault_key = new_vault_key();
+        let plaintext = br#"[{"id":"e1","title":"GitHub"}]"#;
+
+        let blob = seal_content(&vault_key, plaintext).unwrap();
+        assert_eq!(open_content(&blob, &vault_key).unwrap(), plaintext);
+
+        // A wrong vault key (what a non-member would have) cannot open it.
+        let wrong = new_vault_key();
+        assert!(open_content(&blob, &wrong).is_err());
+
+        // Tampered ciphertext is rejected.
+        let mut tampered = blob.clone();
+        tampered.ciphertext[0] ^= 0xff;
+        assert!(open_content(&tampered, &vault_key).is_err());
+    }
+
+    #[test]
+    fn end_to_end_member_reads_shared_content() {
+        // Owner establishes a shared vault: fresh key, seal content, share to Bob.
+        let vault_key = new_vault_key();
+        let content = seal_content(&vault_key, b"secret entries").unwrap();
+        let owner = Member::generate("owner", "Alice");
+        let bob = Member::generate("bob", "Bob");
+        let shared = SharedVault::share_to(&vault_key, &[owner.public(), bob.public()]).unwrap();
+
+        // Bob, holding only his secret + the SharedVault + the content blob,
+        // recovers the key and reads the content — the server saw none of it.
+        let bob_key = shared.unwrap_for(&bob).unwrap();
+        assert_eq!(open_content(&content, &bob_key).unwrap(), b"secret entries");
     }
 
     #[test]

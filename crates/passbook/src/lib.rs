@@ -34,6 +34,10 @@ pub use domain::{Card, Category, Content, Entry, Identity, Login, SecretKey};
 pub use generate::{generate_passphrase, generate_password, sha1_hex, PasswordOptions};
 pub use ports::{Clock, VaultRepository};
 pub use sealing::{open, seal, SealedVault};
+pub use sharing::{
+    new_vault_key, open_content, seal_content, ContentBlob, Member, MemberPublic, SharedVault,
+    SharingError,
+};
 pub use watchtower::{strength_bits, watchtower, Issue};
 
 /// The Passbook context's error type (ubiquitous across domain and adapters).

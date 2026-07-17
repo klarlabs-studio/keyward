@@ -53,6 +53,17 @@ member_i's wrap  := SharedVault.wrap_to(K_vault, MemberPublic_i)  # X25519 seale
   `K_vault` → decrypt content. For the owner the "wrap" is `K_acct`-sealed; for an
   invited member it is their `SharedVault` entry.
 
+> **Implementation refinement (v1.29.0).** The client crypto landed *without*
+> touching the personal-vault format at all — a strictly better outcome than the
+> "lazy migration" sketched above. The **owner is simply member #0** of the
+> `SharedVault`, so *everyone* (owner included) recovers `K_vault` from their own
+> X25519 wrap; there is no separate `K_acct`-wrap of `K_vault`. The shared
+> **content** is a standalone `sharing::ContentBlob` sealed directly under
+> `K_vault` (what the group relay's `/vault` stores), and each member's X25519
+> **secret** rides as ordinary encrypted data *inside their existing personal
+> vault*. Net: the personal `SealedVault` is byte-for-byte unchanged, no
+> migration path is needed, and sharing is a fully separate keyed blob.
+
 ### 2. Member identity = a stable, per-account X25519 keypair
 
 Each account gets a random X25519 **member keypair** generated once and stored as
