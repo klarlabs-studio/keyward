@@ -3,6 +3,26 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.27.0] — 2026-07-17
+
+**Links + responsive polish, and the browser extension goes demo-free too.**
+
+### Fixed — top bar no longer overflows on phones
+- The search input now sets `min-width: 0`, so it shrinks instead of pushing the
+  bar wider than the viewport.
+- Below **640px** the informational vault pill and the "New item" text label are
+  hidden (the add button stays as an icon), and the bar tightens its gap/padding
+  so the ~8 controls fit. Verified in the compiled CSS; desktop layout unchanged.
+
+### Changed — link + extension hardening
+- The one external link in the app (item Website) now uses
+  `rel="noopener noreferrer"` (was `noopener`), so the target can't read the
+  referrer either.
+- **Browser extension carries no demo data.** Removed the hardcoded `DEMO_VAULT`
+  and every fallback path that showed fake logins when the Passbook bridge was
+  offline. Disconnected now shows a real "install the bridge and unlock Passbook"
+  banner and an empty list — the popup only ever shows your real vault, or nothing.
+
 ## [1.26.0] — 2026-07-17
 
 **No demo data in the app; a docker-compose demo instead; and a UX QA pass.**

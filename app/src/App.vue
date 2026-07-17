@@ -65,6 +65,23 @@ const vault = useVaultStore();
     z-index: 55;
   }
 }
+/* Phones: tighten the top bar and drop non-essential chrome so ~8 controls +
+   search never overflow. The pill's status is still in the Sync dialog. */
+@media (max-width: 640px) {
+  .top {
+    gap: 0.3rem;
+    padding: 0 0.55rem;
+  }
+  .vault-pill {
+    display: none;
+  }
+  .btn-add .label {
+    display: none;
+  }
+  .btn-add {
+    padding: 0.44rem 0.55rem;
+  }
+}
 /* On desktop the drawer machinery is inert. */
 .nav-backdrop {
   display: none;
@@ -140,6 +157,7 @@ const vault = useVaultStore();
 }
 .search input {
   flex: 1;
+  min-width: 0; /* let the search shrink instead of pushing the top bar wider */
   border: 0;
   background: none;
   outline: none;

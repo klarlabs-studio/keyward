@@ -13,59 +13,11 @@
 // Secrets from `get` are handed straight to the content script and are never
 // logged (no console.log) and never stored.
 //
-// FALLBACK: if the bridge is not installed/available, a subtle banner is shown
-// and the hardcoded DEMO_VAULT below is used so the prototype still demos. The
-// live bridge is always preferred when it responds.
+// NO DEMO DATA: the popup never fabricates vault items. If the bridge is not
+// installed/available it shows a "connect the bridge" banner and an empty list —
+// what you see is always your real vault, or nothing.
 
 "use strict";
-
-const DEMO_VAULT = [
-  {
-    id: "github",
-    title: "GitHub",
-    username: "octo.dev@example.com",
-    password: "demo-gh-P@ssw0rd!",
-    domains: ["github.com", "gist.github.com"],
-    color: "#24292f",
-    initials: "GH"
-  },
-  {
-    id: "netflix",
-    title: "Netflix",
-    username: "movie.night@example.com",
-    password: "demo-nflx-Str3am#",
-    domains: ["netflix.com"],
-    color: "#e50914",
-    initials: "NF"
-  },
-  {
-    id: "chase",
-    title: "Chase Bank",
-    username: "j.saver",
-    password: "demo-chase-B@nk2024",
-    domains: ["chase.com", "secure.chase.com"],
-    color: "#117aca",
-    initials: "CH"
-  },
-  {
-    id: "google",
-    title: "Google",
-    username: "you@gmail.com",
-    password: "demo-goog-Acc0unt!",
-    domains: ["google.com", "accounts.google.com", "mail.google.com"],
-    color: "#4285f4",
-    initials: "G"
-  },
-  {
-    id: "amazon",
-    title: "Amazon",
-    username: "prime.shopper@example.com",
-    password: "demo-amzn-Sh0p$",
-    domains: ["amazon.com", "amazon.co.uk"],
-    color: "#ff9900",
-    initials: "AZ"
-  }
-];
 
 const state = {
   hostname: "",
@@ -73,8 +25,8 @@ const state = {
   url: "",
   query: "",
   hasPasswordField: false,
-  // "live" once the bridge answers, "demo" when it is unavailable.
-  source: "demo",
+  // "live" once the bridge answers, "disconnected" when it is unavailable.
+  source: "disconnected",
   // Normalized items currently rendered.
   items: []
 };
@@ -98,14 +50,6 @@ function baseDomain(hostname) {
   const parts = hostname.replace(/^www\./, "").split(".");
   if (parts.length <= 2) return parts.join(".");
   return parts.slice(-2).join(".");
-}
-
-function itemMatchesSite(item, hostname) {
-  if (!hostname) return false;
-  if (!Array.isArray(item.domains)) return false;
-  const host = hostname.replace(/^www\./, "");
-  const base = baseDomain(hostname);
-  return item.domains.some((domain) => host === domain || host.endsWith("." + domain) || base === domain);
 }
 
 // Stable-ish colour from a string so live items (which carry no colour) still
@@ -134,8 +78,8 @@ function hostFromUrl(url) {
   }
 }
 
-// Normalize a bridge `list` item ({id,title,username,url,hasTotp}) or a demo
-// item into the shape the renderer expects.
+// Normalize a bridge `list` item ({id,title,username,url,hasTotp}) into the
+// shape the renderer expects.
 function normalizeLiveItem(raw) {
   return {
     id: raw.id,
@@ -149,21 +93,6 @@ function normalizeLiveItem(raw) {
     // The bridge already scoped `list` to this origin, so every live item is a
     // match for the current site.
     isMatch: true
-  };
-}
-
-function normalizeDemoItem(raw) {
-  return {
-    id: raw.id,
-    title: raw.title,
-    username: raw.username,
-    password: raw.password,
-    domains: raw.domains,
-    initials: raw.initials,
-    color: raw.color,
-    hasTotp: false,
-    source: "demo",
-    isMatch: itemMatchesSite(raw, state.hostname)
   };
 }
 
@@ -303,6 +232,13 @@ function render() {
   els.list.textContent = "";
 
   if (items.length === 0) {
+    if (state.source === "disconnected") {
+      els.empty.textContent = "Connect the Passbook bridge to see your vault.";
+    } else if (state.query.trim()) {
+      els.empty.textContent = "No matching items.";
+    } else {
+      els.empty.textContent = "Your vault is empty — add items in Passbook.";
+    }
     els.empty.hidden = false;
     return;
   }
@@ -317,13 +253,9 @@ function render() {
 
 // ---- Actions ---------------------------------------------------------------
 
-// Resolve the credentials to fill. Live items fetch secrets from the bridge
-// (`get`) only now, at fill time; demo items carry their placeholder password.
+// Resolve the credentials to fill. Secrets are fetched from the bridge (`get`)
+// only now, at fill time — never held in the popup ahead of a deliberate fill.
 async function resolveCredentials(item) {
-  if (item.source === "demo") {
-    return { username: item.username, password: item.password };
-  }
-
   const result = await sendMessage({ type: "native", payload: { type: "get", id: item.id } });
   if (!result || !result.ok || !result.response) {
     throw new Error((result && result.error) || "Bridge did not return the secret");
@@ -388,9 +320,10 @@ function setSiteLabel() {
 }
 
 function setBridgeBanner() {
-  if (state.source === "demo") {
+  if (state.source === "disconnected") {
     els.bridgeBanner.hidden = false;
-    els.bridgeBannerText.textContent = "Passbook bridge not connected — showing demo items";
+    els.bridgeBannerText.textContent =
+      "Passbook bridge not connected — install the bridge and unlock Passbook to see your vault.";
   } else {
     els.bridgeBanner.hidden = true;
   }
@@ -412,7 +345,8 @@ async function probePage() {
   }
 }
 
-// Load vault items: prefer the live bridge, fall back to the demo vault.
+// Load vault items from the live bridge. If the bridge is unavailable there is
+// NO fallback data — the list stays empty and the disconnected banner explains why.
 async function loadItems() {
   try {
     const scope = state.origin || state.url;
@@ -425,9 +359,9 @@ async function loadItems() {
     // Bridge responded but not with a usable list — treat as unavailable.
     throw new Error((result && result.error) || "Malformed list response");
   } catch (_) {
-    // Bridge unavailable (not installed, host error, …). Fall back to demo.
-    state.source = "demo";
-    state.items = DEMO_VAULT.map(normalizeDemoItem);
+    // Bridge unavailable (not installed, host error, …). Show nothing — never fake data.
+    state.source = "disconnected";
+    state.items = [];
   }
 }
 
@@ -442,7 +376,7 @@ async function init() {
       state.origin = "";
     }
   } catch (_) {
-    // No active tab / restricted page — leave defaults; demo vault still shows.
+    // No active tab / restricted page — leave defaults; the bridge still drives the list.
   }
 
   await loadItems();

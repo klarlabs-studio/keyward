@@ -164,7 +164,7 @@ function strengthLabel(b: number): string {
           <div v-if="login.urls.length" class="field">
             <div class="lbl">Website</div>
             <div class="val">
-              <a class="link" :href="webHref(login.urls[0])" target="_blank" rel="noopener">{{
+              <a class="link" :href="webHref(login.urls[0])" target="_blank" rel="noopener noreferrer">{{
                 login.urls[0]
               }}</a>
             </div>
