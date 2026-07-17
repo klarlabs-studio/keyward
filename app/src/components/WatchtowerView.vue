@@ -2,11 +2,43 @@
 // The security dashboard: a circular score gauge plus issue cards derived from
 // the real WASM Watchtower pass. Each card jumps to the affected entry.
 
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useVaultStore } from '@/stores/vault';
+import { breachCount } from '@/lib/passbook';
 import type { Issue } from '@/lib/passbook-types';
 
 const vault = useVaultStore();
+
+// On-demand breach scan across every login (HIBP k-anonymity, sequential).
+const scanning = ref(false);
+const scanned = ref(false);
+const scanError = ref(false);
+const progress = ref({ done: 0, total: 0 });
+const compromised = ref<{ id: string; title: string; count: number }[]>([]);
+
+async function scanBreaches(): Promise<void> {
+  const logins = vault.entries.filter(
+    (e) => 'Login' in e.content && e.content.Login.password.length > 0,
+  );
+  scanning.value = true;
+  scanError.value = false;
+  compromised.value = [];
+  progress.value = { done: 0, total: logins.length };
+  try {
+    for (const e of logins) {
+      if ('Login' in e.content) {
+        const n = await breachCount(e.content.Login.password);
+        if (n > 0) compromised.value.push({ id: e.id, title: e.title, count: n });
+      }
+      progress.value.done += 1;
+    }
+    scanned.value = true;
+  } catch {
+    scanError.value = true;
+  } finally {
+    scanning.value = false;
+  }
+}
 
 const RADIUS = 34;
 const CIRC = 2 * Math.PI * RADIUS;
@@ -93,6 +125,50 @@ function issueKey(issue: Issue, index: number): string {
             </div>
             <button @click="jumpTo(issue.id)">Review →</button>
           </template>
+        </div>
+      </template>
+
+      <h3>Breach check</h3>
+      <div v-if="!scanned && !scanning && !scanError" class="issue">
+        <span class="pill" style="background: var(--accent-soft); color: var(--accent-ink)">HIBP</span>
+        <div class="txt">
+          <b>Check for compromised passwords</b>
+          <div>Compares every password to HaveIBeenPwned — only a hash prefix leaves your device.</div>
+        </div>
+        <button @click="scanBreaches">Scan →</button>
+      </div>
+      <div v-else-if="scanning" class="issue">
+        <span class="pill" style="background: var(--accent-soft); color: var(--accent-ink)">HIBP</span>
+        <div class="txt">
+          <b>Scanning… {{ progress.done }}/{{ progress.total }}</b>
+          <div>Checking each password against known breaches.</div>
+        </div>
+      </div>
+      <template v-else-if="scanError">
+        <div class="issue">
+          <span class="pill missing">Offline</span>
+          <div class="txt">
+            <b>Couldn't reach the breach service</b>
+            <div>The HaveIBeenPwned check needs a network connection.</div>
+          </div>
+          <button @click="scanBreaches">Retry →</button>
+        </div>
+      </template>
+      <template v-else>
+        <div v-for="c in compromised" :key="'pwned-' + c.id" class="issue">
+          <span class="pill weak">Pwned</span>
+          <div class="txt">
+            <b>{{ c.title }}</b>
+            <div>Found in {{ c.count.toLocaleString() }} known breaches — change it.</div>
+          </div>
+          <button @click="jumpTo(c.id)">Fix →</button>
+        </div>
+        <div v-if="compromised.length === 0" class="issue">
+          <span class="pill" style="background: var(--strong-soft); color: var(--strong)">Clean</span>
+          <div class="txt">
+            <b>No breached passwords found</b>
+            <div>None of your passwords appear in known breaches.</div>
+          </div>
         </div>
       </template>
 

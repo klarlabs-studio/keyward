@@ -11,15 +11,18 @@
 //! Commands:
 //!   passbook init
 //!   passbook add-login <id> <title> <username> <password> [url] [totp_base32]
+//!                                (a <password> of "-" generates a strong one)
 //!   passbook list [category]
 //!   passbook show <id> [--reveal]
 //!   passbook totp <id>
+//!   passbook generate [len] | generate -p [words]
 //!   passbook watchtower
 //!   passbook emergency-kit
+//!   passbook bridge              (Chrome native-messaging host)
 
 use proctor_passbook::{
-    open, seal, totp, watchtower, Category, Clock, Content, Entry, Issue, Login, PassbookError,
-    SealedVault, SecretKey, VaultRepository,
+    generate_passphrase, generate_password, open, seal, totp, watchtower, Category, Clock, Content,
+    Entry, Issue, Login, PassbookError, PasswordOptions, SealedVault, SecretKey, VaultRepository,
 };
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -42,6 +45,7 @@ fn main() {
         "totp" => cmd_totp(&args[1..]),
         "watchtower" => cmd_watchtower(),
         "emergency-kit" => cmd_emergency_kit(),
+        "generate" => cmd_generate(&args[1..]),
         "bridge" => cmd_bridge(),
         "" => {
             eprintln!("{USAGE}");
@@ -62,6 +66,7 @@ const USAGE: &str = "usage: passbook <command> [args]\n\
     \x20 list [category]                                  list entries (login|note|card|identity)\n\
     \x20 show <id> [--reveal]                             show an entry (password hidden unless --reveal)\n\
     \x20 totp <id>                                        current TOTP code + seconds remaining\n\
+    \x20 generate [len] | generate -p [words]             print a random password (or passphrase)\n\
     \x20 watchtower                                       security report (weak / reused / no-2fa)\n\
     \x20 emergency-kit                                    print the Secret Key (Emergency-Kit format)\n\
     \x20 bridge                                           run the browser native-messaging host (stdio)";
@@ -288,7 +293,15 @@ fn cmd_add_login(rest: &[String]) {
         );
         exit(2);
     }
-    let (id, title, username, password) = (&rest[0], &rest[1], &rest[2], &rest[3]);
+    let (id, title, username) = (&rest[0], &rest[1], &rest[2]);
+    // A password of "-" means "generate a strong one" (printed once to stderr).
+    let password = if rest[3] == "-" {
+        let pw = generate_password(&PasswordOptions::default());
+        eprintln!("generated password: {pw}");
+        pw
+    } else {
+        rest[3].clone()
+    };
     let url = rest.get(4).filter(|s| !s.is_empty());
     let totp_secret = rest.get(5).filter(|s| !s.is_empty()).cloned();
 
@@ -304,7 +317,7 @@ fn cmd_add_login(rest: &[String]) {
 
     let login = Login {
         username: username.clone(),
-        password: password.clone(),
+        password,
         urls: url.map(|u| vec![u.clone()]).unwrap_or_default(),
         totp_secret,
         has_passkey: false,
@@ -516,6 +529,25 @@ fn cmd_watchtower() {
         "Security score: {score}/100  ({} issue(s), {login_count} login(s))",
         issues.len()
     );
+}
+
+/// Print a freshly generated password, or a passphrase with `-p`/`--passphrase`.
+/// An optional numeric argument sets the length (words for a passphrase).
+fn cmd_generate(rest: &[String]) {
+    let passphrase = rest.iter().any(|a| a == "-p" || a == "--passphrase");
+    let num: Option<usize> = rest
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .and_then(|s| s.parse().ok());
+    if passphrase {
+        println!("{}", generate_passphrase(num.unwrap_or(5), "-"));
+    } else {
+        let opts = PasswordOptions {
+            length: num.unwrap_or(20),
+            ..Default::default()
+        };
+        println!("{}", generate_password(&opts));
+    }
 }
 
 /// Run the Chrome native-messaging host: load the vault once, then serve the

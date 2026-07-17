@@ -3,6 +3,23 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.24.0] — 2026-07-17
+
+**Generator in the CLI + a whole-vault breach scan.**
+
+### Added — `passbook` CLI
+- `passbook generate [len]` and `passbook generate -p [words]` print a random
+  password or passphrase. `add-login … -` (a password of `-`) generates a strong
+  one and prints it once. Verified: generated + stored a password, confirmed via
+  `show --reveal`.
+
+### Added — web vault Watchtower (`app/`)
+- A **"Check for compromised passwords"** scan on the security dashboard runs the
+  HaveIBeenPwned k-anonymity check across every login and lists the pwned ones
+  (with breach counts + jump-to-fix). Verified **live**: the demo scan flagged
+  Chase Bank and Netflix (both `summer2024`) as "Found in 561 breaches", leaving
+  the random passwords clean.
+
 ## [1.23.0] — 2026-07-17
 
 **Password generator + breach check.** Two core password-manager features, in the
