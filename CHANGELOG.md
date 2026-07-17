@@ -3,6 +3,32 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.26.0] — 2026-07-17
+
+**No demo data in the app; a docker-compose demo instead; and a UX QA pass.**
+
+### Changed — the app ships no mock data
+- Removed the hardcoded demo vault, `DEMO_MASTER`, and the "Use demo" button. A
+  fresh device now runs a real **create-vault** onboarding (choose a master
+  password → generates a Secret Key + Emergency Kit → an **empty** vault with a
+  friendly "add your first item" state). Deleted `app/src/lib/seed.ts`.
+- Removed the fake "Shared with your family — 3 members" footer and its dead
+  "Manage sharing" link from the item detail.
+
+### Added — `demo/` docker-compose environment
+- `docker compose -f demo/docker-compose.demo.yml up` spins up the zero-knowledge
+  sync server, a one-shot **seeder** that builds a *real* 2SKD-sealed demo vault
+  with the `passbook` CLI and uploads it, and the built web app. Demo credentials
+  land in `demo/out/credentials.txt`. **Production app code carries no demo data.**
+  Verified end-to-end (seeder registers an account, uploads, writes credentials).
+
+### Fixed — from a visible-browser QA pass
+- **lock → unlock wrongly showed "Create vault":** the `hasVault`/`secretKey`
+  getters read `localStorage` but had no reactive dependency, so Pinia cached the
+  first value. Added a `storageTick` nonce bumped on every storage change so they
+  re-evaluate.
+- Pluralized "1 item" (search placeholder + export count).
+
 ## [1.25.0] — 2026-07-17
 
 **Fix: the category nav is reachable on small screens.** Below 900px the layout

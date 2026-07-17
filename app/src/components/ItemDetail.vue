@@ -285,7 +285,7 @@ function strengthLabel(b: number): string {
           </div>
         </template>
 
-        <div class="field">
+        <div v-if="entry.tags.length" class="field">
           <div class="lbl">Tags</div>
           <div class="val">
             <div class="tags">
@@ -293,16 +293,6 @@ function strengthLabel(b: number): string {
             </div>
           </div>
         </div>
-      </div>
-
-      <div class="share">
-        <div class="avstack">
-          <span style="background: #0e8a7c">F</span>
-          <span style="background: #b71d1a">A</span>
-          <span style="background: #3b3f7a">K</span>
-        </div>
-        Shared with your family — 3 members ·
-        <a class="link" href="#" @click.prevent>Manage sharing</a>
       </div>
     </template>
 

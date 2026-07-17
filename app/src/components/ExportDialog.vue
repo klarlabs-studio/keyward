@@ -62,7 +62,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           </label>
         </div>
 
-        <p class="count">{{ vault.entries.length }} items will be exported.</p>
+        <p class="count">
+          {{ vault.entries.length }} item{{ vault.entries.length === 1 ? '' : 's' }} will be
+          exported.
+        </p>
 
         <p class="warn">
           <b>This file is unencrypted.</b> Every password, code, and secret is in

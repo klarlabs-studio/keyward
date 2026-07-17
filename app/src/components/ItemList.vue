@@ -19,7 +19,13 @@ function badgeLabel(entry: Entry): string {
       <h2>{{ vault.listTitle }}</h2>
       <span v-if="vault.filter !== 'watchtower'">{{ vault.filtered.length }}</span>
     </div>
-    <p v-if="vault.filtered.length === 0" class="empty">No items match.</p>
+    <p v-if="vault.filtered.length === 0" class="empty">
+      {{
+        vault.counts.all === 0
+          ? 'Your vault is empty — add your first item with “New item”.'
+          : 'No items match.'
+      }}
+    </p>
     <button
       v-for="entry in vault.filtered"
       :key="entry.id"

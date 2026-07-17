@@ -1,0 +1,9 @@
+target/
+**/target/
+**/node_modules/
+app/dist/
+app/src/wasm/pkg/
+.git/
+.nox/
+docs/
+*.md

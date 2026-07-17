@@ -472,6 +472,46 @@
       "severity": "medium",
       "reason": "False positive on nox's own baseline.json — a prior baseline entry's reason text contains an example email (alice@example.com); not a real email in source.",
       "created_at": "2026-07-13T05:28:22.984648Z"
+    },
+    {
+      "fingerprint": "07aea45cbe1a0d619fd77e45019f9031bb252052c9afb671a4afd2f3e58fb058",
+      "rule_id": "CONT-001",
+      "file_path": "demo/Dockerfile",
+      "severity": "medium",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "created_at": "2026-07-17T11:58:18.804646Z"
+    },
+    {
+      "fingerprint": "97b832bafce753a1726dbf085c831ddd4ee11734f4adbb4e0ce631a39074056b",
+      "rule_id": "CONT-001",
+      "file_path": "demo/Dockerfile",
+      "severity": "medium",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "created_at": "2026-07-17T11:58:18.804646Z"
+    },
+    {
+      "fingerprint": "f49618dc9e28af771bfb4f2d4c5e6cb64698b7dec75e179ae1b3f4f54f960344",
+      "rule_id": "DATA-001",
+      "file_path": "demo/seed.sh",
+      "severity": "medium",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "created_at": "2026-07-17T11:58:18.804646Z"
+    },
+    {
+      "fingerprint": "bc61fa26876cdd969e384edee5d5e68978fedd87f4eb930baeab19908c514492",
+      "rule_id": "DATA-001",
+      "file_path": "demo/seed.sh",
+      "severity": "medium",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "created_at": "2026-07-17T11:58:18.804646Z"
+    },
+    {
+      "fingerprint": "46a51f8b8d8d0101dd1f2d201dde69f98554cc4050b803a57acfe97a821d4fca",
+      "rule_id": "DATA-005",
+      "file_path": "demo/docker-compose.demo.yml",
+      "severity": "medium",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "created_at": "2026-07-17T11:58:18.804646Z"
     }
   ]
 }

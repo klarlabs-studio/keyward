@@ -1,15 +1,18 @@
 <script setup lang="ts">
-// The unlock gate in front of the vault. First unlock on a fresh device seeds
-// and creates the demo family vault; afterwards it opens the sealed blob. The
+// The unlock gate in front of the vault. On a fresh device (no vault yet) this is
+// the "create your vault" step; afterwards it opens the sealed blob. A device that
+// has the vault but not its Secret Key gets the "add this device" prompt. The
 // master password is handed straight to the store (which owns the crypto).
 
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useVaultStore } from '@/stores/vault';
-import { DEMO_MASTER } from '@/lib/seed';
 
 const vault = useVaultStore();
 const master = ref('');
 const secretKey = ref('');
+
+// First run on this device: no vault exists yet, so we create one.
+const creating = computed(() => !vault.needsSecretKey && !vault.hasVault);
 
 async function submit(): Promise<void> {
   if (!master.value || vault.busy) return;
@@ -19,11 +22,6 @@ async function submit(): Promise<void> {
   } else {
     await vault.unlock(master.value);
   }
-}
-
-function useDemo(): void {
-  master.value = DEMO_MASTER;
-  void submit();
 }
 </script>
 
@@ -48,17 +46,19 @@ function useDemo(): void {
         {{
           vault.needsSecretKey
             ? 'This device needs your Secret Key to open the vault.'
-            : 'Your family vault — encrypted on this device.'
+            : creating
+              ? 'Create your vault — encrypted on this device.'
+              : 'Your vault — encrypted on this device.'
         }}
       </p>
 
       <label class="pw">
-        <span>Master password</span>
+        <span>{{ creating ? 'Choose a master password' : 'Master password' }}</span>
         <input
           v-model="master"
           type="password"
-          autocomplete="current-password"
-          placeholder="Enter master password"
+          :autocomplete="creating ? 'new-password' : 'current-password'"
+          :placeholder="creating ? 'Choose a strong master password' : 'Enter master password'"
           aria-label="Master password"
           autofocus
         />
@@ -88,22 +88,25 @@ function useDemo(): void {
           vault.busy
             ? vault.needsSecretKey
               ? 'Adding device…'
-              : 'Unlocking…'
+              : creating
+                ? 'Creating…'
+                : 'Unlocking…'
             : vault.needsSecretKey
               ? 'Add this device'
-              : 'Unlock'
+              : creating
+                ? 'Create vault'
+                : 'Unlock'
         }}
       </button>
 
-      <div v-if="!vault.needsSecretKey" class="hint">
-        First unlock creates a demo family vault, protected by a device Secret Key
-        (2SKD) — you'll get an Emergency Kit. Master:
-        <code>{{ DEMO_MASTER }}</code>
-        <button type="button" class="demo-link" :disabled="vault.busy" @click="useDemo">Use demo</button>
-      </div>
-      <div v-else class="hint">
+      <div v-if="vault.needsSecretKey" class="hint">
         Find your Secret Key in the Emergency Kit you saved when the vault was
         created. It never leaves your devices.
+      </div>
+      <div v-else-if="creating" class="hint">
+        This creates your encrypted vault on this device and generates a device
+        <b>Secret Key</b> (2SKD) — you'll get an Emergency Kit to save. Choose a
+        strong master password; it is never stored and <b>can't be recovered</b>.
       </div>
     </form>
   </div>
@@ -241,17 +244,6 @@ function useDemo(): void {
   border-radius: 6px;
   padding: 0.05rem 0.35rem;
   color: var(--muted);
-}
-.demo-link {
-  display: inline;
-  color: var(--accent-ink);
-  font-weight: 600;
-  text-decoration: underline;
-  margin-left: 0.3rem;
-}
-.demo-link:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 @media (prefers-reduced-motion: reduce) {
   .spinner {

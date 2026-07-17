@@ -27,7 +27,6 @@ import {
 import * as sync from '../lib/sync';
 import { SyncConflict, type SyncConfig } from '../lib/sync';
 import { toast } from '../composables/useToast';
-import { demoEntries } from '../lib/seed';
 
 /** The steady state of cloud sync, surfaced to the UI as a status indicator. */
 export type SyncStatus = 'idle' | 'syncing' | 'error' | 'synced';
@@ -55,6 +54,8 @@ interface VaultState {
   syncEnabled: boolean;
   syncStatus: SyncStatus;
   lastSyncedVersion: string | null;
+  // Reactivity nonce for the localStorage-backed getters (bumped on any change).
+  storageTick: number;
 }
 
 export const CATEGORY_LABEL: Record<Category, string> = {
@@ -114,17 +115,21 @@ export const useVaultStore = defineStore('vault', {
     syncEnabled: sync.isSyncEnabled(),
     syncStatus: 'idle',
     lastSyncedVersion: sync.syncConfig()?.lastVersion ?? null,
+    // Bumped whenever localStorage (vault / Secret Key / sync config) changes, so
+    // the getters below — which read localStorage, not reactive state — re-evaluate
+    // instead of returning a stale cached value.
+    storageTick: 0,
   }),
 
   getters: {
     locked: (s) => s.master === null,
-    hasVault: () => vaultExists(),
+    hasVault: (s) => (s.storageTick, vaultExists()),
     // Whether this device holds a Secret Key (i.e. the vault is 2SKD-protected).
-    secretKeyProtected: () => hasSecretKey(),
+    secretKeyProtected: (s) => (s.storageTick, hasSecretKey()),
     // The device Secret Key, for the Emergency Kit view (only meaningful unlocked).
-    secretKey: () => getSecretKey(),
+    secretKey: (s) => (s.storageTick, getSecretKey()),
     // The stored sync configuration (account id, server URL, …), or null.
-    syncInfo: (): SyncConfig | null => sync.syncConfig(),
+    syncInfo: (s): SyncConfig | null => (s.storageTick, sync.syncConfig()),
 
     counts(s): Record<string, number> {
       const by: Record<string, number> = {
@@ -178,10 +183,10 @@ export const useVaultStore = defineStore('vault', {
 
   actions: {
     /**
-     * Unlock the vault. On first run this generates a device Secret Key, seeds
-     * the demo vault sealed with 2SKD, and surfaces the Emergency Kit once. On a
-     * device that has the vault but not its Secret Key, it flips `needsSecretKey`
-     * so the UI can prompt for it (the "add this device" flow).
+     * Unlock the vault. On first run this creates a NEW empty vault, generates a
+     * device Secret Key (2SKD), and surfaces the Emergency Kit once. On a device
+     * that has the vault but not its Secret Key, it flips `needsSecretKey` so the
+     * UI can prompt for it (the "add this device" flow).
      */
     async unlock(master: string) {
       this.busy = true;
@@ -195,8 +200,9 @@ export const useVaultStore = defineStore('vault', {
         if (!vaultExists()) {
           const key = await newSecretKey();
           storeSecretKey(key);
-          await createVault(demoEntries(nowUnix()), master, key);
+          await createVault([], master, key);
           this.freshSecretKey = key;
+          this.storageTick += 1;
         } else if (!hasSecretKey()) {
           this.needsSecretKey = true;
           return;
@@ -229,6 +235,7 @@ export const useVaultStore = defineStore('vault', {
           return;
         }
         storeSecretKey(secretKey);
+        this.storageTick += 1;
         this.entries = await openVault(master, secretKey);
         this.master = master;
         this.needsSecretKey = false;
@@ -237,6 +244,7 @@ export const useVaultStore = defineStore('vault', {
       } catch {
         // Wrong key/master: drop the just-stored key so the prompt reappears clean.
         clearSecretKey();
+        this.storageTick += 1;
         this.unlockError = 'Wrong master password or Secret Key for this vault.';
       } finally {
         this.busy = false;
@@ -260,6 +268,7 @@ export const useVaultStore = defineStore('vault', {
     /** Wipe the local vault AND the device Secret Key entirely (irreversible). */
     reset() {
       destroyVault();
+      this.storageTick += 1;
       this.needsSecretKey = false;
       this.lock();
     },
@@ -374,6 +383,7 @@ export const useVaultStore = defineStore('vault', {
       try {
         await sync.register(serverUrl, email);
         this.syncEnabled = true;
+        this.storageTick += 1;
         await this.pushCurrent();
         if (this.syncStatus !== 'error') this.syncStatus = 'synced';
         toast('Cloud sync enabled');
@@ -382,6 +392,7 @@ export const useVaultStore = defineStore('vault', {
         sync.disableSync();
         this.syncEnabled = false;
         this.syncStatus = 'error';
+        this.storageTick += 1;
         toast('Could not enable cloud sync — check the server URL');
         return false;
       }
@@ -408,6 +419,7 @@ export const useVaultStore = defineStore('vault', {
           // one so unlock() routes into the "enter your Secret Key" flow.
           clearSecretKey();
         }
+        this.storageTick += 1;
         this.syncStatus = 'synced';
         this.lock();
         toast('Device linked — unlock with your master password and Secret Key');
@@ -469,6 +481,7 @@ export const useVaultStore = defineStore('vault', {
       this.syncEnabled = false;
       this.syncStatus = 'idle';
       this.lastSyncedVersion = null;
+      this.storageTick += 1;
     },
 
     /** Full round-trip: pull the remote vault (adopting it if present), then push. */
@@ -542,6 +555,7 @@ export const useVaultStore = defineStore('vault', {
         if (remote !== null) {
           setRawVault(remote.blob);
           this.lastSyncedVersion = remote.version;
+          this.storageTick += 1;
         }
       } catch {
         this.syncStatus = 'error';
@@ -556,6 +570,7 @@ export const useVaultStore = defineStore('vault', {
     async adoptBlob(blob: string, version: string | null) {
       if (this.master === null) return;
       setRawVault(blob);
+      this.storageTick += 1;
       this.entries = await openVault(this.master, getSecretKey());
       this.lastSyncedVersion = version;
       this.selectFirst();

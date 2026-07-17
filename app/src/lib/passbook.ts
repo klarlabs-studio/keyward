@@ -138,7 +138,7 @@ export async function openVault(master: string, secretKey?: string | null): Prom
   return JSON.parse(json) as Entry[];
 }
 
-/** Create a brand-new sealed vault from `entries` (first-run / demo seeding). */
+/** Create a brand-new sealed vault from `entries` (first-run). */
 export async function createVault(
   entries: Entry[],
   master: string,

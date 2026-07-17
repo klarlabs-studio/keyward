@@ -15,7 +15,9 @@ const emit = defineEmits<{
   (e: 'toggle-nav'): void;
 }>();
 
-const placeholder = computed(() => `Search ${vault.counts.all} items…`);
+const placeholder = computed(
+  () => `Search ${vault.counts.all} item${vault.counts.all === 1 ? '' : 's'}…`,
+);
 
 function toggleTheme(): void {
   const root = document.documentElement;

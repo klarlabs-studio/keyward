@@ -1,0 +1,52 @@
+# Proctor Passbook — demo environment.
+#
+# Demo data lives ENTIRELY here; the production app ships none. This spins up the
+# zero-knowledge sync server, a one-shot seeder that uploads a real 2SKD-sealed
+# demo vault, and the built web app served statically. The app image and code are
+# identical to production — only the *data* is injected, at the server.
+#
+#   1. build the web app once (host):  cd app && npm ci && npm run build:wasm && npm run build
+#   2. from the repo root:             docker compose -f demo/docker-compose.demo.yml up --build
+#   3. read demo/out/credentials.txt   and open http://localhost:8080
+#
+# Reset the demo:  docker compose -f demo/docker-compose.demo.yml down -v && rm -f demo/out/credentials.txt
+name: proctor-passbook-demo
+
+services:
+  sync:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    command: ["proctor-sync-server"]
+    environment:
+      PROCTOR_SYNC_ADDR: 0.0.0.0:8787
+      PROCTOR_SYNC_DIR: /data
+    volumes:
+      - demo-data:/data
+    ports:
+      - "8787:8787"
+
+  seeder:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    command: ["seed.sh"]
+    environment:
+      SYNC_URL: http://sync:8787
+    volumes:
+      - ./out:/out
+    depends_on:
+      - sync
+    restart: "no"
+
+  web:
+    image: nginx:alpine
+    volumes:
+      - ../app/dist:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - sync
+
+volumes:
+  demo-data:
