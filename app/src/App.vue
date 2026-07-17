@@ -655,29 +655,4 @@ a.link:hover {
   font-size: 0.72rem;
   color: var(--muted);
 }
-
-.share {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin: 1.1rem auto 0;
-  max-width: 640px;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-.avstack {
-  display: flex;
-}
-.avstack span {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  margin-left: -7px;
-  border: 2px solid var(--surface);
-  display: grid;
-  place-items: center;
-  font-size: 0.62rem;
-  font-weight: 700;
-  color: #fff;
-}
 </style>
