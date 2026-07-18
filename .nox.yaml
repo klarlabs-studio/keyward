@@ -1,0 +1,55 @@
+# nox configuration for Proctor.
+#
+# Without this file no plugins run at all — the core scan is deterministic and
+# offline, and plugin analyzers only join the pipeline when listed here. Proctor
+# had no .nox.yaml, so every scan before this one was core rules only.
+plugins:
+  required:
+    # STRIDE pattern detection. Registers and runs cleanly (passive,
+    # threat-modeling track).
+    #
+    # Calibration note, from actually running it: on this codebase its five
+    # static rules produced 3 findings and all 3 were false positives — it
+    # matched ordinary password-variable declarations in a test file and in
+    # export.ts and labelled them "authentication bypass". Kept because it is
+    # cheap and its AI mode (ai_model: true, needs an LLM endpoint) is where the
+    # real value would be, but do NOT read a clean THREAT-* result as evidence
+    # of anything.
+    - nox/threat-model@>=0.2
+
+  # BLOCKED PENDING AN EXPLICIT TRUST DECISION — do not simply uncomment.
+  #
+  #   - nox/k8s-runtime@>=0.6   # inspects RUNNING workloads; has a `drift` tool
+  #                             # that diffs declared IaC against live cluster
+  #                             # state — directly relevant, since manifest
+  #                             # review missed a public /metrics endpoint.
+  #   - nox/red-team@>=0.6      # multi-step attack-chain analysis across findings.
+  #
+  # Both are rejected by the default safety policy:
+  #   risk_class: they require "active", policy allows at most "passive"
+  #   network_hosts: they require "*", which the policy does not grant
+  #   needs_confirmation: they require it, the policy does not allow it
+  #
+  # Enabling them means adding a `plugin_policy` block with
+  # max_risk_class: active, allow_confirmation_required: true, and
+  # allowed_network_hosts: ["*"]. Note that "*" is unrestricted egress and
+  # cannot be narrowed to the cluster API, because the manifests declare "*"
+  # rather than a specific host — it is all-or-nothing.
+  #
+  # It matters that THIS FILE IS COMMITTED to an open-source repository: a
+  # permissive plugin_policy here applies to everyone who clones the repo and
+  # runs nox, not just to this machine. If these are enabled, the policy
+  # belongs in local/user config, not here.
+
+  # Require a valid signature on every plugin. nox's default is "permissive",
+  # which accepts unsigned plugins; for a credential manager that is the wrong
+  # default. Everything installed so far verified cleanly under cosign keyless,
+  # so this costs nothing today and prevents a silent downgrade later.
+  trust_policy: default
+
+scan:
+  exclude:
+    - "target/"
+    - "app/dist/"
+    - "app/src/wasm/pkg/"
+    - "node_modules/"
