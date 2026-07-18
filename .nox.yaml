@@ -17,15 +17,31 @@ plugins:
     # of anything.
     - nox/threat-model@>=0.2
 
+    # Multi-step attack-chain analysis over the findings the core scan produces.
+    # Its `analyze` tool is passive (no network, no mutation, no confirmation)
+    # and now declares that per-tool, so it runs under the default policy. Its
+    # `validate` sibling probes live targets and remains refused unless the
+    # policy is explicitly widened -- that separation is the point.
+    #
+    # MEASURED VALUE ON THIS REPO: currently zero. red-team matches 7 hardcoded
+    # rule combinations (THREAT-001+004, THREAT-001+005, TAINT-001, TAINT-002,
+    # TAINT-003+THREAT-004, KRUNT-002+003, EXPLAIN-001+THREAT-001). Proctor's
+    # findings include TAINT-006 and no THREAT-*/KRUNT-* pairs, so no chain
+    # fires. Kept enabled because it is passive and free to run, and it starts
+    # paying off the moment a matching pair appears -- but do not read a silent
+    # red-team as "no attack paths exist".
+    - nox/red-team@>=0.6
+
   # BLOCKED PENDING AN EXPLICIT TRUST DECISION — do not simply uncomment.
+  # (red-team is no longer here: per-tool safety lets its passive `analyze`
+  # run under the default policy, while `validate` stays refused.)
   #
   #   - nox/k8s-runtime@>=0.6   # inspects RUNNING workloads; has a `drift` tool
   #                             # that diffs declared IaC against live cluster
   #                             # state — directly relevant, since manifest
   #                             # review missed a public /metrics endpoint.
-  #   - nox/red-team@>=0.6      # multi-step attack-chain analysis across findings.
   #
-  # Both are rejected by the default safety policy:
+  # It is rejected by the default safety policy:
   #   risk_class: they require "active", policy allows at most "passive"
   #   network_hosts: they require "*", which the policy does not grant
   #   needs_confirmation: they require it, the policy does not allow it
@@ -46,6 +62,13 @@ plugins:
   # default. Everything installed so far verified cleanly under cosign keyless,
   # so this costs nothing today and prevents a silent downgrade later.
   trust_policy: default
+
+  # Do NOT auto-install: red-team is currently a LOCAL development build
+  # (nox plugin install --local) carrying the per-tool safety declarations that
+  # are not in the published 0.6.6 artifact yet. Auto-install would silently
+  # replace it with the marketplace build and the passive `analyze` path would
+  # start failing again. Re-enable once a release ships.
+  auto_install: false
 
 scan:
   exclude:
