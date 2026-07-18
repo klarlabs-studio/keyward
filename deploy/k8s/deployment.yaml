@@ -15,16 +15,38 @@ spec:
     rollingUpdate:
       maxUnavailable: 0
       maxSurge: 1
+  # Both labels are listed EXPLICITLY. They used to be injected by the
+  # kustomize `commonLabels` transformer, which also rewrote the ACME solver
+  # NetworkPolicy's podSelector and silently broke TLS issuance. That
+  # transformer is now `labels` with includeSelectors:false, so anything that
+  # belongs in a selector has to be written here — and `spec.selector` is
+  # IMMUTABLE, so this list must keep matching the deployed object exactly.
   selector:
     matchLabels:
       app.kubernetes.io/name: proctor-sync-server
+      app.kubernetes.io/part-of: proctor
   template:
     metadata:
       labels:
         app.kubernetes.io/name: proctor-sync-server
         app.kubernetes.io/part-of: proctor
       annotations:
-        # Scraped cluster-internally; /metrics is not exposed via the ingress.
+        # Prometheus scrapes the POD directly on 8787 via these annotations —
+        # that path does not go through the Ingress.
+        #
+        # WARNING — /metrics IS reachable through the Ingress unless you stop
+        # it. An earlier version of this comment claimed otherwise; that was
+        # wrong, and a live deployment served /metrics to the open internet
+        # with HTTP 200. ingress.yaml routes path `/` with pathType: Prefix,
+        # which matches every path, /metrics included. It exposes no secrets or
+        # PII, but it does publish the exact version + backend (useful for
+        # CVE-matching a target) and account/family/invite totals.
+        #
+        # Block it at the edge. See deploy/overlays/klarlabs/metrics-block.yaml
+        # for a Traefik implementation; on ingress-nginx the equivalent is a
+        # location deny on the Ingress:
+        #   nginx.ingress.kubernetes.io/server-snippet: |
+        #     location /metrics { deny all; return 403; }
         prometheus.io/scrape: "true"
         prometheus.io/port: "8787"
         prometheus.io/path: "/metrics"
@@ -73,7 +95,7 @@ spec:
       containers:
         - name: proctor-sync-server
           # Parameterize this image ref for your registry / release tag.
-          image: ghcr.io/klarlabs/proctor-sync-server:1.33.0
+          image: ghcr.io/klarlabs-studio/proctor-sync-server:1.41.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

@@ -3,6 +3,78 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [Unreleased]
+
+**First real production deployment — to the klarlabs k3s cluster on Hetzner, at
+https://proctor.klarlabs.de.** No version bump: the server binary is unchanged
+from 1.41.0 and the deployed image is still `1.41.0`. Everything here is
+deployment configuration, plus two genuine defects the live deploy exposed.
+
+Deploying somewhere real found what minikube could not — the previous validation
+ran against ingress-nginx on a single-node cluster, and every one of these is a
+difference from that environment.
+
+### Fixed — two bugs that only a real deployment could surface
+
+- **`/metrics` was served to the open internet.** `deployment.yaml` asserted
+  "/metrics is not exposed via the ingress". That was false: the Ingress routes
+  `/` with `pathType: Prefix`, which matches every path. A public
+  `curl https://proctor.klarlabs.de/metrics` returned **HTTP 200**. No secrets or
+  PII were exposed (the counters carry no identifying data, and a test enforces
+  that), but it did publish the exact version and backend — useful for
+  CVE-matching a target — plus account/family/invite totals. Now blocked at the
+  edge (**403**), while Prometheus keeps scraping pods directly. The false claim
+  in the comment is corrected, with the ingress-nginx equivalent documented.
+- **The NetworkPolicy silently broke TLS issuance.** cert-manager's HTTP-01
+  solver pod runs in this namespace but is labelled
+  `acme.cert-manager.io/http01-solver=true`, so the app's allow-rule did not
+  select it and default-deny dropped the traffic. Because the Ingress still
+  answered, the failure surfaced as `wrong status code '502'` on a Challenge
+  stuck pending forever — TLS never issues and nothing in the app logs explains
+  why. Added `allow-ingress-to-acme-solver` (port 8089, not 8787).
+
+### Changed
+
+- **`commonLabels` → `labels` with `includeSelectors: false`.** `commonLabels`
+  injects its pairs into *selectors*, which rewrote the ACME solver policy's
+  `podSelector` to demand a label cert-manager's pods do not carry, leaving the
+  policy inert. It also bakes labels into `spec.selector` and
+  `volumeClaimTemplates` — both **immutable**, so the label is unremovable after
+  the fact without deleting the workload. Selectors and the volume claim's
+  labels are now declared explicitly, chosen to match the deployed objects
+  exactly so no workload had to be recreated.
+- **Image moved to `ghcr.io/klarlabs-studio/`.** Every manifest referenced
+  `ghcr.io/klarlabs/`, an org that exists but that we are not a member of, so
+  the push failed with `permission_denied: create_package`. That reference had
+  never been exercised.
+- Stale `1.33.0` image references updated to the version actually shipped.
+
+### Added
+
+- **`deploy/overlays/klarlabs/`** — cluster overlay. The base stays portable for
+  self-hosters; the overlay carries what is specific here: Traefik instead of
+  ingress-nginx (k3s ships Traefik, so the base Ingress would never be served),
+  NetworkPolicy sources pointing at `kube-system`/`observability` instead of
+  `ingress-nginx`/`monitoring` (the base selectors match nothing here, which
+  with default-deny would have been a silent total outage), an explicit
+  `storageClassName` (this cluster has **two** classes marked default, making an
+  unqualified claim ambiguous — pinned to Longhorn so a node drain cannot strand
+  the database), an imagePullSecret, and the image tag.
+- **`deploy/Dockerfile.static`** — packages a pre-built static binary onto
+  distroless (~5.8 MB, no shell or libc; TLS roots are compiled in, verified via
+  `webpki-roots` present / `rustls-native-certs` absent). Needed because
+  building `linux/amd64` on Apple Silicon goes through QEMU, where **rustc
+  segfaults**; cross-compiling natively with `cargo-zigbuild` takes ~2 minutes.
+  `deploy/Dockerfile` remains the canonical in-container build for CI.
+- **`deploy/rollops.yaml`** — RollOps rollout definition rendering from the
+  overlay, so there is one source of truth and drift keys off rendered output.
+
+### Known gaps
+
+- No `stripe-webhook-secret` is set, so billing webhooks are inactive.
+- The HPA is genuinely functional here (metrics-server is installed) — unlike
+  the minikube run, where it was inert.
+
 ## [1.41.0] — 2026-07-18
 
 **The k8s manifests were validated on a real cluster — and three outage-grade bugs

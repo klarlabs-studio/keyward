@@ -8,8 +8,11 @@ metadata:
     app.kubernetes.io/part-of: proctor
 spec:
   type: ClusterIP
+  # Explicit (see the note in deployment.yaml): the kustomize label transformer
+  # no longer writes into selectors.
   selector:
     app.kubernetes.io/name: proctor-sync-server
+    app.kubernetes.io/part-of: proctor
   ports:
     - name: http
       port: 80

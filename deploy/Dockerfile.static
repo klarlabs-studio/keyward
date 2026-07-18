@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1
+#
+# PACKAGING-ONLY image: wraps a PRE-BUILT statically linked binary. It does not
+# compile anything.
+#
+# Why this exists alongside deploy/Dockerfile
+# -------------------------------------------
+# deploy/Dockerfile compiles inside the container and remains the canonical,
+# reproducible build for CI (an amd64 runner builds it natively). It cannot be
+# used from an Apple Silicon workstation: building linux/amd64 there goes through
+# QEMU, and rustc reliably SEGFAULTS under that emulation
+# ("qemu: uncaught target signal 11"), so the build never completes.
+#
+# The workaround is to cross-compile on the host — natively, no emulation — and
+# have the image only package the result:
+#
+#   rustup target add x86_64-unknown-linux-musl
+#   cargo zigbuild --release --target x86_64-unknown-linux-musl -p proctor-sync-server
+#
+#   # Stage ONLY the binary as the build context (see note below):
+#   stage=$(mktemp -d)
+#   cp target/x86_64-unknown-linux-musl/release/proctor-sync-server "$stage"/
+#   docker buildx build --platform linux/amd64 -f deploy/Dockerfile.static \
+#     -t ghcr.io/klarlabs-studio/proctor-sync-server:<version> --provenance=false "$stage"
+#
+# (cargo-zigbuild supplies `zig cc` as the musl C compiler; a plain
+#  `cargo build --target x86_64-unknown-linux-musl` fails in cc-rs looking for
+#  x86_64-linux-musl-gcc.)
+#
+# CONTEXT NOTE: the build context is a staging directory holding just the
+# binary, NOT the repo root. `.dockerignore` excludes `target/` — deliberately,
+# so the compiling Dockerfile never ingests host-architecture build output — and
+# that exclusion also hides the cross-compiled binary. Staging keeps
+# `.dockerignore` intact (rather than punching a hole in it) and shrinks the
+# context from the whole repository to a few megabytes.
+#
+# Base: distroless static — no shell, no package manager, no libc.
+# Safe here for two specific reasons, both verified rather than assumed:
+#   * The binary is statically linked musl, so it needs no runtime loader.
+#   * TLS trust roots are COMPILED IN (the dependency tree has webpki-roots and
+#     not rustls-native-certs), so the outbound HTTPS call to Stripe works with
+#     no ca-certificates package present.
+# If either ever changes, this base stops working and must be revisited.
+#
+# Unlike deploy/Dockerfile there is no HEALTHCHECK: that needs curl, which does
+# not exist in distroless. It is not a loss — Kubernetes uses its own
+# startup/readiness/liveness probes (see k8s/deployment.yaml) and ignores the
+# container-level HEALTHCHECK entirely.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
+
+COPY --chmod=0755 proctor-sync-server /usr/local/bin/proctor-sync-server
+
+# TLS is terminated upstream by the ingress; the server is never exposed directly.
+ENV PROCTOR_SYNC_ADDR=0.0.0.0:8787 \
+    PROCTOR_SYNC_DIR=/data
+
+# uid 65532 (distroless "nonroot"). The Deployment additionally pins
+# runAsUser/runAsGroup 10001 and readOnlyRootFilesystem: true — with
+# PROCTOR_SYNC_PG set, all state lives in Postgres and nothing is written to
+# the filesystem, so no writable /data volume is required.
+USER 65532:65532
+EXPOSE 8787
+
+ENTRYPOINT ["/usr/local/bin/proctor-sync-server"]

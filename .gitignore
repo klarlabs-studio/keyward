@@ -6,3 +6,6 @@ Cargo.lock.orig
 .nox/*
 !.nox/baseline.json
 demo/out/
+
+# RollOps local rollout state (sqlite) — tool state, not source.
+rollops.db

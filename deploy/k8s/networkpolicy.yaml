@@ -80,6 +80,49 @@ spec:
         - protocol: TCP
           port: 8787
 ---
+# 2b) Allow the ingress controller to reach cert-manager's ACME HTTP-01 SOLVER
+#     pods on TCP 8089.
+#
+#     WHY THIS IS REQUIRED (found the hard way on a live cluster): to prove you
+#     control the domain, cert-manager creates a short-lived solver Pod +
+#     Service + Ingress and Let's Encrypt fetches
+#     http://<host>/.well-known/acme-challenge/<token> through them. That solver
+#     pod lands in THIS namespace, but it is labelled
+#     `acme.cert-manager.io/http01-solver=true` — it does NOT carry
+#     `app.kubernetes.io/name: proctor-sync-server`, so rule (2) does not select
+#     it and the default-deny in rule (1) drops the traffic.
+#
+#     The failure is quiet and easy to misread: the Ingress answers, so you get
+#     a 502 rather than a timeout, and the Challenge sits in
+#     `Waiting for HTTP-01 challenge propagation: wrong status code '502'`
+#     forever. TLS never issues and nothing in the app's own logs explains why.
+#
+#     Ports differ from the app: the solver listens on 8089, not 8787.
+#
+#     PER-CLUSTER: same adjustment as rule (2) — change the namespaceSelector to
+#     wherever your ingress controller actually runs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-acme-solver
+  namespace: proctor
+  labels:
+    app.kubernetes.io/part-of: proctor
+spec:
+  podSelector:
+    matchLabels:
+      acme.cert-manager.io/http01-solver: "true"
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8089
+---
 # 3) Allow inbound to POSTGRES pods on TCP 5432 ONLY from the app pods. Nothing
 #    else in (or out of) the namespace may reach the database. Combined with the
 #    default-deny above, this is the sole path to Postgres.

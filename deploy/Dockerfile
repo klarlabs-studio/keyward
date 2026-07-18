@@ -5,7 +5,7 @@
 # plain HTTP behind an ingress that terminates TLS (see deploy/README.md).
 #
 # Build context is the repository ROOT (the Cargo workspace), e.g.:
-#   docker build -f deploy/Dockerfile -t ghcr.io/klarlabs/proctor-sync-server:1.30.0 .
+#   docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/proctor-sync-server:1.30.0 .
 
 # ---- build stage ---------------------------------------------------------
 # Pinned to the workspace's rust-version (1.90) on Debian bookworm so the

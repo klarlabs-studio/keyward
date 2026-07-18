@@ -51,8 +51,8 @@ Build from the **repository root** (the Cargo workspace is the build context):
 
 ```bash
 # From the repo root:
-docker build -f deploy/Dockerfile -t ghcr.io/klarlabs/proctor-sync-server:1.33.0 .
-docker push ghcr.io/klarlabs/proctor-sync-server:1.33.0
+docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/proctor-sync-server:1.41.0 .
+docker push ghcr.io/klarlabs-studio/proctor-sync-server:1.41.0
 ```
 
 The image is **server only** (no demo seeder, no CLI), runs as a non-root user

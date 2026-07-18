@@ -12,8 +12,11 @@ metadata:
     app.kubernetes.io/part-of: proctor
 spec:
   clusterIP: None
+  # Explicit (see the note in deployment.yaml): the kustomize label transformer
+  # no longer writes into selectors.
   selector:
     app.kubernetes.io/name: proctor-postgres
+    app.kubernetes.io/part-of: proctor
   ports:
     - port: 5432
       targetPort: 5432
@@ -29,9 +32,11 @@ metadata:
 spec:
   serviceName: proctor-postgres
   replicas: 1
+  # Explicit, and IMMUTABLE once created (see deployment.yaml).
   selector:
     matchLabels:
       app.kubernetes.io/name: proctor-postgres
+      app.kubernetes.io/part-of: proctor
   template:
     metadata:
       labels:
@@ -112,6 +117,13 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: pgdata
+        # Declared explicitly for the same reason as the selectors above: the
+        # old `commonLabels` transformer used to stamp this in, and
+        # volumeClaimTemplates are IMMUTABLE after creation — so dropping the
+        # label makes every subsequent apply fail with
+        # "updates to statefulset spec for fields other than ... are forbidden".
+        labels:
+          app.kubernetes.io/part-of: proctor
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:

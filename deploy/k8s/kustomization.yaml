@@ -17,12 +17,32 @@ resources:
 # NOTE: no Secret manifest is committed — create the `proctor-sync-secrets`
 # Secret out-of-band with `kubectl create secret` (see deploy/README.md § Secrets).
 
-commonLabels:
-  app.kubernetes.io/part-of: proctor
+# `labels` with includeSelectors:false — deliberately NOT the older
+# `commonLabels`, which injects its pairs into SELECTORS as well as metadata.
+# That behaviour is actively harmful here for two reasons:
+#
+#   1. It broke ACME TLS issuance. commonLabels rewrote the
+#      allow-ingress-to-acme-solver policy's podSelector to also require
+#      `app.kubernetes.io/part-of: proctor`. cert-manager's HTTP-01 solver pods
+#      are created by cert-manager and carry only their own
+#      `acme.cert-manager.io/*` labels, so the policy matched nothing, stayed
+#      inert, and the challenge failed with a 502 (observed on a live cluster).
+#
+#   2. It bakes the label into Deployment/StatefulSet `spec.selector`, which is
+#      IMMUTABLE. Once shipped, removing or changing the label can only be done
+#      by deleting and recreating the workload.
+#
+# Every workload and Service here already declares its own precise selector via
+# `app.kubernetes.io/name`, so the part-of label is purely organisational and
+# has no business in a selector.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: proctor
+    includeSelectors: false
 
 # Override the image tag without editing deployment.yaml, e.g.:
 #   kubectl kustomize deploy/k8s | kubectl apply -f -
 # or set here:
 images:
-  - name: ghcr.io/klarlabs/proctor-sync-server
-    newTag: "1.33.0"
+  - name: ghcr.io/klarlabs-studio/proctor-sync-server
+    newTag: "1.41.0"
