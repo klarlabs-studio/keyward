@@ -43,17 +43,44 @@ stored   ← { member_id, epk, nonce, ct }
 
 ### Q2 — Can a relay-supplied public key subvert the wrap?
 
-Specifically: **`was_contributory()` is never called** and the recipient public
-key is never validated (`sharing.rs:315-316, 352-353`).
+**CORRECTED.** An earlier version of this document asked you to attempt a
+proof-of-concept against unvalidated X25519 results, and called it "the
+highest-value single result of the engagement". That was wrong when published:
+`checked_secret` rejects non-contributory results at all four DH sites, with a
+regression test (`low_order_public_keys_are_rejected`). The fix and that text
+landed in the same commit. **Do not spend hours there — it fails closed.**
 
-- If a malicious relay publishes a low-order point as a member's `public_key`,
-  is the resulting `K_wrap` publicly computable, and does the relay thereby
-  recover `K_vault`?
-- Is there any other malformed or adversarial public key with a similar effect?
-- **Please attempt a proof-of-concept.** We have not, and we consider this the
-  highest-value single result of the engagement.
-- If exploitable: what is the correct fix — reject non-contributory results,
-  validate the point, bind `epk ‖ rpk` into the KDF, or all three?
+The question that remains is the non-degenerate one:
+
+- A relay can supply a perfectly valid public key whose **secret it holds**. The
+  client now pins the key it has accepted per member (trust-on-first-use) and
+  requires an explicit human approval for anything unknown or changed. Is TOFU
+  plus an out-of-band safety-number comparison an adequate control here, or does
+  this construction require **member-signed directory entries**?
+- TOFU takes the first key on faith. How bad is the first-load window in
+  practice, and what should the client do about a `changed` key beyond warning?
+- Separately and more seriously, see **Q2a**: a relay need not be granted
+  anything at all — it can replace the wrapped-key and content blobs outright,
+  and the safety number does not cover them.
+
+### Q2a — Wraps have no sender authentication (the one we most want answered)
+
+`wrap_to` needs only a recipient public key, the AEAD carries no associated data
+and no signature, and `safety_number` digests only member ids and public keys —
+**not** the wrapped-key set or the content blob.
+
+So a relay can mint its own vault key, wrap it correctly to every real member,
+overwrite both blobs, and produce an unchanged safety number. Members decrypt
+successfully. A family comparing fingerprints out of band sees nothing wrong. At
+group creation it is completely invisible.
+
+- Is binding `group_id ‖ member_id ‖ epoch` as AEAD associated data sufficient,
+  or is a signature from an authorised member required?
+- Should the group-state digest the client pins cover the wrapped-key set, and
+  what is the right rollback/epoch discipline alongside it?
+- We have deliberately **not** implemented a fix, because we judged the choice
+  between "AAD + pinned group digest" and "member-signed directory entries" to
+  be a protocol design decision worth your judgement rather than our guess.
 
 ### Q3 — Is domain separation adequate?
 

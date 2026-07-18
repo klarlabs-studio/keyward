@@ -7,9 +7,13 @@
 //!
 //! SECURITY NOTE: this exposes the prototype crypto in `proctor-passbook`
 //! (Argon2id, XChaCha20-Poly1305, optional Secret Key). It needs a formal review
-//! before real use. The browser prototype is master-password only; wiring the
-//! device Secret Key (2SKD) through these bindings is a planned follow-up — see
-//! [`seal_vault`].
+//! before real use.
+//!
+//! (Corrected 2026-07-18: this previously said the browser was "master-password
+//! only" and that wiring the device Secret Key was "a planned follow-up". 2SKD
+//! is fully wired and used on every seal and open — see [`seal_vault`], which
+//! takes the Secret Key. The comment pointed readers at code that contradicted
+//! it.)
 
 use proctor_passbook::{
     generate_passphrase, generate_password, new_vault_key, open, open_content, open_sealed,

@@ -127,12 +127,12 @@ plainly rather than imply instant forgetting.
 
 | Threat | Vector | Mitigation |
 |---|---|---|
-| **Spoofing** | Attacker redeems an invite as a fake member | Invite codes are high-entropy, single-use, TTL'd, delivered out-of-band; redeeming only *publishes a public key* — it grants no access until an existing member wraps to it, which is a human decision. |
+| **Spoofing** | Attacker redeems an invite as a fake member | Invite codes are high-entropy, single-use, TTL'd, delivered out-of-band; redeeming only *publishes a public key* — it grants no access until an existing member wraps to it, which is a human decision. **(Was aspirational until 2026-07-18: the client auto-wrapped to any relay-supplied key on every load, with no user involvement. Now enforced by trust-on-first-use pinning plus explicit approval — see known-limitations §3.)** |
 | **Tampering** | Server or MITM alters wrapped keys / blob | AEAD (XChaCha20-Poly1305) on both `K_vault` wraps and content; a tampered wrap fails `unwrap_for`. TLS in transit. (Wrap authenticity vs. a *malicious server substituting a whole member* is an open item — see below.) |
 | **Repudiation** | Who added/removed whom | Group audit log of membership changes (member-signed entries — a later increment). |
 | **Information disclosure** | Server breach | Zero-knowledge: only public keys, ciphertext, hashed tokens/invites. `K_vault`, master, and Secret Key never reach the server. |
-| **DoS** | Invite spam / oversized blobs | Rate-limit invite mint + redeem; cap blob and `SharedVault` size; TTL invites. |
-| **Elevation of privilege** | Non-owner revokes; revoked member still reads | Owner-only revoke enforced server-side against the member directory; revocation **rotates** `K_vault`; "already-read" caveat surfaced in UI. |
+| **DoS** | Invite spam / oversized blobs | Rate-limit invite mint + redeem; cap blob and `SharedVault` size; TTL invites. **(Blob caps were listed here as implemented while they were not; a 16 MiB application-layer cap now exists. Invite TTL was unbounded and caller-chosen — `u64::MAX` made expiry unreachable — now clamped to 24h.)** |
+| **Elevation of privilege** | Non-owner revokes; revoked member still reads | Revoke is enforced server-side against the member directory — **Admin or Owner**, not Owner-only as originally written here (ADR-0006 introduced Admin; this row was never updated). Revocation **rotates** `K_vault`, invalidates outstanding invites, and bars the removed account from rejoining by invite; "already-read" caveat surfaced in UI. |
 
 **Known open item (must be closed before GA):** a malicious *server* could hand an
 invitee a `MemberPublic` it controls (key-substitution / confused-deputy), or show

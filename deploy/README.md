@@ -205,8 +205,26 @@ If you don't scrape from inside the `proctor` namespace, drop the same-namespace
 - `GET /readyz` → `200 {"status":"ok"}` — readiness.
 - `GET /metrics` → Prometheus exposition (`proctor_requests_total`,
   `proctor_uptime_seconds`, `proctor_build_info{backend,version}`). Aggregate
-  counters only (no PII). The pod carries `prometheus.io/scrape` annotations; keep
-  `/metrics` **cluster-internal** (it is not routed by the ingress).
+  counters only (no PII). The pod carries `prometheus.io/scrape` annotations, and
+  Prometheus scrapes the pod **directly** on 8787 — that path does not traverse
+  the ingress.
+
+  > **`/metrics` IS routed by the ingress unless you block it.** This line
+  > previously claimed the opposite. It was wrong: `k8s/ingress.yaml` routes
+  > `path: /` with `pathType: Prefix`, which matches every path, and a live
+  > deployment served `/metrics` to the open internet with HTTP 200. It exposes
+  > no secrets or PII, but it does publish the exact version and backend —
+  > useful for matching known CVEs to a target — plus account, family and invite
+  > totals.
+  >
+  > `overlays/klarlabs/metrics-block.yaml` blocks it for Traefik via a dedicated
+  > `/metrics` Ingress with a deny middleware (verified: 403 from the internet,
+  > API endpoints unaffected). On ingress-nginx the equivalent is:
+  >
+  > ```yaml
+  > nginx.ingress.kubernetes.io/server-snippet: |
+  >   location /metrics { deny all; return 403; }
+  > ```
 
 All three are unauthenticated and **not** rate-limited so probes/scrapes are never
 throttled.

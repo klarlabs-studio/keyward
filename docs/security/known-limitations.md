@@ -33,29 +33,31 @@ look."
 
 ---
 
-## 1. X25519 results are not checked for contributory behaviour
+## 1. X25519 contributory behaviour — CLOSED (was: not checked)
 
-`crates/passbook/src/sharing.rs:316`, `:353`, and `:136` call
-`diffie_hellman(...)` and use `shared.as_bytes()` directly as HKDF input
-material. `x25519-dalek`'s `SharedSecret::was_contributory()` is **never
-called**, and the recipient public key is used exactly as it arrives from the
-relay directory (`sharing.rs:315`) with no validation.
+**Status: fixed. This section previously described a defect the code no longer
+has, and said so while the fix was already committed.**
 
-Why this matters here specifically: the recipient's public key is **not**
-obtained from the recipient. It is obtained from the relay
-(`app/src/lib/sharing.ts:269-273, 511-534`). If the relay supplies a low-order
-point as a member's `public_key`, the X25519 output is the all-zero value, the
-wrapping key becomes `HKDF-SHA256(ikm = 0^32, salt = None, info = HKDF_INFO)` —
-a **constant any party can compute** — and the resulting `WrappedKey` is
-openable by anyone, including the relay.
+`crates/passbook/src/sharing.rs` defines `checked_secret`, which rejects a
+non-contributory X25519 result, and calls it at **all four** DH sites
+(`wrap_to`, `unwrap_for`, `seal_to`, `open_sealed`). A relay-supplied low-order
+point therefore fails closed with `SharingError::WeakKey` instead of producing
+the all-zero shared secret and a publicly computable wrapping key. Regression
+test: `low_order_public_keys_are_rejected`.
 
-The safety number would change in that case, so a family that actually compares
-it out of band would catch it. But the automatic grant (§3) happens *before* any
-such comparison, and nothing blocks on the comparison.
+Why this entry is called out rather than quietly deleted: the fix and this
+document landed in the **same commit** (`f970478`), so the review package was
+stale the moment it was published. `review-scope.md` then named a
+proof-of-concept for this as the single thing it most wanted a reviewer to
+attempt — i.e. it directed a paid auditor at a hole that provably fails closed.
+Documentation that misstates the code in the *pessimistic* direction is not
+harmless: it burns engagement hours and, once an auditor finds one such claim,
+they rightly stop trusting the rest of the package and re-derive everything from
+source at your expense.
 
-**We have not written a proof-of-concept for this.** It is the single item we
-most want a reviewer to confirm or refute. It is question **Q2** in
-[`review-scope.md`](review-scope.md).
+**The real residual is not here — it is §3.** Rejecting low-order points stops a
+*degenerate* key. It does nothing about a relay that supplies a perfectly valid
+public key whose secret it holds, which is the actual attack.
 
 ---
 
@@ -91,97 +93,100 @@ properly rather than assumed.
 
 ---
 
-## 2a. One KDF now serves two protocols, with no separating label
+## 2a. Domain separation between the two protocols — CLOSED
 
-The **recovery-contact** feature (`crates/passbook/src/sharing.rs:120-165`) —
-which seals a member's device Secret Key to a family member — calls the *same*
-`derive_wrapping_key` with the *same* `HKDF_INFO` as the vault-key wrap
-(`sharing.rs:137` vs `sharing.rs:317`).
+**Status: fixed. As with §1, this section described a defect that was already
+repaired in the same commit that published it.**
 
-So two distinct protocols, carrying **different plaintext types** (a 32-byte
-vault key vs. an arbitrary-length Secret Key string), now derive their keys
-identically. Neither ciphertext carries a type tag, and neither uses AAD.
-`SealedBox` (`sharing.rs:126-130`) and `WrappedKey` (`sharing.rs:267-276`) differ
-only in that the latter has a `member_id` field — the sealed bytes are
-structurally interchangeable.
+The recovery-contact seal and the vault-key wrap derive from **different**
+labels: `sharing.rs` defines `SEALED_BOX_INFO` for `seal_to`/`open_sealed`,
+distinct from `HKDF_INFO` used by `wrap_to`/`unwrap_for`. The separation is
+asserted by test, not merely by inspection —
+`recovery_and_vault_wrapping_use_separate_derivations` includes
+`assert_ne!(HKDF_INFO, SEALED_BOX_INFO)`, so collapsing them back into one label
+fails the build.
 
-We do not currently see an exploit, because the plaintexts round-trip through
-different call paths and a length check guards the vault-key path
-(`sharing.rs:369-371`). But "no separating label between two protocols sharing a
-KDF" is exactly the precondition for cross-protocol confusion, and it should not
-rest on our not having found one. This is question **Q8**.
-
-This construction landed *while this package was being written*. It is the
-newest and least-examined code in scope, and it is the only place where a 2SKD
-factor deliberately leaves the device — see §10a.
+The residual concern in the original text still stands, though, and is NOT
+closed: **neither ciphertext carries associated data.** `wrap_to` encrypts the
+vault key with no AAD binding it to a group, a member id, or a key epoch, so a
+wrap is not cryptographically tied to the context it was produced for. That is
+tracked as part of §3a below rather than here.
 
 ---
 
-## 3. Access grants are automatic; the safety number is not consulted
+## 3. Access grants require a human decision — CLOSED (was: automatic)
 
-ADR-0004 §4 step 3 describes granting as a human decision — the invite proves
-authorization, but "it grants no access until an existing member wraps to it,
-which is a human decision."
+**Status: fixed.** `loadFamily` no longer wraps the vault key to whatever the
+relay reports. The client pins the public key it has accepted for each member
+(trust-on-first-use, `app/src/lib/sharing.ts`) and classifies every member as
+`pinned`, `unknown`, or `changed`. Only `pinned` keys are granted automatically;
+the other two are surfaced for an explicit decision and **nothing is uploaded**
+until the user acts. `approveMember()` re-reads the directory and refuses if the
+key changed since it was displayed.
 
-As implemented, it is not a human decision:
+The ordering bug is fixed with it: the safety number used to be computed for
+display *after* the grant had already been uploaded, so a user obeying the
+in-app instruction ("if it differs, stop") stopped after the key had left.
 
-```ts
-// app/src/lib/sharing.ts:511-534
-const missing = group.members.filter((m) => !wrappedIds.has(m.member_id));
-if (missing.length > 0) {
-  for (const m of missing) {
-    updated = grant_group_access(updated, member.secret, member.id, JSON.stringify(m));
-  }
-  await putKeys(groupId, updated, keys.version);
-}
-```
-
-Every time any member with access opens the family vault, their client silently
-wraps `K_vault` to **every** directory entry the relay reports as lacking a wrap,
-using **the public key the relay supplied**, with no prompt and no
-safety-number check. `grant_access` itself
-(`crates/passbook/src/sharing.rs:383-390`) authorizes only the *granter*; it
-performs no validation of the recipient at all.
-
-This is the exact key-substitution scenario ADR-0004 names as its "known open
-item (must be closed before GA)", and the automation makes it materially easier
-to exploit than the ADR's own description implies.
-
-**Partial improvement, landed during the writing of this package.** `loadFamily`
-now returns `justGranted: string[]` — the names of members it just admitted
-(`app/src/lib/sharing.ts:95, 519, 530, 544`) — so the UI can report the grant
-after the fact. That is a genuine improvement in *transparency*: a silent action
-becomes a visible one. It does **not** change the security property. The wrap
-still happens automatically, still uses the relay-supplied public key, still
-precedes any safety-number comparison, and still cannot be declined. Reporting a
-grant is not the same as authorizing it.
+**Residual, unchanged:** TOFU takes the first key on faith. A relay hostile from
+the very first load can still substitute at that moment; comparing the safety
+number out of band is what closes it, and nothing forces that comparison. And
+pinning does not address §3a at all, which needs no grant from us.
 
 ---
 
-## 4. `member_id` is client-chosen and its uniqueness is unenforced
+## 3a. Wraps carry no sender authentication, and the safety number does not cover them
 
-The joiner supplies `member_id`, `name`, and `public_key` in the join request
-body (`crates/sync-server/src/main.rs:1146-1156`). The relay stores them verbatim.
-`apply_redeem` (`crates/sync/src/groups.rs:273-281`) deduplicates on
-**`account_id`**, not on `member_id`.
+**Open. This is the most significant remaining gap in family sharing.**
 
-But `member_id` is the identity key of the cryptographic structure:
+`wrap_to` requires only the recipient's public key — anyone can produce a
+well-formed wrap — and the AEAD carries no associated data and no signature.
+`unwrap_for` accepts any wrap under a matching `member_id` that decrypts to 32
+bytes.
 
-- `SharedVault::wrap_to` **replaces** an existing wrap with the same `member_id`
-  (`crates/passbook/src/sharing.rs:335-340`).
-- `unwrap_for` finds a member's wrap by `member_id` (`sharing.rs:349-353`).
-- `ShareGroupStore::remove_member` removes **every** entry with that
-  `member_id` (`crates/sync/src/groups.rs:346`).
+`safety_number` digests `SAFETY_NUMBER_INFO` and, per sorted member,
+`len(id) ‖ id ‖ public_key`. The **wrapped-key set and the content blob are
+outside that digest.** So a relay can generate its own vault key, wrap it
+correctly to every genuine member public key, overwrite both blobs, and the
+safety number is byte-identical. Members decrypt successfully and notice
+nothing; a family diligently comparing fingerprints out of band detects nothing.
+At group creation this is entirely invisible, because the owner's first read is
+of an empty entry list either way.
 
-So a holder of a valid invite code can join claiming an existing member's
-`member_id` with their own public key. On the next rotation or `share_to` pass
-over the directory, the later wrap overwrites the earlier one — plausibly
-displacing the legitimate member's access and redirecting it to the joiner.
-The client also generates member ids with `Math.random()`
-(`app/src/lib/sharing.ts:128`), which is not a CSPRNG, making ids guessable.
+Trust-on-first-use pinning (added for §3) does **not** close this: pinning
+constrains which key *we* wrap to, whereas this attack does not need us to wrap
+anything at all.
 
-We have not built the full exploit; we have confirmed the preconditions in the
-code. It is question **Q5**.
+The real fix is member-signed directory entries plus key epochs — i.e. wraps
+that are verifiable as having come from a member, and a group-state digest the
+client pins. That is a **protocol design decision**, not a patch, which is why
+it is written down here for the external review rather than improvised. It is
+the question most worth an auditor's time in this codebase.
+
+---
+
+## 4. `member_id` uniqueness — CLOSED (was: unenforced)
+
+**Status: fixed, and the way it was broken is worth recording.**
+
+`apply_redeem` now rejects a `member_id` already held by a different account, in
+the **shared policy function**, so every adapter enforces it.
+
+Previously the invariant held only where a storage backend happened to imply it:
+Postgres declared `PRIMARY KEY (group_id, member_id)`, so a collision surfaced
+there as a constraint violation and a 500, while the file and memory stores —
+the self-host defaults — accepted it silently. The comment claiming both
+adapters "share the exact policy" was false, and the managed instance was
+protected by accident rather than by design.
+
+Postgres also expressed redemption and removal as bespoke SQL rather than
+calling the shared policy, so it skipped every invariant that policy gained.
+Both now load, apply the shared function, and persist the result. The membership
+invariants are asserted in the shared **contract suite**, which runs against
+memory, file, and a real Postgres.
+
+**Worth generalising for review:** look for other invariants enforced
+incidentally by a storage layer rather than deliberately by the policy layer.
 
 ---
 
