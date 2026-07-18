@@ -263,9 +263,186 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
         .set_member_role(group_id, "no-such-member", Role::Admin)
         .unwrap());
 
-    // Remove Bob; delete is idempotent.
+    // ---- Membership invariants -------------------------------------------
+    //
+    // Every assertion below belongs in the CONTRACT, not in one adapter's
+    // tests. These invariants previously lived only in whichever backend
+    // happened to enforce them: Postgres rejected duplicate member ids via
+    // `PRIMARY KEY (group_id, member_id)` (as a 500), while the file and memory
+    // stores — the self-host defaults — accepted them, and Postgres expressed
+    // redemption and removal as bespoke SQL that skipped the shared policy
+    // entirely. Running these against all three adapters is what stops that
+    // divergence recurring.
+
+    // A member_id already held by ANOTHER account is refused. member_id is the
+    // key wraps are stored under, so a collision lets a joiner take over
+    // another member's key slot.
+    let live = store.get(group_id).unwrap().unwrap();
+    let taken_id = live.members[0].member_id.clone();
+    let code_collide = "collide-code";
+    assert!(store
+        .add_invite(
+            group_id,
+            GroupInvite {
+                code_hash: code_collide.into(),
+                created_epoch: 100,
+                expires_epoch: u64::MAX,
+                redeemed_by: None,
+            },
+        )
+        .unwrap());
+    assert_eq!(
+        store
+            .redeem_invite(
+                group_id,
+                code_collide,
+                GroupMember {
+                    member_id: taken_id.clone(),
+                    account_id: "acct-mallory".into(),
+                    name: "Mallory".into(),
+                    public_key: "mallory-pub".into(),
+                    role: Role::Member,
+                    added_epoch: 300,
+                },
+                200,
+            )
+            .unwrap(),
+        RedeemOutcome::MemberIdTaken
+    );
+
+    // Re-joining preserves the existing ROLE. The join handler hardcodes
+    // Member, so a wholesale row overwrite let an invite demote an Owner — and
+    // since only an Owner may change roles, that left the group permanently
+    // unadministrable with no recovery path.
+    let owner_member_id = live
+        .members
+        .iter()
+        .find(|m| m.role == Role::Owner)
+        .map(|m| m.member_id.clone())
+        .expect("group must have an owner");
+    let code_rejoin = "rejoin-code";
+    assert!(store
+        .add_invite(
+            group_id,
+            GroupInvite {
+                code_hash: code_rejoin.into(),
+                created_epoch: 100,
+                expires_epoch: u64::MAX,
+                redeemed_by: None,
+            },
+        )
+        .unwrap());
+    assert_eq!(
+        store
+            .redeem_invite(
+                group_id,
+                code_rejoin,
+                GroupMember {
+                    member_id: owner_member_id.clone(),
+                    account_id: "acct-owner".into(),
+                    name: "Alice (new phone)".into(),
+                    public_key: "alice-pub-2".into(),
+                    role: Role::Member, // what the join handler always sends
+                    added_epoch: 400,
+                },
+                200,
+            )
+            .unwrap(),
+        RedeemOutcome::Added
+    );
+    let g = store.get(group_id).unwrap().unwrap();
+    assert_eq!(
+        g.role_of("acct-owner"),
+        Some(Role::Owner),
+        "re-join must not demote the owner"
+    );
+    // The rest of the row does update — this is a real re-join.
+    assert_eq!(
+        g.member_by_account("acct-owner").unwrap().public_key,
+        "alice-pub-2"
+    );
+
+    // The last Owner cannot be removed: with none, `can_change_roles` (Owner
+    // only) can never be satisfied again, so no role could ever be granted.
+    assert!(
+        !store.remove_member(group_id, &owner_member_id).unwrap(),
+        "removing the last owner must be refused"
+    );
+
+    // Removing a member invalidates PENDING invites and bars that account from
+    // rejoining. Previously removal touched only the member row, so any
+    // outstanding code was a standing readmission ticket.
+    let code_stashed = "stashed-code";
+    assert!(store
+        .add_invite(
+            group_id,
+            GroupInvite {
+                code_hash: code_stashed.into(),
+                created_epoch: 100,
+                expires_epoch: u64::MAX,
+                redeemed_by: None,
+            },
+        )
+        .unwrap());
     assert!(store.remove_member(group_id, "m-bob").unwrap());
     assert!(!store.get(group_id).unwrap().unwrap().is_member("acct-bob"));
+
+    // The stashed code is dead — proven with an UNRELATED account, so this
+    // tests invite invalidation on its own rather than being masked by the
+    // removed-account bar (which is checked first, and would answer
+    // AccountRemoved for Bob whatever the code).
+    assert_eq!(
+        store
+            .redeem_invite(
+                group_id,
+                code_stashed,
+                GroupMember {
+                    member_id: "m-carol".into(),
+                    account_id: "acct-carol".into(),
+                    name: "Carol".into(),
+                    public_key: "carol-pub".into(),
+                    role: Role::Member,
+                    added_epoch: 500,
+                },
+                200,
+            )
+            .unwrap(),
+        RedeemOutcome::InvalidOrUsed,
+        "removal must invalidate every pending invite, not just the removed member's"
+    );
+    // ...and even a FRESH invite will not readmit a removed account.
+    let code_fresh = "fresh-code";
+    assert!(store
+        .add_invite(
+            group_id,
+            GroupInvite {
+                code_hash: code_fresh.into(),
+                created_epoch: 100,
+                expires_epoch: u64::MAX,
+                redeemed_by: None,
+            },
+        )
+        .unwrap());
+    assert_eq!(
+        store
+            .redeem_invite(
+                group_id,
+                code_fresh,
+                GroupMember {
+                    member_id: "m-bob-3".into(),
+                    account_id: "acct-bob".into(),
+                    name: "Bob".into(),
+                    public_key: "bob-pub".into(),
+                    role: Role::Member,
+                    added_epoch: 600,
+                },
+                200,
+            )
+            .unwrap(),
+        RedeemOutcome::AccountRemoved
+    );
+
+    // Removal stays idempotent.
     assert!(!store.remove_member(group_id, "m-bob").unwrap());
     store.delete(group_id).unwrap();
     assert!(store.get(group_id).unwrap().is_none());

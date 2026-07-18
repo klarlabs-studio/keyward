@@ -23,7 +23,8 @@ use std::io;
 
 use proctor_sync::accounts::{Account, AccountStore, DeviceInfo, Plan, TokenIdentity};
 use proctor_sync::groups::{
-    GroupInvite, GroupMember, RedeemOutcome, Role, ShareGroup, ShareGroupStore,
+    apply_redeem, apply_remove, GroupInvite, GroupMember, RedeemOutcome, Role, ShareGroup,
+    ShareGroupStore,
 };
 use proctor_sync::{SyncEnvelope, SyncError, SyncStore};
 
@@ -93,6 +94,17 @@ CREATE TABLE IF NOT EXISTS group_invites (
     expires_epoch  BIGINT NOT NULL,
     redeemed_by   TEXT,
     PRIMARY KEY (group_id, code_hash)
+);
+-- Accounts removed from a group, which may not rejoin by redeeming an invite.
+-- Removing a member did not previously invalidate outstanding invites, so any
+-- unredeemed code was a standing readmission ticket; combined with client-side
+-- auto-reconcile, re-entry silently handed back the post-rotation vault key.
+-- Account ids only — no key material.
+CREATE TABLE IF NOT EXISTS group_removed_accounts (
+    group_id      TEXT NOT NULL REFERENCES share_groups (group_id) ON DELETE CASCADE,
+    account_id    TEXT NOT NULL,
+    removed_epoch BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (group_id, account_id)
 );
 "#;
 
@@ -469,6 +481,15 @@ fn load_group(
             redeemed_by: r.get(3),
         })
         .collect();
+    let removed_accounts = client
+        .query(
+            "SELECT account_id FROM group_removed_accounts WHERE group_id = $1",
+            &[&group_id],
+        )
+        .map_err(db_err)?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
     Ok(Some(ShareGroup {
         group_id: group_id.to_string(),
         members,
@@ -477,7 +498,63 @@ fn load_group(
         keys_version: head.get::<_, i64>(1) as u64,
         content: head.get::<_, Vec<u8>>(2),
         content_version: head.get::<_, i64>(3) as u64,
+        removed_accounts,
     }))
+}
+
+/// Overwrite this group's membership, invites and removed-account rows to match
+/// `g` exactly.
+///
+/// Used after applying a shared policy function (`apply_redeem` / `apply_remove`)
+/// so the database is whatever the policy decided — no second, SQL-flavoured
+/// implementation of the same rules that can drift from it.
+///
+/// This adapter previously expressed redemption and removal directly as SQL.
+/// That is how the two backends diverged: the shared policy gained invariants
+/// (member-id uniqueness, role preservation on re-join, invite invalidation,
+/// last-Owner protection) that this adapter never applied — and this adapter is
+/// the one the managed instance runs. Groups are family-sized, so replacing the
+/// rows wholesale is cheap and removes a whole class of drift.
+fn replace_group_rows(
+    client: &mut impl postgres::GenericClient,
+    g: &ShareGroup,
+) -> Result<(), SyncError> {
+    let gid = &g.group_id;
+    client
+        .execute("DELETE FROM group_members WHERE group_id = $1", &[gid])
+        .map_err(db_err)?;
+    for m in &g.members {
+        insert_member(client, gid, m)?;
+    }
+    client
+        .execute("DELETE FROM group_invites WHERE group_id = $1", &[gid])
+        .map_err(db_err)?;
+    for i in &g.invites {
+        client
+            .execute(
+                "INSERT INTO group_invites \
+                 (group_id, code_hash, created_epoch, expires_epoch, redeemed_by) \
+                 VALUES ($1, $2, $3, $4, $5)",
+                &[
+                    gid,
+                    &i.code_hash,
+                    &(i.created_epoch as i64),
+                    &(i.expires_epoch as i64),
+                    &i.redeemed_by,
+                ],
+            )
+            .map_err(db_err)?;
+    }
+    for account_id in &g.removed_accounts {
+        client
+            .execute(
+                "INSERT INTO group_removed_accounts (group_id, account_id) \
+                 VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                &[gid, account_id],
+            )
+            .map_err(db_err)?;
+    }
+    Ok(())
 }
 
 fn insert_member(
@@ -566,6 +643,8 @@ impl ShareGroupStore for PostgresShareGroupStore {
     ) -> Result<RedeemOutcome, SyncError> {
         let mut c = self.pool.get().map_err(db_err)?;
         let mut tx = c.transaction().map_err(db_err)?;
+        // Lock the group so the load-apply-persist below cannot interleave with
+        // a concurrent redeem or removal.
         if tx
             .query_opt(
                 "SELECT 1 FROM share_groups WHERE group_id = $1 FOR UPDATE",
@@ -576,47 +655,62 @@ impl ShareGroupStore for PostgresShareGroupStore {
         {
             return Ok(RedeemOutcome::NoSuchGroup);
         }
-        let invite = tx
-            .query_opt(
-                "SELECT expires_epoch, redeemed_by FROM group_invites \
-                 WHERE group_id = $1 AND code_hash = $2 FOR UPDATE",
-                &[&group_id, &code_hash],
-            )
-            .map_err(db_err)?;
-        let Some(invite) = invite else {
-            return Ok(RedeemOutcome::InvalidOrUsed);
+        let Some(mut g) = load_group(&mut tx, group_id)? else {
+            return Ok(RedeemOutcome::NoSuchGroup);
         };
-        if invite.get::<_, Option<String>>(1).is_some() {
-            return Ok(RedeemOutcome::InvalidOrUsed);
+
+        // Delegate the decision to the SHARED policy rather than restating it in
+        // SQL. The previous SQL version accepted things the policy rejects: it
+        // let a removed account rejoin with a stashed invite, ignored member-id
+        // collisions (caught only incidentally by the PRIMARY KEY, as a 500),
+        // and overwrote the existing row wholesale on re-join — which reset the
+        // role, since the join handler hardcodes Member. That last one could
+        // demote the Owner and leave the group permanently unadministrable.
+        let outcome = apply_redeem(&mut g, code_hash, new_member, now_epoch);
+        if outcome != RedeemOutcome::Added {
+            return Ok(outcome);
         }
-        if now_epoch >= invite.get::<_, i64>(0) as u64 {
-            return Ok(RedeemOutcome::Expired);
-        }
-        tx.execute(
-            "UPDATE group_invites SET redeemed_by = $1 WHERE group_id = $2 AND code_hash = $3",
-            &[&new_member.member_id, &group_id, &code_hash],
-        )
-        .map_err(db_err)?;
-        // Replace any existing membership for the same account (re-join), else add.
-        tx.execute(
-            "DELETE FROM group_members WHERE group_id = $1 AND account_id = $2",
-            &[&group_id, &new_member.account_id],
-        )
-        .map_err(db_err)?;
-        insert_member(&mut tx, group_id, &new_member)?;
+
+        replace_group_rows(&mut tx, &g)?;
         tx.commit().map_err(db_err)?;
         Ok(RedeemOutcome::Added)
     }
 
+    /// Removal is a POLICY operation, not a `DELETE`.
+    ///
+    /// It previously was one bare statement, which meant this adapter silently
+    /// skipped every invariant the shared policy enforces: it would remove the
+    /// last Owner (leaving a group nobody can ever administer, since
+    /// `can_change_roles` is Owner-only), it left outstanding invites live so
+    /// the removed account could readmit itself, and it recorded nothing to stop
+    /// that. Load, apply the shared `apply_remove`, persist the delta — inside
+    /// one transaction so the read-modify-write cannot interleave.
     fn remove_member(&self, group_id: &str, member_id: &str) -> Result<bool, SyncError> {
         let mut c = self.pool.get().map_err(db_err)?;
-        let n = c
-            .execute(
-                "DELETE FROM group_members WHERE group_id = $1 AND member_id = $2",
-                &[&group_id, &member_id],
+        let mut tx = c.transaction().map_err(db_err)?;
+
+        // Lock the group row so the load-apply-persist cannot interleave.
+        if tx
+            .query_opt(
+                "SELECT 1 FROM share_groups WHERE group_id = $1 FOR UPDATE",
+                &[&group_id],
             )
-            .map_err(db_err)?;
-        Ok(n > 0)
+            .map_err(db_err)?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        let Some(mut g) = load_group(&mut tx, group_id)? else {
+            return Ok(false);
+        };
+
+        if !apply_remove(&mut g, member_id) {
+            return Ok(false);
+        }
+
+        replace_group_rows(&mut tx, &g)?;
+        tx.commit().map_err(db_err)?;
+        Ok(true)
     }
 
     fn set_member_role(

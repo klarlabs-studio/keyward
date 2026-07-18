@@ -145,6 +145,20 @@ pub struct ShareGroup {
     pub content: Vec<u8>,
     /// Version of `content` (optimistic concurrency).
     pub content_version: u64,
+    /// Accounts that have been removed from this group and may not rejoin by
+    /// redeeming an invite.
+    ///
+    /// Without this, removal was reversible by anyone holding an unredeemed
+    /// code: removing a member did not invalidate outstanding invites, and
+    /// `apply_redeem` had no notion of a removed account, so an Admin could mint
+    /// an invite for themselves before being removed and simply redeem it
+    /// afterwards. Removal also does not revoke the account's device token, so
+    /// they could still reach the endpoint.
+    ///
+    /// Account ids only — no key material, nothing that is not already in
+    /// `members`. `#[serde(default)]` keeps pre-existing group JSON loadable.
+    #[serde(default)]
+    pub removed_accounts: Vec<String>,
 }
 
 impl ShareGroup {
@@ -192,6 +206,16 @@ pub enum RedeemOutcome {
     InvalidOrUsed,
     /// The invite existed but has expired.
     Expired,
+    /// The account was removed from this group and may not rejoin by invite.
+    /// An Owner must issue a fresh membership deliberately.
+    AccountRemoved,
+    /// The requested `member_id` is already in use by a different account.
+    ///
+    /// `member_id` is the key by which wraps are stored and looked up, so a
+    /// collision is not cosmetic: a joiner claiming the Owner's `member_id`
+    /// becomes unremovable and, at the next rotation, their wrap overwrites the
+    /// Owner's — locking the Owner out with no removal path.
+    MemberIdTaken,
 }
 
 /// The driven port for share-group storage. Each mutating method is atomic under
@@ -251,14 +275,43 @@ pub trait ShareGroupStore {
     fn delete(&self, group_id: &str) -> Result<(), SyncError>;
 }
 
-/// Apply an invite redemption to an already-loaded group. Pure so both adapters
-/// share the exact policy (existence handled by the caller).
-fn apply_redeem(
+/// Apply an invite redemption to an already-loaded group. Pure so every adapter
+/// shares the exact policy (existence handled by the caller).
+///
+/// Every invariant below belongs HERE rather than in a storage adapter. The
+/// Postgres adapter happens to declare `PRIMARY KEY (group_id, member_id)`,
+/// which incidentally rejected duplicate member ids on the managed instance
+/// while the file and memory stores — the self-host defaults — accepted them.
+/// An invariant enforced by one backend and not by the shared policy is a bug in
+/// the policy, and the doc comment claiming adapters "share the exact policy"
+/// was false while that was the case.
+pub fn apply_redeem(
     group: &mut ShareGroup,
     code_hash: &str,
     new_member: GroupMember,
     now_epoch: u64,
 ) -> RedeemOutcome {
+    // Removed accounts may not readmit themselves. Checked BEFORE the invite so
+    // a stashed code cannot even probe validity.
+    if group
+        .removed_accounts
+        .iter()
+        .any(|a| a == &new_member.account_id)
+    {
+        return RedeemOutcome::AccountRemoved;
+    }
+
+    // `member_id` is the cryptographic identity key: wraps are stored and looked
+    // up by it. It is client-chosen, so it must be checked for collision against
+    // any OTHER account. (Matching one's own existing row is the re-join case.)
+    if group
+        .members
+        .iter()
+        .any(|m| m.member_id == new_member.member_id && m.account_id != new_member.account_id)
+    {
+        return RedeemOutcome::MemberIdTaken;
+    }
+
     let Some(invite) = group.invites.iter_mut().find(|i| i.code_hash == code_hash) else {
         return RedeemOutcome::InvalidOrUsed;
     };
@@ -269,17 +322,80 @@ fn apply_redeem(
         return RedeemOutcome::Expired;
     }
     invite.redeemed_by = Some(new_member.member_id.clone());
+
     // Replace an existing membership for the same account (re-join), else append.
     if let Some(existing) = group
         .members
         .iter_mut()
         .find(|m| m.account_id == new_member.account_id)
     {
-        *existing = new_member;
+        // PRESERVE THE EXISTING ROLE. A wholesale `*existing = new_member` let a
+        // re-join silently rewrite it, and the join handler hardcodes
+        // `Role::Member`. An Admin could therefore mint an invite, persuade the
+        // Owner to redeem it ("rejoin from your phone"), and demote them to
+        // Member. Since `can_change_roles` is strictly Owner-only, no one could
+        // ever restore an Owner: the group became permanently unadministrable,
+        // the "an owner cannot be removed" guard matched nobody, and there is no
+        // delete-group route. Unrecoverable.
+        let preserved_role = existing.role;
+        *existing = GroupMember {
+            role: preserved_role,
+            ..new_member
+        };
     } else {
         group.members.push(new_member);
     }
     RedeemOutcome::Added
+}
+
+/// Remove a member, and close the paths that made removal reversible. Pure, and
+/// shared by every adapter for the same reason as [`apply_redeem`].
+///
+/// Returns whether a member was actually removed.
+///
+/// Refuses to remove the last Owner: with no Owner, `can_change_roles` (strictly
+/// Owner-only) can never be satisfied again, so no role could be granted and the
+/// group would be permanently stuck.
+pub fn apply_remove(group: &mut ShareGroup, member_id: &str) -> bool {
+    let Some(target) = group.members.iter().find(|m| m.member_id == member_id) else {
+        return false;
+    };
+    if target.role == Role::Owner
+        && group
+            .members
+            .iter()
+            .filter(|m| m.role == Role::Owner)
+            .count()
+            <= 1
+    {
+        return false;
+    }
+    let account_id = target.account_id.clone();
+
+    group.members.retain(|m| m.member_id != member_id);
+
+    // Bar readmission by invite. Removal previously left `group.invites`
+    // untouched, so any outstanding code was a standing readmission ticket —
+    // and with auto-reconcile on the client, re-entry silently yielded the
+    // CURRENT vault key, including content written after the eviction and the
+    // rotation that followed it.
+    if !group.removed_accounts.iter().any(|a| a == &account_id) {
+        group.removed_accounts.push(account_id);
+    }
+
+    // Invalidate EVERY pending invite, not just one. An invite records only a
+    // code hash — there is no intended recipient — so it is impossible to tell
+    // which pending code the removed member is holding. Retaining redeemed
+    // invites keeps their code hashes known, so a previously used code still
+    // resolves to "already redeemed" rather than becoming unknown.
+    //
+    // The tradeoff is deliberate: an invite minted for someone else is also
+    // cancelled and must be re-issued. Cancelling a legitimate invite is a
+    // minor inconvenience; failing to cancel the attacker's is a full
+    // compromise of the shared vault.
+    group.invites.retain(|i| i.redeemed_by.is_some());
+
+    true
 }
 
 /// In-memory store (tests, and a stateless dev server).
@@ -341,11 +457,7 @@ impl ShareGroupStore for MemoryShareGroupStore {
     fn remove_member(&self, group_id: &str, member_id: &str) -> Result<bool, SyncError> {
         let mut map = self.inner.lock().unwrap();
         match map.get_mut(group_id) {
-            Some(g) => {
-                let before = g.members.len();
-                g.members.retain(|m| m.member_id != member_id);
-                Ok(g.members.len() != before)
-            }
+            Some(g) => Ok(apply_remove(g, member_id)),
             None => Ok(false),
         }
     }
@@ -511,9 +623,7 @@ impl ShareGroupStore for FileShareGroupStore {
         let _lock = self.guard.lock().unwrap();
         match self.read(group_id)? {
             Some(mut g) => {
-                let before = g.members.len();
-                g.members.retain(|m| m.member_id != member_id);
-                let removed = g.members.len() != before;
+                let removed = apply_remove(&mut g, member_id);
                 if removed {
                     self.write(&g)?;
                 }

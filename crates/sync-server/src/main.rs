@@ -1106,11 +1106,23 @@ fn handle_group_invite(mut request: Request, app: &App, account: &str, id: &str)
             return;
         }
     }
+    // Invite lifetime: caller-supplied, defaulted to 24h, and CLAMPED to 24h.
+    //
+    // The clamp is the point. `ttl_seconds` was previously accepted unbounded
+    // and fed straight into `now.saturating_add(ttl)`, so `u64::MAX` saturated
+    // and `now_epoch >= invite.expires_epoch` could never fire — the invite
+    // never expired. Combined with removal not invalidating invites, that was a
+    // permanent readmission ticket: an Admin could mint one for themselves,
+    // be removed, and redeem it later to regain access to the rotated vault.
+    // Removal now invalidates pending invites and bars removed accounts, but an
+    // unbounded TTL is indefensible on its own.
+    const MAX_INVITE_TTL: u64 = 24 * 60 * 60;
     let ttl = read_body_json(&mut request)
         .get("ttl_seconds")
         .and_then(|v| v.as_u64())
         .filter(|&t| t > 0)
-        .unwrap_or(24 * 60 * 60); // default: 24h
+        .unwrap_or(MAX_INVITE_TTL)
+        .min(MAX_INVITE_TTL);
     let code = groups::new_id();
     let now = now_unix();
     let invite = GroupInvite {
@@ -1178,6 +1190,31 @@ fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
         // Rejections are split by reason: expired points at our 24h TTL being too
         // short for how families really coordinate, invalid_or_used at the code
         // hand-off UX, no_such_group at a broken link or a deleted vault.
+        //
+        // The two below are not UX signals — they are policy refusals, and a
+        // repeated count is worth looking at rather than designing around.
+        Ok(RedeemOutcome::AccountRemoved) => {
+            // A removed account tried to readmit itself with a stashed code.
+            // Deliberately indistinguishable from invalid_or_used to the caller,
+            // so probing cannot confirm removal state.
+            eprintln!(
+                "POST /v1/groups/{id}/members -> 403 (removed account={account} attempted rejoin)"
+            );
+            app.metrics
+                .funnel
+                .invites_rejected_invalid_or_used
+                .fetch_add(1, Ordering::Relaxed);
+            respond(request, text("invalid or already-used invite", 403))
+        }
+        Ok(RedeemOutcome::MemberIdTaken) => {
+            // Client-chosen member_id colliding with another account's. Never
+            // legitimate: ids are 128-bit random, so this is a client bug or an
+            // attempt to hijack another member's wrapped-key slot.
+            eprintln!(
+                "POST /v1/groups/{id}/members -> 409 (member_id collision, account={account})"
+            );
+            respond(request, text("member id already in use", 409))
+        }
         Ok(RedeemOutcome::Expired) => {
             app.metrics
                 .funnel
