@@ -35,6 +35,41 @@ spec:
         runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
+      # The server calls process::exit(1) if it cannot reach PROCTOR_SYNC_PG at
+      # startup. Without this gate the app pods lose the race against a cold
+      # Postgres and enter CrashLoopBackOff — whose exponential backoff then keeps
+      # the API down for minutes AFTER the database is healthy (observed live:
+      # every app replica restarted repeatedly on a fresh apply). Blocking here is
+      # cheap, keeps the app container's restart count clean, and makes rollouts
+      # deterministic.
+      #
+      # Reuses the same pinned Postgres image as the StatefulSet, so this adds no
+      # new image to pull, trust, or keep updated.
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16.4-alpine@sha256:5660c2cbfea50c7a9127d17dc4e48543eedd3d7a41a595a2dfa572471e37e64c
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -q -h proctor-postgres -p 5432 -U proctor; do
+                echo "waiting for proctor-postgres:5432 ..."
+                sleep 2
+              done
+              echo "postgres is accepting connections"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
       containers:
         - name: proctor-sync-server
           # Parameterize this image ref for your registry / release tag.
@@ -80,19 +115,33 @@ spec:
             limits:
               cpu: "500m"
               memory: 256Mi
+          # startupProbe covers the boot window so the liveness probe (which
+          # RESTARTS the container) is suspended until the server is actually
+          # listening. Without it, a slow start races liveness and the pod is
+          # killed mid-startup — observed on a live cluster.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 3
+            timeoutSeconds: 5
+            # 40 * 3s = up to 2 minutes to come up.
+            failureThreshold: 40
           readinessProbe:
             httpGet:
               path: /readyz
               port: http
-            initialDelaySeconds: 2
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-            initialDelaySeconds: 5
             periodSeconds: 15
-            timeoutSeconds: 3
-            failureThreshold: 3
+            # Timeout raised from 3s: the container is capped at 500m CPU, so under
+            # a load spike a healthy server can miss a tight deadline and get
+            # needlessly restarted. failureThreshold 5 * 15s = ~75s of sustained
+            # unresponsiveness before we conclude the process is wedged.
+            timeoutSeconds: 5
+            failureThreshold: 5

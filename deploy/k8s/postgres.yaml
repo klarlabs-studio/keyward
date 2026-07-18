@@ -65,18 +65,43 @@ spec:
           volumeMounts:
             - name: pgdata
               mountPath: /var/lib/postgresql/data
+          # Probe design note (validated on a live cluster): `pg_isready` is an
+          # EXEC probe, so every check forks a process inside the container. Under
+          # node CPU pressure that fork+exec alone can exceed a tight timeout — a
+          # 3s timeout was observed killing a perfectly healthy Postgres, causing
+          # repeated unclean restarts of the database. Probes below are therefore
+          # deliberately slack: they exist to catch a *hung* server, not a slow one.
+          #
+          # `-h /var/run/postgresql` forces the local unix socket so the check can
+          # never be affected by network/NetworkPolicy state, and `-q` avoids
+          # pointless output.
+          #
+          # startupProbe covers first boot: initdb creates the cluster on an empty
+          # volume and can take far longer than a steady-state check. While the
+          # startupProbe is running the liveness probe is suspended, so initdb can
+          # never be interrupted mid-write (a real data-corruption risk).
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-q", "-U", "proctor", "-h", "/var/run/postgresql"]
+            periodSeconds: 5
+            timeoutSeconds: 10
+            # 60 * 5s = up to 5 minutes for initdb on a cold volume.
+            failureThreshold: 60
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "proctor"]
-            initialDelaySeconds: 5
+              command: ["pg_isready", "-q", "-U", "proctor", "-h", "/var/run/postgresql"]
             periodSeconds: 10
-            timeoutSeconds: 3
+            timeoutSeconds: 10
+            failureThreshold: 3
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "proctor"]
-            initialDelaySeconds: 15
+              command: ["pg_isready", "-q", "-U", "proctor", "-h", "/var/run/postgresql"]
             periodSeconds: 20
-            timeoutSeconds: 3
+            timeoutSeconds: 10
+            # 6 * 20s = ~2 min of sustained unresponsiveness before we restart the
+            # database. Restarting Postgres is expensive and disruptive; only do it
+            # when it is genuinely wedged, never on a transient load spike.
+            failureThreshold: 6
           resources:
             requests:
               cpu: 100m

@@ -3,6 +3,59 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.41.0] — 2026-07-18
+
+**The k8s manifests were validated on a real cluster — and three outage-grade bugs
+fell out.** Until now they had only been proven to *render* (`kubectl kustomize`).
+Applying them to a live cluster (minikube + **Calico**, so NetworkPolicy is actually
+enforced rather than silently inert) told a different story: before these fixes,
+every pod restarted 2–3 times on a cold start. After: **0 restarts.**
+
+### Fixed — the Postgres liveness probe killed a healthy database
+- `pg_isready` is an *exec* probe (fork+exec per check) with a 3s timeout and no
+  `failureThreshold`. Under ordinary node CPU pressure it timed out and Kubernetes
+  restarted Postgres — **4 restarts of a perfectly healthy database** were observed.
+  Worse, `initialDelaySeconds: 15` raced `initdb` on a cold volume, so a first boot
+  could be killed mid-write.
+- Added a `startupProbe` (suspends liveness through initdb, up to 5 min), raised
+  timeouts to 10s, `failureThreshold: 6`, and pinned the check to the **local unix
+  socket** so it can never be perturbed by network state.
+
+### Fixed — app pods crash-looped against a cold Postgres
+- The server exits if it can't reach `PROCTOR_SYNC_PG` at startup, so every replica
+  lost the race on a fresh apply, and CrashLoopBackOff then kept the API down for
+  minutes *after* the database was healthy. Added a `wait-for-postgres`
+  initContainer reusing the already-pinned Postgres image (no new image to trust).
+
+### Fixed — the app liveness probe killed healthy, serving pods
+- A 3s timeout against a 500m CPU limit killed a pod that had just served a
+  successful request. Added a `startupProbe`; timeout → 5s, `failureThreshold` → 5.
+
+### Documented — the HPA is silently inert without metrics-server
+- It reports `cpu: <unknown>/70%` and never scales. An environment prerequisite
+  rather than a manifest defect, so it's documented in `hpa.yaml` with a verify
+  command instead of changing behavior.
+
+### Verified on the live cluster
+- Both replicas Ready with 0 restarts; `/healthz`, `/metrics`
+  (`backend="postgres"`), `POST /v1/register`, and `GET /v1/account` all worked —
+  and **each replica individually returned the same account**, proving shared
+  Postgres state (real horizontal scalability, not per-pod state).
+- **NetworkPolicy enforcement was proven, not assumed:** an unauthorized pod in the
+  namespace was blocked from both the app and Postgres:5432, while the ingress-nginx
+  controller reached the app with HTTP 200 — confirming the namespace selector
+  matches a stock install. DNS, kubelet probes, and port-forward all unaffected.
+- Client → ingress → app returned 308 on HTTP and 200 on HTTPS.
+
+### Not validated (stated plainly)
+- **cert-manager TLS issuance** — no ClusterIssuer in the test cluster, so
+  `letsencrypt-prod` was never exercised (everything up to it was).
+- HPA scale-up under real load; PDB during an actual node drain (it did report
+  `ALLOWED DISRUPTIONS: 1`).
+- The test node was resource-constrained — that contention is what *surfaced* the
+  probe bugs, so the observed timeout frequency is more aggressive than healthy
+  production. The bugs are real regardless: the old timeouts left no headroom.
+
 ## [1.40.0] — 2026-07-18
 
 **Security review package — and two real crypto bugs it found.**

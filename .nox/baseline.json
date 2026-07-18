@@ -840,6 +840,22 @@
       "severity": "medium",
       "reason": "GA-hardening manifests (v1.36.0), all informational. IAC-395 is a POSITIVE finding — it fires because we now ship a PodDisruptionBudget; minAvailable:1 against replicas:2 (HPA 2→10) is intentional and correct, and Postgres is deliberately left without a PDB so node drains aren't blocked. IAC-464 ×2 are the standard \"namespace defined\" informationals for the new networkpolicy.yaml / pdb.yaml.",
       "created_at": "2026-07-18T10:03:15.955452Z"
+    },
+    {
+      "fingerprint": "9e62f1e6bda9c17d2f08a9ff3cac43dc92e42a34318db910e33ef50b489c06c5",
+      "rule_id": "SEC-680",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "high",
+      "reason": "False positive: deploy/k8s/deployment.yaml:50 is the wait-for-postgres initContainer's DIGEST-PINNED image reference (postgres:16.4-alpine@sha256:5660c2...). The 64-char hex digest matches the SEC-680 API-key pattern. This is supply-chain hardening (the very thing CONT-001 asks for), not a credential — there is nothing to rotate, and the same digest is pinned in postgres.yaml.",
+      "created_at": "2026-07-18T11:49:15.31704Z"
+    },
+    {
+      "fingerprint": "6d4785ed292c6f71fa8faecc4bf365403277b9f7c331e61d63f5f8b6d598cd7d",
+      "rule_id": "SEC-680",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "high",
+      "reason": "False positive: deploy/k8s/deployment.yaml:50 is the wait-for-postgres initContainer's DIGEST-PINNED image reference (postgres:16.4-alpine@sha256:5660c2...). The 64-char hex digest matches the SEC-680 API-key pattern. This is supply-chain hardening (the very thing CONT-001 asks for), not a credential — there is nothing to rotate, and the same digest is pinned in postgres.yaml.",
+      "created_at": "2026-07-18T11:49:15.31704Z"
     }
   ]
 }
