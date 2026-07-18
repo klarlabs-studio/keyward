@@ -31,7 +31,7 @@ use hkdf::Hkdf;
 use proctor_crypto::{aead_open, aead_seal, random_array, NONCE_LEN};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -71,6 +71,47 @@ type Result<T> = std::result::Result<T, SharingError>;
 pub struct ContentBlob {
     nonce: [u8; NONCE_LEN],
     ciphertext: Vec<u8>,
+}
+
+/// Domain-separation label for the group safety number.
+const SAFETY_NUMBER_INFO: &[u8] = b"proctor-passbook group-safety-number v1";
+
+/// A short, human-comparable fingerprint of a group's **public** membership —
+/// the mitigation for the key-substitution / directory-trust risk named in
+/// ADR-0004.
+///
+/// The relay distributes each member's public key. A malicious or compromised
+/// server could substitute a key it controls and be wrapped into the vault as a
+/// silent extra recipient. Members cannot detect that from the ciphertext alone —
+/// but they *can* compare this number **out of band** (in person, over a call). It
+/// is derived only from the members' ids and public keys, so if the server showed
+/// anyone a different directory, the numbers will not match.
+///
+/// Rendered as 8 groups of 5 digits, e.g. `01234 56789 …`. Order-independent
+/// (members are sorted) and length-prefixed so two different directories can never
+/// hash to the same bytes by concatenation ambiguity.
+pub fn safety_number(members: &[MemberPublic]) -> String {
+    let mut sorted: Vec<&MemberPublic> = members.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut hasher = Sha256::new();
+    hasher.update(SAFETY_NUMBER_INFO);
+    for m in sorted {
+        // Length-prefix the id so `("ab","c")` and `("a","bc")` differ.
+        hasher.update((m.id.len() as u32).to_be_bytes());
+        hasher.update(m.id.as_bytes());
+        hasher.update(m.public_key);
+    }
+    let digest = hasher.finalize();
+
+    digest
+        .chunks(4)
+        .map(|c| {
+            let v = u32::from_be_bytes([c[0], c[1], c[2], c[3]]) % 100_000;
+            format!("{v:05}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Generate a fresh random 32-byte vault key (the key a [`SharedVault`] wraps).
@@ -339,6 +380,49 @@ mod tests {
         // The rebuilt member has the same public key and can still unwrap.
         assert_eq!(restored.public().public_key, alice.public().public_key);
         assert_eq!(shared.unwrap_for(&restored).unwrap(), vault_key);
+    }
+
+    #[test]
+    fn safety_number_detects_a_substituted_key() {
+        let alice = Member::generate("alice", "Alice");
+        let bob = Member::generate("bob", "Bob");
+        let members = vec![alice.public(), bob.public()];
+
+        let number = safety_number(&members);
+        // Shape: 8 groups of 5 digits.
+        let groups: Vec<&str> = number.split(' ').collect();
+        assert_eq!(groups.len(), 8);
+        assert!(groups
+            .iter()
+            .all(|g| g.len() == 5 && g.chars().all(|c| c.is_ascii_digit())));
+
+        // Order-independent: both members compute the SAME number regardless of
+        // the order the directory happens to list them in.
+        let reversed = vec![bob.public(), alice.public()];
+        assert_eq!(number, safety_number(&reversed));
+
+        // THE POINT: a malicious relay swapping Bob's public key for one it
+        // controls changes the number, so an out-of-band comparison catches it.
+        let attacker = Member::generate("bob", "Bob");
+        let substituted = vec![alice.public(), attacker.public()];
+        assert_ne!(number, safety_number(&substituted));
+
+        // A silently added extra recipient also changes it.
+        let eve = Member::generate("eve", "Eve");
+        let mut with_eve = members.clone();
+        with_eve.push(eve.public());
+        assert_ne!(number, safety_number(&with_eve));
+
+        // Length-prefixing: ids that would concatenate identically must differ.
+        let make = |id: &str, m: &Member| MemberPublic {
+            id: id.to_string(),
+            name: String::new(),
+            public_key: m.public().public_key,
+        };
+        assert_ne!(
+            safety_number(&[make("ab", &alice), make("c", &bob)]),
+            safety_number(&[make("a", &alice), make("bc", &bob)])
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@
 import {
   member_new,
   member_public_key,
+  group_safety_number,
   generate_vault_key,
   seal_group_content,
   open_group_content,
@@ -61,6 +62,21 @@ export function canManageMembers(role: Role): boolean {
   return role === 'admin' || role === 'owner';
 }
 
+/**
+ * The group's safety number — a fingerprint of the members' public identities.
+ * Family members compare it **out of band**; a mismatch means the relay showed
+ * someone a different member directory (a substituted or extra public key), which
+ * is the one attack the ciphertext alone cannot reveal. See ADR-0004.
+ */
+export async function safetyNumber(members: GroupMemberView[]): Promise<string> {
+  await ensureReady();
+  return group_safety_number(
+    JSON.stringify(
+      members.map((m) => ({ id: m.member_id, name: m.name, public_key: m.public_key })),
+    ),
+  );
+}
+
 /** A loaded family vault: its members, decrypted entries, and my access state. */
 export interface FamilyVault {
   groupId: string;
@@ -71,6 +87,8 @@ export interface FamilyVault {
   hasAccess: boolean;
   /** True if I am no longer in the member directory (revoked/removed). */
   removed: boolean;
+  /** Fingerprint of the member directory, for out-of-band comparison. */
+  safety: string;
   keysVersion: string | null;
   contentVersion: string | null;
 }
@@ -357,6 +375,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
       entries: [],
       hasAccess: false,
       removed: true,
+      safety: '',
       keysVersion: null,
       contentVersion: null,
     };
@@ -369,6 +388,9 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     entries: [],
     hasAccess: false,
     removed: false,
+    // Computed from the directory the relay just served us — comparing it
+    // out of band is what catches a substituted key.
+    safety: await safetyNumber(group.members),
     keysVersion: keys?.version ?? null,
     contentVersion: null,
   };

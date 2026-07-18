@@ -3,6 +3,37 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.38.0] — 2026-07-18
+
+**Safety numbers — closing the key-substitution hole before the crypto review.**
+
+ADR-0004 named one unmitigated attack: the relay distributes members' public keys,
+so a malicious or compromised server could **substitute a key it controls** (or add
+a silent extra recipient) and be wrapped into the vault. Ciphertext alone cannot
+reveal that. This closes it the way Signal does — out-of-band verification.
+
+### Added
+- **`sharing::safety_number(members)`** — a fingerprint over the group's *public*
+  directory (member ids + X25519 public keys), rendered as 8 groups of 5 digits.
+  Order-independent (members sorted) and **length-prefixed**, so two different
+  directories can't collide through concatenation ambiguity. Domain-separated.
+- WASM binding `group_safety_number`, computed on every family-vault load from the
+  directory the relay just served.
+- The Family sharing dialog shows the number under the member list with the
+  instruction to compare it in person or on a call — and to stop if it differs.
+
+### Verified
+- Unit tests prove it does the job: a **substituted public key** changes the
+  number, a **silently added recipient** changes it, member order does not, and the
+  length-prefixing defeats concatenation ambiguity.
+- Rendered live in the demo stack (`80296 24367 …`), zero console errors. Full
+  workspace tests + clippy clean; nox 0 active.
+
+### Note
+- This makes the residual risk *detectable by users*, which is what a reviewer will
+  ask for — it does not remove the need for the **formal external crypto review**,
+  still the hard gate before real families trust it.
+
 ## [1.37.0] — 2026-07-18
 
 **Team foundations: member roles + the Team/Enterprise design.**

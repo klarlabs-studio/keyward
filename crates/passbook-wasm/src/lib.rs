@@ -12,9 +12,9 @@
 //! [`seal_vault`].
 
 use proctor_passbook::{
-    generate_passphrase, generate_password, new_vault_key, open, open_content, seal, seal_content,
-    sha1_hex, strength_bits, totp, watchtower, ContentBlob, Entry, Issue, Member, MemberPublic,
-    PasswordOptions, SealedVault, SecretKey, SharedVault,
+    generate_passphrase, generate_password, new_vault_key, open, open_content, safety_number, seal,
+    seal_content, sha1_hex, strength_bits, totp, watchtower, ContentBlob, Entry, Issue, Member,
+    MemberPublic, PasswordOptions, SealedVault, SecretKey, SharedVault,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -317,6 +317,20 @@ pub fn grant_group_access(
         .grant_access(&existing, &new_member.into_domain()?)
         .map_err(js_err)?;
     serde_json::to_string(&shared).map_err(js_err)
+}
+
+/// The group's **safety number** — a short fingerprint of the members' public
+/// identities that family members compare **out of band** to detect a relay that
+/// substituted or added a public key (the key-substitution risk in ADR-0004).
+/// `members_json` is an array of `{id, name, public_key}` (public_key in hex).
+#[wasm_bindgen]
+pub fn group_safety_number(members_json: &str) -> Result<String, JsValue> {
+    let members: Vec<MemberPublicJson> = serde_json::from_str(members_json).map_err(js_err)?;
+    let domain: Vec<MemberPublic> = members
+        .into_iter()
+        .map(MemberPublicJson::into_domain)
+        .collect::<Result<_, _>>()?;
+    Ok(safety_number(&domain))
 }
 
 /// Remove a member's wrapped copy from a `SharedVault` (JSON), returning the

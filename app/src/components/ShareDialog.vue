@@ -256,6 +256,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                 Remove
               </button>
             </div>
+
+            <!-- Out-of-band verification: the one attack ciphertext can't reveal. -->
+            <div v-if="s.active.safety" class="safety">
+              <div class="s-num">{{ s.active.safety }}</div>
+              <p class="hint">
+                <b>Safety number.</b> Compare this with your family in person or on a
+                call. If everyone sees the same number, no one has been secretly added
+                — if it differs, stop and don't share anything.
+              </p>
+            </div>
           </div>
 
           <div v-if="!s.active.removed" class="section">
@@ -605,6 +615,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
   color: var(--muted);
   font-size: 0.8rem;
   line-height: 1.6;
+}
+.safety {
+  margin-top: 0.35rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface-2);
+}
+.s-num {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+  word-spacing: 0.3em;
+}
+.safety .hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.5;
 }
 .planline {
   display: flex;
