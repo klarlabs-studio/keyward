@@ -124,6 +124,21 @@ spec:
             # Per-client-IP rate limit for register + invite mint (0 disables).
             - name: PROCTOR_SYNC_RATELIMIT_PER_MIN
               value: "30"
+            # Honour X-Forwarded-For when deriving the client IP.
+            #
+            # REQUIRED behind an ingress, and MUST NOT be set without one. Every
+            # connection here arrives from the ingress controller pod, so
+            # without this the rate limiter sees a single source address for the
+            # entire internet: one shared bucket that any one client can exhaust
+            # for everybody. With it, the server takes the rightmost XFF entry —
+            # the one the ingress itself appended, which a client cannot forge.
+            #
+            # Set this only when traffic genuinely reaches the pod through a
+            # proxy. On a directly-exposed server the header is caller-supplied,
+            # and trusting it would let a client mint a fresh identity per
+            # request and bypass rate limiting entirely.
+            - name: PROCTOR_SYNC_TRUST_PROXY
+              value: "1"
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -598,11 +598,101 @@ fn identity_for(request: &Request, app: &App) -> Option<TokenIdentity> {
 /// Client IP (without the ephemeral port) for rate-limit keying. Falls back to a
 /// shared `"unknown"` bucket if the peer address is unavailable (e.g. a Unix
 /// socket) so such callers are still collectively bounded rather than unlimited.
+/// The caller's IP for rate-limiting purposes.
+///
+/// Behind an L7 ingress every connection originates from the controller pod, so
+/// `remote_addr()` is the SAME value for every user on the internet: one shared
+/// bucket, and the per-IP limit becomes a global one that any single client can
+/// exhaust for everyone. `X-Forwarded-For` carries the real client.
+///
+/// That header is attacker-controlled, so it is honoured ONLY when
+/// `PROCTOR_SYNC_TRUST_PROXY` is set — a deployment fact the operator asserts,
+/// not something inferred. A server exposed directly must not trust it, or
+/// clients would forge a fresh identity per request and bypass limiting
+/// entirely.
+///
+/// When trusted, the RIGHTMOST entry is taken. XFF reads
+/// `client, proxy1, proxy2`; a client may prepend anything it likes, but the
+/// last element is appended by the nearest trusted proxy and is the peer that
+/// actually connected to it. Taking the leftmost would re-introduce the spoof.
 fn client_ip(request: &Request) -> String {
+    if std::env::var("PROCTOR_SYNC_TRUST_PROXY").is_ok_and(|v| v != "0" && !v.is_empty()) {
+        let forwarded = request
+            .headers()
+            .iter()
+            .find(|h| h.field.equiv("X-Forwarded-For"))
+            .and_then(|h| {
+                h.value
+                    .as_str()
+                    .rsplit(',')
+                    .map(str::trim)
+                    .find(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
+        if let Some(ip) = forwarded {
+            return ip;
+        }
+    }
     request
         .remote_addr()
         .map(|addr| addr.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Hard ceiling on any request body the server will buffer, in bytes.
+///
+/// Every body was previously read with an unbounded `read_to_end` into a `Vec`,
+/// so a single authenticated account could stream arbitrarily large payloads
+/// into memory and then into Postgres (as TOASTed BYTEA on a 5 GiB volume).
+/// The Traefik `buffering` middleware caps a single request at 16 MiB, but that
+/// is an edge concern that self-hosters running the binary directly do not have
+/// at all, and a per-request ceiling is not a budget — it does not stop a loop.
+///
+/// ADR-0004 listed "cap blob and SharedVault size" as an implemented DoS
+/// mitigation. It was not implemented. This is that cap, at the application
+/// layer where it belongs.
+const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
+
+/// The recipient `member_id`s inside a serialized `SharedVault`, or `None` if the
+/// blob is not in that shape.
+///
+/// Reads ONLY the ids. Those are public — the same server hands them out in the
+/// membership directory — so no ciphertext, key or plaintext is inspected and
+/// the zero-knowledge property is untouched. Deliberately parsed structurally
+/// with `serde_json` rather than by depending on `proctor-passbook`, so the
+/// server keeps no compile-time knowledge of the crypto types.
+///
+/// `None` (unrecognised shape) means the caller SKIPS the orphan check rather
+/// than rejecting. Failing closed here would make the server the arbiter of a
+/// client-side format it deliberately does not own, and would hard-break every
+/// existing client the moment the envelope gains a field.
+fn wrapped_member_ids(blob: &[u8]) -> Option<Vec<String>> {
+    let v: serde_json::Value = serde_json::from_slice(blob).ok()?;
+    let wrapped = v.get("wrapped")?.as_array()?;
+    let ids: Vec<String> = wrapped
+        .iter()
+        .filter_map(|w| w.get("member_id")?.as_str().map(str::to_string))
+        .collect();
+    (ids.len() == wrapped.len()).then_some(ids)
+}
+
+/// Read a request body with a hard size limit. Returns `None` if the body
+/// exceeds [`MAX_BODY_BYTES`] or cannot be read.
+///
+/// Reads `MAX_BODY_BYTES + 1` so that hitting the limit exactly is
+/// distinguishable from exceeding it, rather than silently truncating — a
+/// truncated blob would be stored as a valid-looking but corrupt vault.
+fn read_body_limited(request: &mut Request) -> Option<Vec<u8>> {
+    let mut buf = Vec::new();
+    let read = request
+        .as_reader()
+        .take(MAX_BODY_BYTES + 1)
+        .read_to_end(&mut buf);
+    match read {
+        Ok(_) if buf.len() as u64 > MAX_BODY_BYTES => None,
+        Ok(_) => Some(buf),
+        Err(_) => None,
+    }
 }
 
 /// Whether this request should be rejected with 429. Records the hit against the
@@ -682,8 +772,9 @@ fn handle(request: Request, app: &App) {
 
 /// Read a small JSON request body into a `Value`, tolerating an empty/absent body.
 fn read_body_json(request: &mut Request) -> serde_json::Value {
-    let mut body = Vec::new();
-    let _ = request.as_reader().read_to_end(&mut body);
+    // Bounded like every other body read; an oversized JSON body yields Null,
+    // which callers already treat as "absent/!invalid".
+    let body = read_body_limited(request).unwrap_or_default();
     serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null)
 }
 
@@ -891,11 +982,10 @@ fn handle_vault(mut request: Request, app: &App, method: Method, url: &str) {
         },
         Method::Put => {
             let expected = if_match(&request);
-            let mut blob = Vec::new();
-            if request.as_reader().read_to_end(&mut blob).is_err() {
-                respond(request, text("bad body", 400));
+            let Some(blob) = read_body_limited(&mut request) else {
+                respond(request, text("body too large", 413));
                 return;
-            }
+            };
             // NOTE: the blob is never logged or inspected — zero knowledge.
             match app.store.put(&account, expected, blob) {
                 Ok(version) => {
@@ -940,7 +1030,7 @@ fn handle_delete_vault(request: Request, app: &App) {
 }
 
 /// Which versioned blob of a group a `/keys` or `/vault` request targets.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Blob {
     Keys,
     Content,
@@ -1395,11 +1485,54 @@ fn handle_group_blob(
         }
         Method::Put => {
             let expected = if_match(&request);
-            let mut blob = Vec::new();
-            if request.as_reader().read_to_end(&mut blob).is_err() {
-                respond(request, text("bad body", 400));
+            let Some(blob) = read_body_limited(&mut request) else {
+                respond(request, text("body too large", 413));
                 return;
+            };
+            // A keys blob must keep every CURRENT member reachable.
+            //
+            // Authorization here is membership, not role — and deliberately so:
+            // the client's reconcile flow needs a plain Member to be able to
+            // wrap the vault key to a new joiner (ADR-0004 specifies `(member)`),
+            // so a role check would break onboarding. But that also meant the
+            // lowest-privileged account — a child — could PUT a SharedVault
+            // wrapping a fresh key to themselves alone. Every other member,
+            // Owner included, then fails to unwrap; the client returns early
+            // rather than repairing it; and blobs are overwritten in place with
+            // no history. The family vault is destroyed for everyone.
+            //
+            // The right constraint is structural rather than role-based: a write
+            // may not orphan an existing member. Dropping ids for people no
+            // longer in the directory is exactly what rotation-on-revoke does,
+            // so the rule is "must cover everyone still in the group", not
+            // "must be strictly additive".
+            //
+            // Only `member_id`s are inspected. They are already public — they
+            // are in the membership directory this same server serves — so this
+            // reads no ciphertext and weakens the zero-knowledge property not at
+            // all.
+            if which == Blob::Keys {
+                if let Some(new_ids) = wrapped_member_ids(&blob) {
+                    let orphaned: Vec<&str> = group
+                        .members
+                        .iter()
+                        .map(|m| m.member_id.as_str())
+                        .filter(|id| !new_ids.iter().any(|n| n == id))
+                        .collect();
+                    if !orphaned.is_empty() {
+                        eprintln!(
+                            "PUT /v1/groups/{id}/keys -> 409 (account={account} would orphan {} member(s))",
+                            orphaned.len()
+                        );
+                        respond(
+                            request,
+                            text("keys blob would lock out current members", 409),
+                        );
+                        return;
+                    }
+                }
             }
+
             let result = match which {
                 Blob::Keys => app.groups.put_keys(id, expected, blob),
                 Blob::Content => app.groups.put_content(id, expected, blob),
@@ -1897,5 +2030,51 @@ mod tests {
             len <= 2,
             "expected stale windows to be swept, map still holds {len} entries"
         );
+    }
+
+    #[test]
+    fn wrapped_member_ids_reads_only_the_public_ids() {
+        // The exact envelope the client PUTs: recipient id plus opaque crypto.
+        let blob = br#"{"wrapped":[
+            {"member_id":"m-a","ephemeral_public":[1],"nonce":[2],"ciphertext":[3]},
+            {"member_id":"m-b","ephemeral_public":[4],"nonce":[5],"ciphertext":[6]}
+        ]}"#;
+        assert_eq!(
+            wrapped_member_ids(blob),
+            Some(vec!["m-a".to_string(), "m-b".to_string()])
+        );
+    }
+
+    #[test]
+    fn wrapped_member_ids_returns_none_for_unrecognised_shapes() {
+        // None means "skip the orphan check", NOT "reject". The server does not
+        // own this format, so an unfamiliar envelope must not brick clients.
+        assert_eq!(wrapped_member_ids(b"not json"), None);
+        assert_eq!(wrapped_member_ids(br#"{"other":[]}"#), None);
+        // A member_id of the wrong type is a malformed entry, not an empty set:
+        // returning Some(vec![]) here would let a caller orphan everyone.
+        assert_eq!(
+            wrapped_member_ids(br#"{"wrapped":[{"member_id":7}]}"#),
+            None
+        );
+        // Empty recipient list IS well-formed, and correctly reports no ids --
+        // which is exactly what the orphan check must catch.
+        assert_eq!(wrapped_member_ids(br#"{"wrapped":[]}"#), Some(vec![]));
+    }
+
+    #[test]
+    fn orphan_check_rejects_dropping_a_current_member_but_allows_revocation() {
+        // Mirrors the handler's comparison. Directory: a, b.
+        let dir = ["m-a", "m-b"];
+        let orphans = |ids: Vec<&str>| -> usize {
+            dir.iter().filter(|d| !ids.iter().any(|n| n == *d)).count()
+        };
+        // A Member wrapping only to themselves locks out everyone else.
+        assert_eq!(orphans(vec!["m-a"]), 1);
+        // Covering both current members is fine.
+        assert_eq!(orphans(vec!["m-a", "m-b"]), 0);
+        // Rotation may drop an id no longer in the directory -- that is exactly
+        // what revoking m-c looks like -- so extra/absent non-members are fine.
+        assert_eq!(orphans(vec!["m-a", "m-b", "m-z"]), 0);
     }
 }
