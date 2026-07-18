@@ -1,0 +1,21 @@
+# Horizontal autoscaling for the stateless API. Safe now that state lives in
+# Postgres (no per-pod volume). Scales on CPU; add custom metrics later if needed.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: proctor-sync-server
+  namespace: proctor
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: proctor-sync-server
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

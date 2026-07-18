@@ -7,14 +7,14 @@ metadata:
     app.kubernetes.io/name: proctor-sync-server
     app.kubernetes.io/part-of: proctor
 spec:
-  # Single writer: the server persists to a ReadWriteOnce PVC, so exactly one
-  # replica may mount it. Do NOT scale this beyond 1 without moving to a shared
-  # backing store; a second replica would fail to attach the volume.
-  replicas: 1
-  # Recreate (not RollingUpdate): a rolling update would briefly run two pods,
-  # and the second cannot attach the RWO volume. Recreate stops the old pod first.
+  # Stateless: all state lives in PostgreSQL, so the API scales horizontally.
+  # Start at 2 for availability; the HPA (hpa.yaml) scales on CPU.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: proctor-sync-server
@@ -23,19 +23,22 @@ spec:
       labels:
         app.kubernetes.io/name: proctor-sync-server
         app.kubernetes.io/part-of: proctor
+      annotations:
+        # Scraped cluster-internally; /metrics is not exposed via the ingress.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8787"
+        prometheus.io/path: "/metrics"
     spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
-        # fsGroup makes the PVC group-owned by the app user so it can write /data.
-        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: proctor-sync-server
           # Parameterize this image ref for your registry / release tag.
-          image: ghcr.io/klarlabs/proctor-sync-server:1.30.0
+          image: ghcr.io/klarlabs/proctor-sync-server:1.33.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -43,10 +46,22 @@ spec:
           env:
             - name: PROCTOR_SYNC_ADDR
               value: "0.0.0.0:8787"
-            - name: PROCTOR_SYNC_DIR
-              value: "/data"
-            # Device-token lifetime in seconds (0 / unset → tokens never expire).
-            # 30 days here; tune to your security posture.
+            # The Postgres URL and Stripe secret come from the proctor-sync-secrets
+            # Secret (created out-of-band; see deploy/README.md § Secrets).
+            - name: PROCTOR_SYNC_PG
+              valueFrom:
+                secretKeyRef:
+                  name: proctor-sync-secrets
+                  key: postgres-url
+            - name: PROCTOR_SYNC_PG_POOL
+              value: "8"
+            - name: PROCTOR_STRIPE_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: proctor-sync-secrets
+                  key: stripe-webhook-secret
+                  optional: true
+            # Device-token lifetime in seconds (0 / unset → never expire). 30 days.
             - name: PROCTOR_SYNC_TOKEN_TTL
               value: "2592000"
             # Per-client-IP rate limit for register + invite mint (0 disables).
@@ -81,10 +96,3 @@ spec:
             periodSeconds: 15
             timeoutSeconds: 3
             failureThreshold: 3
-          volumeMounts:
-            - name: data
-              mountPath: /data
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: proctor-sync-data

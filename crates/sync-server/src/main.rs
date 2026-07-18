@@ -29,9 +29,10 @@
 //! `PROCTOR_SYNC_RATELIMIT_PER_MIN`) to close the DoS item in ADR-0004's threat
 //! model (invite/register spam). The limiter is in-memory and dependency-free.
 //!
-//! Health (no auth, for k8s / load-balancer probes):
+//! Health + observability (no auth; keep /metrics cluster-internal):
 //!   GET    /healthz           -> 200 {status:"ok"}   (liveness)
 //!   GET    /readyz            -> 200 {status:"ok"}   (readiness)
+//!   GET    /metrics           -> 200 Prometheus exposition (aggregate counters only)
 //!
 //! API (every response, including errors, carries permissive CORS headers):
 //!   POST   /v1/register       -> 200 {account_id, device_token, device_id}    (no auth; rate-limited)
@@ -70,6 +71,7 @@ use proctor_sync::{
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server};
@@ -175,6 +177,43 @@ struct App {
     /// Stripe webhook signing secret (`PROCTOR_STRIPE_WEBHOOK_SECRET`). `None`
     /// disables the billing webhook (returns 503).
     stripe_secret: Option<String>,
+    /// Lightweight observability counters, exposed at `GET /metrics`.
+    metrics: Metrics,
+}
+
+/// Minimal in-process metrics for a Prometheus scrape. Aggregate counts only — no
+/// PII, no per-account data. Intended to be scraped cluster-internally, not via the
+/// public ingress.
+struct Metrics {
+    requests_total: AtomicU64,
+    start_epoch: u64,
+    backend: &'static str,
+}
+
+/// Render the Prometheus exposition text. Pure, so it can be unit-tested.
+fn render_metrics(requests_total: u64, uptime_secs: u64, backend: &str, version: &str) -> String {
+    format!(
+        "# HELP proctor_requests_total Total HTTP requests handled.\n\
+         # TYPE proctor_requests_total counter\n\
+         proctor_requests_total {requests_total}\n\
+         # HELP proctor_uptime_seconds Seconds since server start.\n\
+         # TYPE proctor_uptime_seconds gauge\n\
+         proctor_uptime_seconds {uptime_secs}\n\
+         # HELP proctor_build_info Static build/runtime info (always 1).\n\
+         # TYPE proctor_build_info gauge\n\
+         proctor_build_info{{backend=\"{backend}\",version=\"{version}\"}} 1\n"
+    )
+}
+
+/// GET /metrics — Prometheus exposition (no auth; keep it cluster-internal).
+fn handle_metrics(request: Request, app: &App) {
+    let body = render_metrics(
+        app.metrics.requests_total.load(Ordering::Relaxed),
+        now_unix().saturating_sub(app.metrics.start_epoch),
+        app.metrics.backend,
+        env!("CARGO_PKG_VERSION"),
+    );
+    respond(request, text(&body, 200));
 }
 
 /// Read `PROCTOR_SYNC_TOKEN_TTL` as an optional lifetime in seconds. Unset,
@@ -258,6 +297,11 @@ fn main() {
         token_ttl,
         limiter,
         stripe_secret,
+        metrics: Metrics {
+            requests_total: AtomicU64::new(0),
+            start_epoch: now_unix(),
+            backend,
+        },
     };
 
     let server = Server::http(&addr).unwrap_or_else(|e| {
@@ -409,6 +453,15 @@ fn handle(request: Request, app: &App) {
         respond(request, json(r#"{"status":"ok"}"#.to_string(), 200));
         return;
     }
+
+    // Prometheus scrape — aggregate counters only, no auth (keep cluster-internal).
+    if method == Method::Get && url == "/metrics" {
+        handle_metrics(request, app);
+        return;
+    }
+
+    // Count every application request (health/metrics/preflight excluded above).
+    app.metrics.requests_total.fetch_add(1, Ordering::Relaxed);
 
     match (&method, url.as_str()) {
         (Method::Post, "/v1/register") => {
@@ -1215,6 +1268,16 @@ mod tests {
             payload, "garbage", secret, now, 300
         ));
         assert!(!verify_stripe_signature(payload, "t=1", secret, now, 0));
+    }
+
+    #[test]
+    fn metrics_render_is_valid_prometheus() {
+        let out = render_metrics(42, 100, "postgres", "1.33.0");
+        assert!(out.contains("proctor_requests_total 42\n"));
+        assert!(out.contains("proctor_uptime_seconds 100\n"));
+        assert!(out.contains("proctor_build_info{backend=\"postgres\",version=\"1.33.0\"} 1\n"));
+        // Every metric is preceded by its HELP/TYPE lines.
+        assert_eq!(out.matches("# TYPE").count(), 3);
     }
 
     #[test]

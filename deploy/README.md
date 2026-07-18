@@ -22,8 +22,14 @@ server itself speaks **plain HTTP** on port `8787` *behind* the ingress and is
 never exposed directly — there is deliberately no TLS in the server process.
 
 ```
-client ──HTTPS──▶ nginx-ingress (TLS via cert-manager) ──HTTP──▶ Service ──▶ Pod :8787 ──▶ PVC /data
+client ─HTTPS─▶ nginx-ingress (TLS via cert-manager) ─HTTP─▶ Service ─▶ Pods :8787 (N replicas) ─▶ PostgreSQL
 ```
+
+The managed cloud uses the **PostgreSQL backend** (`PROCTOR_SYNC_PG`), so the API
+is **stateless and horizontally scalable** — many replicas behind the Service, all
+reading one database (`k8s/postgres.yaml` bundles a simple in-cluster Postgres; for
+production point `PROCTOR_SYNC_PG` at a managed DB / operator instead). The
+file-backed path (`PROCTOR_SYNC_DIR`) remains for single-node self-hosting.
 
 ## Prerequisites
 
@@ -33,7 +39,10 @@ client ──HTTPS──▶ nginx-ingress (TLS via cert-manager) ──HTTP─�
 - [**cert-manager**](https://cert-manager.io/) with a `ClusterIssuer` for TLS.
   The Ingress references `cert-manager.io/cluster-issuer: letsencrypt-prod` —
   create that issuer (or change the annotation to your issuer's name).
-- A default (or explicitly set) **StorageClass** for the PVC.
+- A default (or explicitly set) **StorageClass** (for the bundled Postgres PVC).
+- **PostgreSQL** — either the bundled in-cluster StatefulSet (`k8s/postgres.yaml`)
+  or a managed DB you point `PROCTOR_SYNC_PG` at (preferred for production).
+- The **`proctor-sync-secrets`** Secret (see [Secrets](#secrets) below).
 - A DNS record pointing your host at the ingress controller's external address.
 
 ## Build & push the image
@@ -42,8 +51,8 @@ Build from the **repository root** (the Cargo workspace is the build context):
 
 ```bash
 # From the repo root:
-docker build -f deploy/Dockerfile -t ghcr.io/klarlabs/proctor-sync-server:1.30.0 .
-docker push ghcr.io/klarlabs/proctor-sync-server:1.30.0
+docker build -f deploy/Dockerfile -t ghcr.io/klarlabs/proctor-sync-server:1.33.0 .
+docker push ghcr.io/klarlabs/proctor-sync-server:1.33.0
 ```
 
 The image is **server only** (no demo seeder, no CLI), runs as a non-root user
@@ -59,6 +68,29 @@ provision the cert into the `proctor-sync-tls` secret automatically.
 
 Pin the image tag in [`k8s/kustomization.yaml`](k8s/kustomization.yaml)
 (`images[].newTag`) or in [`k8s/deployment.yaml`](k8s/deployment.yaml).
+
+## Secrets
+
+The Deployment reads the Postgres URL and (optional) Stripe webhook secret from a
+Secret named `proctor-sync-secrets`. **No Secret manifest is committed** (that would
+put credentials in version control) — create it out-of-band from real values:
+
+```bash
+kubectl -n proctor create secret generic proctor-sync-secrets \
+  --from-literal=postgres-password="$PG_PASSWORD" \
+  --from-literal=postgres-url="$PG_URL" \
+  --from-literal=stripe-webhook-secret="$STRIPE_WEBHOOK_SECRET"
+```
+
+Required keys:
+
+| Key | Value |
+|---|---|
+| `postgres-password` | The Postgres password (must match the one inside `postgres-url`). |
+| `postgres-url` | The libpq URL, e.g. host `proctor-postgres`, port `5432`, db `proctor`. |
+| `stripe-webhook-secret` | Optional; the `whsec_…` signing secret. Omit to leave billing disabled. |
+
+In production, manage this with sealed-secrets / external-secrets rather than by hand.
 
 ## Deploy
 
@@ -93,69 +125,66 @@ Set on the container in `k8s/deployment.yaml`:
 | Env var | Default (image) | Meaning |
 |---|---|---|
 | `PROCTOR_SYNC_ADDR` | `0.0.0.0:8787` | Listen address (plain HTTP, behind the ingress). |
-| `PROCTOR_SYNC_DIR` | `/data` | Storage dir (file-backed stores). Mounted from the PVC. |
+| `PROCTOR_SYNC_PG` | from Secret | PostgreSQL URL → the scalable managed backend. Takes precedence over `PROCTOR_SYNC_DIR`. |
+| `PROCTOR_SYNC_PG_POOL` | `8` | Postgres connection-pool size per replica. |
+| `PROCTOR_STRIPE_WEBHOOK_SECRET` | from Secret (optional) | Stripe webhook signing secret. Unset ⇒ `POST /v1/billing/webhook` returns 503. |
+| `PROCTOR_SYNC_DIR` | unset here | File-backed store (single-node self-host path). Ignored when `PROCTOR_SYNC_PG` is set. |
 | `PROCTOR_SYNC_TOKEN_TTL` | unset → no expiry | Device-token lifetime in seconds. Manifest sets `2592000` (30 days). `0`/unset ⇒ tokens never expire. |
 | `PROCTOR_SYNC_RATELIMIT_PER_MIN` | `30` | Per-client-IP fixed-window rate limit for the abuse-prone endpoints (`POST /v1/register`, `POST /v1/groups/{id}/invites`). Over the limit ⇒ HTTP `429`. `0` disables. Closes the DoS item in ADR-0004's threat model. |
 | `PROCTOR_SYNC_TOKENS` | unset | Optional static `token:account,…` pre-seed (bootstrap/test only; the registry is authoritative). |
 
-> The rate limiter is **in-memory and per-pod**. With the single replica this
-> deployment mandates (see below) that is exactly one counter set. It is keyed by
-> the client IP as seen by the server — behind nginx-ingress that is typically
-> the proxy's address unless you enable real-client-IP forwarding
-> (`externalTrafficPolicy: Local` and/or nginx's `use-forwarded-headers`). Tune
-> `PROCTOR_SYNC_RATELIMIT_PER_MIN` accordingly if all traffic appears from one IP.
+> The rate limiter is **in-memory and per-pod**. With multiple replicas each pod
+> keeps its own counter, so the effective limit is roughly `replicas ×
+> PROCTOR_SYNC_RATELIMIT_PER_MIN` — set the per-pod value with that in mind, or move
+> to a shared limiter (Redis) if you need a precise global cap. It is keyed by the
+> client IP as seen by the server — behind nginx-ingress that is typically the
+> proxy's address unless you enable real-client-IP forwarding
+> (`externalTrafficPolicy: Local` and/or nginx's `use-forwarded-headers`).
 
-## Scaling constraints
+## Scaling
 
-The server persists to a **ReadWriteOnce** PVC, so **exactly one replica** may
-mount it. The Deployment therefore uses `replicas: 1` and `strategy: Recreate`
-(a rolling update would transiently run two pods, and the second cannot attach
-the volume). Do **not** raise `replicas` without moving to a shared backing
-store — that is out of scope here.
+The API is **stateless** (all state is in Postgres), so it scales horizontally.
+The Deployment runs `replicas: 2` with `RollingUpdate` (zero-downtime deploys), and
+[`k8s/hpa.yaml`](k8s/hpa.yaml) autoscales 2→10 on CPU. The only stateful component
+is Postgres — scale/HA that at the database layer (a managed DB or an operator).
 
-## Health endpoints
+## Health & metrics
 
-- `GET /healthz` → `200 {"status":"ok"}` — liveness (used by the liveness probe
-  and the image `HEALTHCHECK`).
-- `GET /readyz` → `200 {"status":"ok"}` — readiness (used by the readiness probe).
+- `GET /healthz` → `200 {"status":"ok"}` — liveness (also the image `HEALTHCHECK`).
+- `GET /readyz` → `200 {"status":"ok"}` — readiness.
+- `GET /metrics` → Prometheus exposition (`proctor_requests_total`,
+  `proctor_uptime_seconds`, `proctor_build_info{backend,version}`). Aggregate
+  counters only (no PII). The pod carries `prometheus.io/scrape` annotations; keep
+  `/metrics` **cluster-internal** (it is not routed by the ingress).
 
-Both are unauthenticated and **not** rate-limited so probes are never throttled.
+All three are unauthenticated and **not** rate-limited so probes/scrapes are never
+throttled.
 
-## Backup & restore of `/data`
+## Backup & restore (PostgreSQL)
 
-All server state lives on the `proctor-sync-data` PVC (`/data`). Because the
-contents are **ciphertext**, backups are safe to store on ordinary infrastructure
-— but still protect availability and integrity.
-
-**Preferred:** snapshot the PVC with your storage provider / a tool like Velero
-(`VolumeSnapshot`), on a schedule.
-
-**Manual tarball backup** (simple, provider-agnostic):
-
-```bash
-POD=$(kubectl -n proctor get pod -l app.kubernetes.io/name=proctor-sync-server -o name)
-kubectl -n proctor exec "$POD" -- tar -C /data -czf - . > proctor-sync-$(date +%F).tgz
-```
-
-**Restore** into a fresh (empty) PVC — scale down first so nothing writes
-concurrently:
+The database holds only **ciphertext** vault blobs, public keys, and hashed
+tokens/invite codes — but it *is* your users' data, so store backups **encrypted**.
+For real durability use a managed DB / operator with **point-in-time recovery**;
+the baseline is a scheduled `pg_dump` via [`backup.sh`](backup.sh):
 
 ```bash
-kubectl -n proctor scale deploy/proctor-sync-server --replicas=0
-# after the PVC is (re)created and a pod is scheduled but idle, or via a helper pod:
-POD=$(kubectl -n proctor get pod -l app.kubernetes.io/name=proctor-sync-server -o name)
-kubectl -n proctor exec -i "$POD" -- tar -C /data -xzf - < proctor-sync-2026-07-18.tgz
-kubectl -n proctor scale deploy/proctor-sync-server --replicas=1
+# Dump / restore against any reachable Postgres (PG_URL is your connection URL):
+PG_URL='<your-postgres-url>' ./deploy/backup.sh backup ./backups
+PG_URL='<your-postgres-url>' ./deploy/backup.sh restore ./backups/proctor-<stamp>.sql.gz
+
+# ...or against the bundled in-cluster StatefulSet without exposing Postgres:
+kubectl -n proctor exec -i statefulset/proctor-postgres -- \
+  pg_dump -U proctor proctor | gzip > proctor-backup.sql.gz
 ```
 
-Snapshot before upgrades. Losing `/data` means every account must re-register and
-re-upload its (client-encrypted) vault.
+Take a dump before upgrades. Losing the database means every account must
+re-register and re-upload its (client-encrypted) vault.
 
 ## Uninstall
 
 ```bash
 kubectl delete -k deploy/k8s
-# The PVC's underlying volume may be retained by its StorageClass reclaim policy;
-# delete it explicitly if you want the data gone:
-kubectl -n proctor delete pvc proctor-sync-data
+# The bundled Postgres StatefulSet's PVC is retained by default; delete it
+# explicitly to remove the data:
+kubectl -n proctor delete pvc -l app.kubernetes.io/name=proctor-postgres
 ```

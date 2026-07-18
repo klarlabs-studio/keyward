@@ -704,6 +704,118 @@
       "severity": "medium",
       "reason": "False positive: the scanner is matching the example email inside its own .nox/baseline.json (a prior baselined finding's recorded snippet), not live code.",
       "created_at": "2026-07-18T08:40:28.019679Z"
+    },
+    {
+      "fingerprint": "fbbf24223b8a844d8577e993ee3985b03e529e42250e6ba7c45b242f64871869",
+      "rule_id": "IAC-131",
+      "file_path": "deploy/k8s/hpa.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "d772fc1dd67ffc144d53fc831f715bf340efc4316a5afc2ad2b686793bcf3a90",
+      "rule_id": "IAC-131",
+      "file_path": "deploy/k8s/postgres.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "77d4a003691a6601565db1862c72d74b412866c09774b6f42b9beb42913d6807",
+      "rule_id": "IAC-141",
+      "file_path": "deploy/k8s/postgres.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "cf41930326b27272edda638582439159ba74e561caa6fd801d06cee71b204e4a",
+      "rule_id": "IAC-144",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "9d0a032c5a3128f2fc3f56ba99097c3a9ddecfb913dcf877e4825953fa7b6a1c",
+      "rule_id": "IAC-144",
+      "file_path": "deploy/k8s/postgres.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "c3e05318ddea78fc5594598b7f6f635f46df339e14a5e6a7589c17ddb61ddcec",
+      "rule_id": "IAC-286",
+      "file_path": "deploy/k8s/hpa.yaml",
+      "severity": "low",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "23d8db41edab04fcb03310458c6c00bb3a1b48910a5ea92c227bdf9eba59e717",
+      "rule_id": "IAC-286",
+      "file_path": "deploy/k8s/postgres.yaml",
+      "severity": "low",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "fe4deafe028f4be9e36a006428c115e606426ab126f2f23b1d1f4e89965dfd37",
+      "rule_id": "IAC-370",
+      "file_path": "deploy/k8s/postgres.yaml",
+      "severity": "low",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "06826db60e4694ca8e8125c87ce281fa64360faecdcf8de66b2c0893f9127660",
+      "rule_id": "IAC-397",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "low",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "be23854df3b7398f1ade524d2f4364fb04610b1d18c8e1861a06d24787d9040c",
+      "rule_id": "IAC-398",
+      "file_path": "deploy/k8s/hpa.yaml",
+      "severity": "high",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "6f680c70dff02ab8cff371edb3c21b81c330a331bb456292ec952b7602e663d1",
+      "rule_id": "IAC-400",
+      "file_path": "deploy/k8s/hpa.yaml",
+      "severity": "low",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "c411e5a913a731de19049050bad35e298fd3c6bfb17292fd948abab25569925a",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/hpa.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "c6aa4d9b6ec4c85db63549b1dc42f6bb02631fe552d11a5118845cf53396c423",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/postgres.yaml",
+      "severity": "medium",
+      "reason": "deploy/k8s posture — intentional design / informational for the managed-cloud template (v1.34.0). The app tier is stateless + HA (2 replicas, RollingUpdate, HPA 2→10 @70% CPU — sane thresholds). Postgres is a bundled single-replica StatefulSet by design (DB single-writer; production uses a managed DB / operator for HA, documented in deploy/README.md). Secrets are referenced via secretKeyRef env (standard k8s pattern; the app never logs them). NetworkPolicy deferred; namespace/PDB/HPA findings are informational. fsGroup on Postgres is intentional for volume ownership. Revisit NetworkPolicy + PDB at managed-cloud GA.",
+      "created_at": "2026-07-18T09:06:55.415087Z"
+    },
+    {
+      "fingerprint": "57160f331b24bbf1a96f9c7a370f87089afca3af5fafc7d544aacbdf0742a77c",
+      "rule_id": "SEC-080",
+      "file_path": "deploy/README.md",
+      "severity": "medium",
+      "reason": "False positive: deploy/README.md shows `--from-literal=postgres-password=\"$PG_PASSWORD\"` — a documented shell VARIABLE reference for creating the Secret out-of-band, not a hardcoded password.",
+      "created_at": "2026-07-18T09:07:14.10139Z"
     }
   ]
 }

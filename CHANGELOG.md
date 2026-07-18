@@ -3,6 +3,47 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.34.0] — 2026-07-18
+
+**Managed cloud, phase 3: observability + the k8s deploy wired to Postgres.**
+
+The scalable Postgres backend is now the actual k8s deploy target, with metrics and
+a backup path — the managed cloud is deployable end-to-end (minus the crypto-review
+gate before real users).
+
+### Added — observability
+- **`GET /metrics`** — Prometheus exposition: `proctor_requests_total` (counter),
+  `proctor_uptime_seconds`, and `proctor_build_info{backend,version}`. Aggregate
+  counters only (no PII); unauthenticated and meant to stay cluster-internal. Unit
+  test for the renderer; live-verified (counts requests, labels the backend).
+
+### Changed — k8s deploy is now stateless on Postgres
+- The Deployment reads **`PROCTOR_SYNC_PG`** (+ optional Stripe secret) from a
+  `proctor-sync-secrets` Secret and runs **stateless**: `replicas: 2`,
+  **RollingUpdate** (zero-downtime), no per-pod PVC. New **`hpa.yaml`** autoscales
+  2→10 on CPU, and pods carry `prometheus.io/scrape` annotations. The app PVC is
+  gone (removed `pvc.yaml`).
+- New **`postgres.yaml`** — a bundled in-cluster Postgres StatefulSet for simple
+  deploys (production should point `PROCTOR_SYNC_PG` at a managed DB / operator).
+- **No Secret manifest is committed** (that would put credentials in git); the
+  `proctor-sync-secrets` Secret is created out-of-band via `kubectl create secret`
+  (documented, with the required keys).
+- **`backup.sh`** — `pg_dump`/`pg_restore` helper, plus a Postgres backup/restore +
+  observability section in `deploy/README.md` (the old file-`/data` backup docs are
+  replaced). Bumped the image tag to `1.33.0`+.
+
+### Verified
+- Unit test for the metrics renderer; live `/metrics` shows the counter incrementing
+  and the backend/version labels. Full workspace tests + clippy clean; all k8s YAML
+  validates and `kubectl kustomize` builds. nox 0 active findings (deploy-template
+  posture findings baselined with rationale — single-replica Postgres is by design;
+  NetworkPolicy/PDB deferred to GA; no committed secrets).
+
+### Next
+- NetworkPolicy + PodDisruptionBudget + digest-pinned images for GA; email
+  verification (SMTP); an app checkout flow. The **formal crypto review** remains the
+  gate before onboarding paying users.
+
 ## [1.33.0] — 2026-07-18
 
 **Managed cloud, phase 2: entitlements + Stripe billing webhook.**

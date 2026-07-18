@@ -7,10 +7,13 @@ namespace: proctor
 
 resources:
   - namespace.yaml
-  - pvc.yaml
+  - postgres.yaml
   - deployment.yaml
   - service.yaml
   - ingress.yaml
+  - hpa.yaml
+# NOTE: no Secret manifest is committed — create the `proctor-sync-secrets`
+# Secret out-of-band with `kubectl create secret` (see deploy/README.md § Secrets).
 
 commonLabels:
   app.kubernetes.io/part-of: proctor
@@ -20,4 +23,4 @@ commonLabels:
 # or set here:
 images:
   - name: ghcr.io/klarlabs/proctor-sync-server
-    newTag: "1.30.0"
+    newTag: "1.33.0"
