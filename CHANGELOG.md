@@ -3,6 +3,47 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.40.0] — 2026-07-18
+
+**Security review package — and two real crypto bugs it found.**
+
+Writing the reviewer-facing package meant reading the crypto adversarially, which
+surfaced genuine issues *before* an external review. Two are fixed here.
+
+### Fixed — low-order public keys are now rejected (the serious one)
+- Recipient public keys arrive from the **untrusted relay** and were used in X25519
+  without checking the result was contributory. A low-order point makes the shared
+  secret an all-zero constant, so the derived wrapping key is **publicly
+  computable** — a malicious relay could have injected such a "member" and read the
+  wrapped vault key. All four DH sites now reject non-contributory exchanges with a
+  new `SharingError::WeakKey`, tested against the canonical small-order points.
+
+### Fixed — domain separation for recovery boxes
+- The recovery `SealedBox` (added in 1.39.0) reused the vault-wrapping HKDF label
+  verbatim. Two protocols carrying different plaintext types now derive under
+  separate labels (`sealed-box v1` vs `family-share v1`).
+
+### Added — `docs/security/`
+- **`cryptography-spec.md`** — implementation-accurate spec (algorithms, parameters,
+  wire formats, domain-separation labels, key lifetimes) built from the code, noting
+  where it diverges from the ADRs.
+- **`threat-model-passbook.md`** — assets, trust boundaries, adversaries, STRIDE.
+- **`known-limitations.md`** — 15 items, led by "this is prototype-of-the-shape
+  crypto," including metadata leakage and browser-held key material.
+- **`review-scope.md`** — 9 priority-ordered questions with line-level pointers;
+  Q1–Q3 marked as the minimum viable engagement.
+
+### Known issues raised, not yet fixed (documented for the reviewer)
+- Auto-reconcile grants access to relay-supplied directory entries **without a human
+  check** — ADR-0004 called that a human decision; the safety number only helps if
+  someone compares it.
+- `member_id` is client-chosen and not enforced unique, so a joiner could claim an
+  existing member's id.
+- Rotation-on-revoke is **non-atomic** (a failed content write after a successful
+  key write locks out remaining members), and it re-seals caller-supplied entries.
+- `SecretKey` does not zeroize; no blob size caps; any Member (not just Admin) can
+  overwrite `/keys`.
+
 ## [1.39.0] — 2026-07-18
 
 **Recovery contacts, the invite blind spot, and a sharing funnel.**

@@ -35,8 +35,12 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-/// Domain-separation label mixed into every wrapping-key derivation.
+/// Domain-separation label mixed into every vault-key wrapping derivation.
 const HKDF_INFO: &[u8] = b"proctor-passbook family-share v1";
+
+/// Separate label for the general-purpose [`SealedBox`] (recovery payloads). Two
+/// protocols carrying different plaintext types must never share one derivation.
+const SEALED_BOX_INFO: &[u8] = b"proctor-passbook sealed-box v1";
 
 /// The length of a Passbook vault key, in bytes.
 pub const VAULT_KEY_LEN: usize = 32;
@@ -53,6 +57,12 @@ pub enum SharingError {
     /// The HKDF expansion failed (should not happen for a 32-byte output).
     #[error("wrapping-key derivation failed")]
     KeyDerivation,
+    /// The X25519 exchange was **non-contributory**: the peer's public key is a
+    /// low-order point, so the shared secret degenerates to a publicly-computable
+    /// constant. Since recipient public keys arrive from the (untrusted) relay,
+    /// this must be rejected rather than silently producing a guessable key.
+    #[error("rejected a weak (low-order) public key")]
+    WeakKey,
 }
 
 type Result<T> = std::result::Result<T, SharingError>;
@@ -134,7 +144,7 @@ pub fn seal_to(recipient: &MemberPublic, plaintext: &[u8]) -> Result<SealedBox> 
     let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
     let ephemeral_public = PublicKey::from(&ephemeral_secret);
     let shared = ephemeral_secret.diffie_hellman(&PublicKey::from(recipient.public_key));
-    let wrapping_key = derive_wrapping_key(shared.as_bytes())?;
+    let wrapping_key = derive_wrapping_key_with(checked_secret(&shared)?, SEALED_BOX_INFO)?;
 
     let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
         .map_err(|_| SharingError::KeyDerivation)?;
@@ -157,7 +167,7 @@ pub fn open_sealed(sealed: &SealedBox, member: &Member) -> Result<Vec<u8>> {
     let shared = member
         .secret
         .diffie_hellman(&PublicKey::from(sealed.ephemeral_public));
-    let wrapping_key = derive_wrapping_key(shared.as_bytes())?;
+    let wrapping_key = derive_wrapping_key_with(checked_secret(&shared)?, SEALED_BOX_INFO)?;
     let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
         .map_err(|_| SharingError::KeyDerivation)?;
     cipher
@@ -314,8 +324,10 @@ impl SharedVault {
 
         let recipient_public = PublicKey::from(member.public_key);
         let shared = ephemeral_secret.diffie_hellman(&recipient_public);
+        // The recipient key came from the relay — reject low-order points, which
+        // would make the wrapping key a publicly computable constant.
         // `SharedSecret` zeroizes on drop; copy its bytes into a Zeroizing buffer.
-        let wrapping_key = derive_wrapping_key(shared.as_bytes())?;
+        let wrapping_key = derive_wrapping_key(checked_secret(&shared)?)?;
 
         let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
             .map_err(|_| SharingError::KeyDerivation)?;
@@ -354,7 +366,7 @@ impl SharedVault {
 
         let ephemeral_public = PublicKey::from(wrapped.ephemeral_public);
         let shared = member.secret.diffie_hellman(&ephemeral_public);
-        let wrapping_key = derive_wrapping_key(shared.as_bytes())?;
+        let wrapping_key = derive_wrapping_key(checked_secret(&shared)?)?;
 
         let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
             .map_err(|_| SharingError::KeyDerivation)?;
@@ -402,13 +414,27 @@ impl SharedVault {
     }
 }
 
-/// HKDF-SHA256 expand an X25519 shared secret into a 32-byte wrapping key.
-fn derive_wrapping_key(shared_secret: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+/// HKDF-SHA256 expand an X25519 shared secret into a 32-byte wrapping key, under
+/// the caller's domain-separation label.
+fn derive_wrapping_key_with(shared_secret: &[u8], info: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     let hk = Hkdf::<Sha256>::new(None, shared_secret);
     let mut okm = Zeroizing::new([0u8; 32]);
-    hk.expand(HKDF_INFO, okm.as_mut())
+    hk.expand(info, okm.as_mut())
         .map_err(|_| SharingError::KeyDerivation)?;
     Ok(okm)
+}
+
+/// The vault-key wrapping derivation (the family-share protocol).
+fn derive_wrapping_key(shared_secret: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+    derive_wrapping_key_with(shared_secret, HKDF_INFO)
+}
+
+/// Reject a non-contributory exchange before deriving anything from it.
+fn checked_secret(shared: &x25519_dalek::SharedSecret) -> Result<&[u8; 32]> {
+    if !shared.was_contributory() {
+        return Err(SharingError::WeakKey);
+    }
+    Ok(shared.as_bytes())
 }
 
 #[cfg(test)]
@@ -434,6 +460,69 @@ mod tests {
         // The rebuilt member has the same public key and can still unwrap.
         assert_eq!(restored.public().public_key, alice.public().public_key);
         assert_eq!(shared.unwrap_for(&restored).unwrap(), vault_key);
+    }
+
+    #[test]
+    fn low_order_public_keys_are_rejected() {
+        // Recipient public keys arrive from the UNTRUSTED relay. A low-order point
+        // makes X25519 non-contributory: the shared secret becomes an all-zero
+        // constant, so the wrapping key is publicly computable and anyone could
+        // unwrap the vault key. All four DH sites must refuse.
+        //
+        // The canonical small-order points of Curve25519.
+        let low_order: [[u8; 32]; 3] = [
+            [0u8; 32], // order 1
+            {
+                let mut p = [0u8; 32];
+                p[0] = 1; // order 1
+                p
+            },
+            [
+                224, 235, 122, 124, 59, 65, 184, 174, 22, 86, 227, 250, 241, 159, 196, 106, 218, 9,
+                141, 235, 156, 50, 177, 253, 134, 98, 5, 22, 95, 73, 184, 0,
+            ], // order 8
+        ];
+
+        let victim = Member::generate("victim", "Victim");
+        let vault_key = sample_vault_key();
+
+        for point in low_order {
+            let hostile = MemberPublic {
+                id: "injected".into(),
+                name: "Mom".into(),
+                public_key: point,
+            };
+            // Wrapping the vault key to a low-order "member" must fail, not
+            // silently produce a guessable wrap.
+            assert!(
+                matches!(
+                    SharedVault::share_to(&vault_key, std::slice::from_ref(&hostile)),
+                    Err(SharingError::WeakKey)
+                ),
+                "share_to accepted a low-order key"
+            );
+            // The recovery sealed box must refuse it too.
+            assert!(
+                matches!(seal_to(&hostile, b"secret"), Err(SharingError::WeakKey)),
+                "seal_to accepted a low-order key"
+            );
+        }
+
+        // Honest keys still work.
+        assert!(SharedVault::share_to(&vault_key, &[victim.public()]).is_ok());
+    }
+
+    #[test]
+    fn recovery_and_vault_wrapping_use_separate_derivations() {
+        // Two protocols must not share one HKDF label. A SealedBox and a vault-key
+        // wrap built from the same DH must not produce interchangeable keys.
+        let bob = Member::generate("bob", "Bob");
+        let payload = b"A1B2-C3D4";
+        let sealed = seal_to(&bob.public(), payload).unwrap();
+        // Opening with the right member works...
+        assert_eq!(open_sealed(&sealed, &bob).unwrap(), payload);
+        // ...and the labels are genuinely distinct.
+        assert_ne!(HKDF_INFO, SEALED_BOX_INFO);
     }
 
     #[test]
