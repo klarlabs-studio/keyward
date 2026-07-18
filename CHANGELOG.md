@@ -3,12 +3,107 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
-## [Unreleased]
+## [1.42.0] — 2026-07-18
+
+**Security release. Family sharing did not hold against its own threat model;
+this is the fix.** An adversarial multi-lens AI review (9 lenses, each finding
+put to 3 refuters; 49 candidates, 21 survived) is recorded in
+[`docs/security/ai-preaudit-review.md`](docs/security/ai-preaudit-review.md).
+
+Split plainly: **the personal vault was and is sound** — every AEAD seal site and
+every DH site was enumerated, with no nonce reuse, no unguarded DH, and a fresh
+salt and nonce per seal. A user who never touched family sharing was unaffected
+by relay compromise. **Family sharing was not.**
+
+### Fixed — key substitution (critical)
+
+- **The client wrapped the shared vault key to any public key the relay
+  reported**, unverified and ungated, on every load. A compromised relay could
+  append one fabricated member row and be handed `K_vault` by the next honest
+  load, then read every shared credential. `ADR-0004:130` asserted this was "a
+  human decision"; it was an unattended background action.
+
+  Fixed with trust-on-first-use pinning: the client records the key it accepted
+  per member and refuses to wrap to anything else. Unknown and changed keys are
+  surfaced for explicit approval with **nothing uploaded** until the user acts.
+- **The mitigation ran after the key had left.** The safety number was computed
+  for display *after* the grant had already uploaded, so following the in-app
+  instruction ("if it differs, stop") stopped too late. Nothing is uploaded now
+  before the decision.
+- **The recovery-contact path is gated hardest** — an unpinned or changed key is
+  refused outright, not queued. It seals a 2SKD factor, so it is the one path
+  where a shared-vault compromise becomes a personal-vault compromise.
+
+### Fixed — group state machine
+
+- Invite `ttl_seconds` was unbounded and caller-chosen; `u64::MAX` made expiry
+  unreachable. Clamped to 24h.
+- Removal left outstanding invites live and had no notion of a removed account,
+  so a stashed code was a standing readmission ticket — and with auto-reconcile,
+  re-entry yielded the *post-rotation* key. Removal now invalidates every pending
+  invite and bars the account from rejoining by invite.
+- Re-joining overwrote the whole member row while the join handler hardcodes
+  `Member`, so an invite could demote the Owner — and since only an Owner may
+  change roles, that left the group permanently unadministrable with no recovery
+  path. Role is preserved; removing the last Owner is refused.
+- `member_id` collisions are rejected in the shared policy.
+
+**The structural cause**, which matters more than any single item: the Postgres
+adapter expressed redemption and removal as bespoke SQL instead of calling the
+shared policy, so invariants held in one backend and not the other — and
+Postgres is what the managed instance runs. `member_id` uniqueness was enforced
+there only incidentally, by a `PRIMARY KEY`, surfacing as a 500, while the file
+and memory stores (the self-host defaults) accepted duplicates. Both paths now
+load, apply the shared policy, and persist the result, and the invariants are
+asserted in the shared contract suite against memory, file, and a real Postgres.
+
+### Fixed — server
+
+- `PUT /keys` authorized on membership alone, so the lowest-privileged account
+  could upload a `SharedVault` wrapping a fresh key only to itself and destroy
+  the vault for everyone. Now structurally constrained: a keys blob may not
+  orphan anyone still in the directory. Rotation-on-revoke still works.
+- Rate limiting keyed on `remote_addr`, which behind an ingress is the same
+  value for every user on the internet — one shared bucket. Now honours
+  `X-Forwarded-For`, rightmost entry, **only** when `PROCTOR_SYNC_TRUST_PROXY`
+  is set.
+- 16 MiB application-layer cap on every request body. ADR-0004 listed blob caps
+  as implemented; they were not.
+
+### Fixed — passphrase entropy
+
+The generator produced **22–59 bits while the UI reported 82–275** and rated
+every result "Excellent". The wordlist held 170 words against a comment claiming
+"~200" and "roughly 7.6 bits/word", and strength was re-derived from the
+rendered string by character space, so it tracked phrase length rather than the
+number of draws. No generated passphrase could be flagged Weak at any setting.
+
+Now the EFF Long Wordlist (7772 words after removing hyphenated entries, which
+collide with the default `-` separator), with entropy reported from the
+generation parameters. Also fixes a modulo-bias fallback that could only select
+from the first 256 words, and a hang for lengths ≥ 257.
+
+### Known open
+
+- **Wraps carry no sender authentication**, and the safety number does not cover
+  the wrapped-key set, so a relay can replace both blobs with its own key and
+  leave the fingerprint unchanged. TOFU does not close this. The fix is AAD plus
+  a pinned group digest, or member-signed directory entries — a protocol design
+  decision deliberately left for external review (`review-scope.md` Q2a).
+- Rotation-on-revoke is still non-atomic (recoverable; `known-limitations.md` §5).
+
+### Docs
+
+The review package contradicted the code in both directions — `known-limitations`
+§1/§2a described defects that were already fixed, and `review-scope` Q2 asked an
+auditor to attempt a proof-of-concept against a closed hole and called it the
+engagement's highest-value result. Resynced.
+
+## [1.41.1] — 2026-07-18
 
 **First real production deployment — to the klarlabs k3s cluster on Hetzner, at
-https://proctor.klarlabs.de.** No version bump: the server binary is unchanged
-from 1.41.0 and the deployed image is still `1.41.0`. Everything here is
-deployment configuration, plus two genuine defects the live deploy exposed.
+https://proctor.klarlabs.de.** Deployment configuration, plus two genuine
+defects the live deploy exposed.
 
 Deploying somewhere real found what minikube could not — the previous validation
 ran against ingress-nginx on a single-node cluster, and every one of these is a

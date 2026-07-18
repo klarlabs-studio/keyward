@@ -51,8 +51,8 @@ Build from the **repository root** (the Cargo workspace is the build context):
 
 ```bash
 # From the repo root:
-docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/proctor-sync-server:1.41.0 .
-docker push ghcr.io/klarlabs-studio/proctor-sync-server:1.41.0
+docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/proctor-sync-server:1.42.0 .
+docker push ghcr.io/klarlabs-studio/proctor-sync-server:1.42.0
 ```
 
 The image is **server only** (no demo seeder, no CLI), runs as a non-root user
@@ -146,6 +146,7 @@ Set on the container in `k8s/deployment.yaml`:
 | `PROCTOR_SYNC_DIR` | unset here | File-backed store (single-node self-host path). Ignored when `PROCTOR_SYNC_PG` is set. |
 | `PROCTOR_SYNC_TOKEN_TTL` | unset → no expiry | Device-token lifetime in seconds. Manifest sets `2592000` (30 days). `0`/unset ⇒ tokens never expire. |
 | `PROCTOR_SYNC_RATELIMIT_PER_MIN` | `30` | Per-client-IP fixed-window rate limit for the abuse-prone endpoints (`POST /v1/register`, `POST /v1/groups/{id}/invites`). Over the limit ⇒ HTTP `429`. `0` disables. Closes the DoS item in ADR-0004's threat model. |
+| `PROCTOR_SYNC_TRUST_PROXY` | unset (off) | Honour `X-Forwarded-For` when deriving the client IP for rate limiting. **Set this if and only if traffic reaches the pod through a proxy.** Behind an ingress every connection appears to come from the controller pod, so without it the per-IP limit becomes one global bucket any single client can exhaust for everyone. The header is caller-supplied, so on a directly-exposed server trusting it would let clients mint a fresh identity per request and bypass limiting entirely. The rightmost entry is used — a client may prepend anything, but the last element is appended by the nearest trusted proxy. |
 | `PROCTOR_SYNC_TOKENS` | unset | Optional static `token:account,…` pre-seed (bootstrap/test only; the registry is authoritative). |
 
 > The rate limiter is **in-memory and per-pod**. With multiple replicas each pod

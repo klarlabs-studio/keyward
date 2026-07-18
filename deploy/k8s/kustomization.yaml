@@ -45,4 +45,4 @@ labels:
 # or set here:
 images:
   - name: ghcr.io/klarlabs-studio/proctor-sync-server
-    newTag: "1.41.0"
+    newTag: "1.42.0"

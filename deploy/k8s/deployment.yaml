@@ -95,7 +95,7 @@ spec:
       containers:
         - name: proctor-sync-server
           # Parameterize this image ref for your registry / release tag.
-          image: ghcr.io/klarlabs-studio/proctor-sync-server:1.41.0
+          image: ghcr.io/klarlabs-studio/proctor-sync-server:1.42.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
