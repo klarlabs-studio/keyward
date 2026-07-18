@@ -4,10 +4,10 @@
 // read shared logins, and remove members (which rotates the vault key). Sharing
 // rides on cloud sync, so it prompts to enable that first if it is off.
 
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useShareStore } from '@/stores/share';
 import { generatePassword } from '@/lib/passbook';
-import { copyText, toast } from '@/composables/useToast';
+import { copyText } from '@/composables/useToast';
 
 const s = useShareStore();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -31,13 +31,26 @@ async function create(): Promise<void> {
   await s.createVault(yourName.value, vaultName.value);
 }
 
-async function upgrade(): Promise<void> {
-  // Checkout is completed in the managed-cloud billing portal (a Stripe Checkout
-  // session); once the subscription webhook lands, re-checking the account here
-  // reflects the new plan and unlocks the create flow.
-  toast('Upgrade to Family in your billing portal, then tap Upgrade again to refresh.');
-  await s.loadAccount();
-}
+/** What each plan includes. Prices are set per-deployment, so none are shown here. */
+const PLANS = [
+  {
+    id: 'free',
+    name: 'Free',
+    features: ['Personal vault', 'Up to 2 devices', 'Watchtower checks', 'Self-host, unlimited'],
+  },
+  {
+    id: 'individual',
+    name: 'Individual',
+    features: ['Unlimited devices', 'AI credential broker', 'Priority sync'],
+  },
+  {
+    id: 'family',
+    name: 'Family',
+    features: ['Everything in Individual', 'Shared family vaults', 'Invite your family'],
+  },
+];
+
+const currentPlan = computed(() => s.account?.plan ?? 'free');
 
 async function join(): Promise<void> {
   if (!yourName.value.trim() || !inviteInput.value.trim()) return;
@@ -162,7 +175,25 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
               vaults with your family — you can still <b>join</b> a vault someone invites
               you to on any plan.
             </p>
-            <button class="btn-add full" :disabled="s.busy" @click="upgrade">
+
+            <div class="plans">
+              <div
+                v-for="p in PLANS"
+                :key="p.id"
+                class="plan"
+                :class="{ cur: p.id === currentPlan }"
+              >
+                <div class="p-hd">
+                  <b>{{ p.name }}</b>
+                  <span v-if="p.id === currentPlan" class="tag you">Current</span>
+                </div>
+                <ul>
+                  <li v-for="f in p.features" :key="f">{{ f }}</li>
+                </ul>
+              </div>
+            </div>
+
+            <button class="btn-add full" :disabled="s.busy" @click="s.upgrade()">
               Upgrade to Family
             </button>
           </div>
@@ -536,6 +567,33 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 }
 .note.upgrade b {
   color: var(--accent-ink);
+}
+.plans {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.plan {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+}
+.plan.cur {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.p-hd {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+}
+.plan ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.05rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.6;
 }
 .planline {
   display: flex;

@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -269,6 +275,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32fast"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -426,6 +441,16 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "flate2"
+version = "1.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide",
+]
 
 [[package]]
 name = "form_urlencoded"
@@ -681,7 +706,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -958,6 +983,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
 name = "mio"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1057,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-cli"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "proctor-passbook",
  "serde_json",
@@ -1065,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-wasm"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "getrandom 0.2.17",
  "proctor-passbook",
@@ -1222,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-broker"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "hmac 0.12.1",
  "serde",
@@ -1233,7 +1268,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-cli"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "proctor-broker",
  "proctor-profiles",
@@ -1242,7 +1277,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-crypto"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1253,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mcp"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1271,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-mint"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -1286,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-passbook"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "base32",
  "chacha20poly1305",
@@ -1305,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-profiles"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "regex",
  "serde",
@@ -1316,7 +1351,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-sync"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "rand 0.8.7",
  "serde",
@@ -1327,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-sync-postgres"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "postgres",
  "proctor-sync",
@@ -1339,7 +1374,7 @@ dependencies = [
 
 [[package]]
 name = "proctor-sync-server"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "hmac 0.12.1",
  "proctor-sync",
@@ -1347,11 +1382,12 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tiny_http",
+ "ureq",
 ]
 
 [[package]]
 name = "proctor-vault"
-version = "1.33.0"
+version = "1.35.0"
 dependencies = [
  "proctor-crypto",
  "serde",
@@ -1601,7 +1637,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -1681,6 +1717,7 @@ version = "0.23.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
 dependencies = [
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -1902,6 +1939,12 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "rand_core 0.6.4",
 ]
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
 
 [[package]]
 name = "simple_asn1"
@@ -2358,6 +2401,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "url",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2507,6 +2566,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]

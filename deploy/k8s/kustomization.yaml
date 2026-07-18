@@ -12,6 +12,8 @@ resources:
   - service.yaml
   - ingress.yaml
   - hpa.yaml
+  - networkpolicy.yaml
+  - pdb.yaml
 # NOTE: no Secret manifest is committed — create the `proctor-sync-secrets`
 # Secret out-of-band with `kubectl create secret` (see deploy/README.md § Secrets).
 

@@ -59,6 +59,18 @@ The image is **server only** (no demo seeder, no CLI), runs as a non-root user
 (`uid 10001`), stores data under `/data` (declared a `VOLUME`), listens on
 `0.0.0.0:8787`, and ships a `HEALTHCHECK` that curls `/healthz`.
 
+**Digest-pinned base images.** For reproducible, tamper-resistant builds the base
+images are pinned by digest (`image:tag@sha256:…`) in
+[`Dockerfile`](Dockerfile) (`rust:1.90-bookworm`, `debian:bookworm-slim`) and in
+[`k8s/postgres.yaml`](k8s/postgres.yaml) (`postgres:16.4-alpine`). The human tag
+is kept before the `@` for readability. To re-pin when upgrading a base image,
+resolve the new digest without a full pull and paste it in:
+
+```bash
+docker buildx imagetools inspect <image>:<tag> --format '{{.Manifest.Digest}}'
+# then update the FROM line / image: field to <image>:<tag>@sha256:<digest>
+```
+
 ## Configure the host & TLS
 
 Edit [`k8s/ingress.yaml`](k8s/ingress.yaml) and replace **both** occurrences of
@@ -128,6 +140,9 @@ Set on the container in `k8s/deployment.yaml`:
 | `PROCTOR_SYNC_PG` | from Secret | PostgreSQL URL → the scalable managed backend. Takes precedence over `PROCTOR_SYNC_DIR`. |
 | `PROCTOR_SYNC_PG_POOL` | `8` | Postgres connection-pool size per replica. |
 | `PROCTOR_STRIPE_WEBHOOK_SECRET` | from Secret (optional) | Stripe webhook signing secret. Unset ⇒ `POST /v1/billing/webhook` returns 503. |
+| `PROCTOR_STRIPE_SECRET_KEY` | from Secret (optional) | Stripe API secret key, used server-side to create Checkout sessions. Never sent to clients. |
+| `PROCTOR_STRIPE_PRICE_FAMILY` | optional | Stripe price id for the Family plan. Together with the secret key it enables `POST /v1/billing/checkout`; either missing ⇒ 503. |
+| `PROCTOR_STRIPE_SUCCESS_URL` / `PROCTOR_STRIPE_CANCEL_URL` | example.com defaults | Where Stripe redirects after checkout completes / is cancelled. |
 | `PROCTOR_SYNC_DIR` | unset here | File-backed store (single-node self-host path). Ignored when `PROCTOR_SYNC_PG` is set. |
 | `PROCTOR_SYNC_TOKEN_TTL` | unset → no expiry | Device-token lifetime in seconds. Manifest sets `2592000` (30 days). `0`/unset ⇒ tokens never expire. |
 | `PROCTOR_SYNC_RATELIMIT_PER_MIN` | `30` | Per-client-IP fixed-window rate limit for the abuse-prone endpoints (`POST /v1/register`, `POST /v1/groups/{id}/invites`). Over the limit ⇒ HTTP `429`. `0` disables. Closes the DoS item in ADR-0004's threat model. |
@@ -147,6 +162,42 @@ The API is **stateless** (all state is in Postgres), so it scales horizontally.
 The Deployment runs `replicas: 2` with `RollingUpdate` (zero-downtime deploys), and
 [`k8s/hpa.yaml`](k8s/hpa.yaml) autoscales 2→10 on CPU. The only stateful component
 is Postgres — scale/HA that at the database layer (a managed DB or an operator).
+
+A [`PodDisruptionBudget`](k8s/pdb.yaml) (`minAvailable: 1`) keeps at least one app
+replica Ready through **voluntary** disruptions (node drains, cluster upgrades), so
+`kubectl drain` never takes the whole service down at once. There is deliberately
+**no PDB for the single-replica Postgres** — one would make its only pod
+undrainable and block node drains; give Postgres real HA before budgeting it.
+
+## Network hardening
+
+[`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml) applies a **default-deny
+ingress** posture for the `proctor` namespace plus the minimum explicit allows
+(requires a NetworkPolicy-enforcing CNI such as Calico or Cilium; on other CNIs
+the objects are inert but harmless):
+
+- **default-deny-ingress** — every pod rejects inbound traffic unless another
+  policy allows it. Egress is left permissive on purpose so DNS, cert-manager's
+  ACME calls, and the app's outbound HTTPS to Stripe keep working; locking egress
+  down is a **follow-up** (if you add an egress policy you must allow DNS to
+  kube-dns on UDP+TCP 53, app→Postgres :5432, and app→internet :443).
+- **allow-ingress-to-app** — app pods accept TCP `8787` from the ingress-controller
+  namespace, a monitoring namespace (Prometheus `/metrics` scrape), and same-
+  namespace scrapers.
+- **allow-app-to-postgres** — Postgres accepts TCP `5432` **only** from the app
+  pods; nothing else in the namespace can reach the database.
+
+**Per-cluster values to adjust** (namespaceSelector labels in
+`allow-ingress-to-app`, matched on the auto-populated `kubernetes.io/metadata.name`
+namespace label):
+
+| Selector | Default value | Change to… |
+|---|---|---|
+| Ingress-controller namespace | `ingress-nginx` | wherever ingress-nginx runs (e.g. `kube-system`). |
+| Monitoring namespace | `monitoring` | wherever Prometheus runs (kube-prometheus-stack default is `monitoring`). |
+
+If you don't scrape from inside the `proctor` namespace, drop the same-namespace
+`podSelector: {}` block from `allow-ingress-to-app`.
 
 ## Health & metrics
 

@@ -10,7 +10,7 @@
 # ---- build stage ---------------------------------------------------------
 # Pinned to the workspace's rust-version (1.90) on Debian bookworm so the
 # runtime glibc matches the debian:bookworm-slim base below.
-FROM rust:1.90-bookworm AS build
+FROM rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f2db16d1d8a7e58f AS build
 WORKDIR /src
 COPY . .
 # LTO release build (profile.release in the workspace Cargo.toml). Server only.
@@ -19,7 +19,7 @@ RUN cargo build --release -p proctor-sync-server \
 
 # ---- runtime stage -------------------------------------------------------
 # debian:bookworm-slim (not distroless) so a HEALTHCHECK can curl /healthz.
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 
 # curl is only needed for the container HEALTHCHECK; ca-certificates is harmless
 # and future-proofs any outbound TLS. Kept minimal.

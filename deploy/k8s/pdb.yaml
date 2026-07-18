@@ -1,0 +1,24 @@
+# PodDisruptionBudget for the stateless API (GA availability hardening).
+#
+# Guarantees at least one app replica stays Ready during VOLUNTARY disruptions
+# (node drains, cluster upgrades, `kubectl drain`). With `replicas: 2` and the
+# HPA scaling 2→10, minAvailable: 1 lets the cluster evict one pod at a time
+# without ever taking the whole service down.
+#
+# NOTE: there is deliberately NO PDB for the single-replica Postgres StatefulSet.
+# A PDB with minAvailable:1 over a 1-replica workload would make its only pod
+# permanently undrainable and BLOCK node drains. Give Postgres real HA (a managed
+# DB or an operator) before budgeting its disruptions.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: proctor-sync-server
+  namespace: proctor
+  labels:
+    app.kubernetes.io/name: proctor-sync-server
+    app.kubernetes.io/part-of: proctor
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proctor-sync-server

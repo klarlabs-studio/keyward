@@ -3,6 +3,54 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.36.0] — 2026-07-18
+
+**GA hardening, Stripe Checkout, and the plans UX.**
+
+### Added — GA hardening of the k8s deploy
+- **`k8s/networkpolicy.yaml`** — default-deny **ingress** for the namespace, then
+  explicit allows: ingress-controller → app `:8787`, a monitoring namespace → app
+  `:8787` (scrape), and app → Postgres `:5432` (the *only* path to the database).
+  Egress is deliberately left permissive — a tight egress policy silently breaks
+  DNS, ACME, and Stripe; locking it down is a documented follow-up. Includes a
+  kubelet-probe caveat for strict CNIs.
+- **`k8s/pdb.yaml`** — PodDisruptionBudget (`minAvailable: 1`) so node drains never
+  take the whole API down. Deliberately **no** PDB for the single-replica Postgres
+  (it would make its only pod undrainable).
+- **Digest-pinned images** — `rust:1.90-bookworm`, `debian:bookworm-slim` (Dockerfile)
+  and `postgres:16.4-alpine` (StatefulSet) are pinned by `@sha256:…`, with the
+  re-pin command documented.
+
+### Added — Stripe Checkout
+- **`POST /v1/billing/checkout`** (auth) creates a hosted Stripe **subscription
+  Checkout session** server-side and returns its URL. The account id rides in the
+  session + subscription metadata, so the existing webhook applies the plan on
+  completion. The Stripe secret key never leaves the server. `503` when
+  unconfigured (self-host), `401` unauthenticated, `502` on a Stripe error.
+  Config: `PROCTOR_STRIPE_SECRET_KEY`, `PROCTOR_STRIPE_PRICE_FAMILY`, and optional
+  `PROCTOR_STRIPE_SUCCESS_URL` / `PROCTOR_STRIPE_CANCEL_URL`.
+
+### Added — plans UX
+- The upgrade panel now shows a **plan comparison** (Free / Individual / Family with
+  their features, current tier marked), and **Upgrade to Family** starts real hosted
+  checkout and redirects. On a deployment without billing it explains rather than
+  failing silently.
+
+### Verified
+- All k8s YAML valid and `kubectl kustomize` renders the full set (3 NetworkPolicies,
+  PDB, HPA, Deployment, StatefulSet, Services, Ingress, Namespace). Checkout gating
+  live-tested (`503` unconfigured, `401` unauthenticated). Plans UI verified in a
+  visible browser (Free marked current, tiers listed, upgrade handled cleanly with
+  zero console errors). Full workspace tests + clippy clean; nox 0 active.
+
+### Note
+- The **live Stripe call** can't be exercised without real Stripe credentials — the
+  request shape follows Stripe's Checkout Sessions API and the unconfigured/error
+  paths are tested, but the happy path needs a test key to confirm.
+- The checkout call is **blocking** and the server handles requests sequentially, so
+  a slow Stripe response briefly stalls other requests; a threaded request model is
+  a production follow-up (noted in code).
+
 ## [1.35.0] — 2026-07-18
 
 **Entitlements in the app: the plan is surfaced and family sharing is gated in the UI.**

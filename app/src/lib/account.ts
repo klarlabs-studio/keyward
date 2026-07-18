@@ -32,6 +32,32 @@ export function planLabel(plan: Plan): string {
   }
 }
 
+/** Why a checkout attempt could not start — drives the message shown to the user. */
+export type CheckoutError = 'not-configured' | 'no-sync' | 'failed';
+
+/**
+ * Ask the server to create a hosted Stripe Checkout session for the Family plan.
+ * Returns the URL to redirect to, or an error reason. The Stripe secret key lives
+ * only on the server; the client never sees it.
+ */
+export async function startCheckout(): Promise<{ url: string } | { error: CheckoutError }> {
+  const cfg = syncConfig();
+  if (cfg === null) return { error: 'no-sync' };
+  try {
+    const res = await fetch(`${cfg.serverUrl}/v1/billing/checkout`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.deviceToken}` },
+    });
+    // 503 = this deployment has no Stripe configured (e.g. self-hosted).
+    if (res.status === 503) return { error: 'not-configured' };
+    if (!res.ok) return { error: 'failed' };
+    const body = (await res.json()) as { url?: string };
+    return body.url ? { url: body.url } : { error: 'failed' };
+  } catch {
+    return { error: 'failed' };
+  }
+}
+
 /**
  * Fetch the account's entitlements, or null if cloud sync is off or the server is
  * unreachable (callers fall back to a conservative "free" assumption).

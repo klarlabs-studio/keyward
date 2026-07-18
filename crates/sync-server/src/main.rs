@@ -13,6 +13,10 @@
 //!                               (takes precedence over PROCTOR_SYNC_DIR)
 //!   PROCTOR_SYNC_PG_POOL        Postgres pool size per replica (default 8)
 //!   PROCTOR_STRIPE_WEBHOOK_SECRET  Stripe webhook signing secret; unset → webhook 503
+//!   PROCTOR_STRIPE_SECRET_KEY    Stripe API secret key (server-side only)
+//!   PROCTOR_STRIPE_PRICE_FAMILY  Stripe price id for the Family plan
+//!                               (both required for POST /v1/billing/checkout; else 503)
+//!   PROCTOR_STRIPE_SUCCESS_URL / PROCTOR_STRIPE_CANCEL_URL  post-checkout redirects
 //!   PROCTOR_SYNC_DIR              storage dir (FileStore + FileAccountStore); unset → in-memory
 //!   PROCTOR_SYNC_TOKENS           optional pre-seed "token1:account1,token2:account2"
 //!                                 (the registry is the source of truth; this is a fallback
@@ -44,6 +48,7 @@
 //!   PUT    /v1/vault          -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
 //!   DELETE /v1/vault          -> 204 | 401  (erase this account's vault, idempotent)
 //!   GET    /v1/account        -> 200 {account_id,plan,can_share,devices,device_limit} | 401
+//!   POST   /v1/billing/checkout-> 200 {url} (hosted Stripe Checkout session) | 401 | 502 | 503
 //!   POST   /v1/billing/webhook-> 200 (Stripe-signed; updates the account's plan) | 400 | 503
 //!   OPTIONS *                 -> 204 (CORS preflight)
 //!   (If-Match: <version> on PUT; omit for the first upload.)
@@ -177,8 +182,21 @@ struct App {
     /// Stripe webhook signing secret (`PROCTOR_STRIPE_WEBHOOK_SECRET`). `None`
     /// disables the billing webhook (returns 503).
     stripe_secret: Option<String>,
+    /// Stripe Checkout config for `POST /v1/billing/checkout`. `None` (missing
+    /// secret key or Family price id) disables checkout (returns 503).
+    stripe_checkout: Option<StripeCheckout>,
     /// Lightweight observability counters, exposed at `GET /metrics`.
     metrics: Metrics,
+}
+
+/// Stripe Checkout configuration. The server creates a subscription Checkout
+/// session server-side (the secret key never reaches the client) and returns the
+/// hosted URL for the app to redirect to.
+struct StripeCheckout {
+    secret_key: String,
+    price_family: String,
+    success_url: String,
+    cancel_url: String,
 }
 
 /// Minimal in-process metrics for a Prometheus scrape. Aggregate counts only — no
@@ -289,6 +307,23 @@ fn main() {
         .ok()
         .filter(|s| !s.trim().is_empty());
 
+    // Checkout needs both a secret key and a Family price id; otherwise it is off.
+    let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
+    let stripe_checkout = match (
+        nonempty("PROCTOR_STRIPE_SECRET_KEY"),
+        nonempty("PROCTOR_STRIPE_PRICE_FAMILY"),
+    ) {
+        (Some(secret_key), Some(price_family)) => Some(StripeCheckout {
+            secret_key,
+            price_family,
+            success_url: nonempty("PROCTOR_STRIPE_SUCCESS_URL")
+                .unwrap_or_else(|| "https://example.com/billing/success".to_string()),
+            cancel_url: nonempty("PROCTOR_STRIPE_CANCEL_URL")
+                .unwrap_or_else(|| "https://example.com/billing/cancel".to_string()),
+        }),
+        _ => None,
+    };
+
     let app = App {
         store,
         accounts,
@@ -297,6 +332,7 @@ fn main() {
         token_ttl,
         limiter,
         stripe_secret,
+        stripe_checkout,
         metrics: Metrics {
             requests_total: AtomicU64::new(0),
             start_epoch: now_unix(),
@@ -484,6 +520,7 @@ fn handle(request: Request, app: &App) {
         (Method::Delete, "/v1/vault") => handle_delete_vault(request, app),
         (_, "/v1/vault") => handle_vault(request, app, method, &url),
         (Method::Get, "/v1/account") => handle_account(request, app),
+        (Method::Post, "/v1/billing/checkout") => handle_billing_checkout(request, app),
         (Method::Post, "/v1/billing/webhook") => handle_billing_webhook(request, app),
         (_, path) if path == "/v1/groups" || path.starts_with("/v1/groups/") => {
             handle_groups(request, app, method, &url);
@@ -1085,6 +1122,65 @@ fn handle_account(request: Request, app: &App) {
     })
     .to_string();
     respond(request, json(body, 200));
+}
+
+/// POST /v1/billing/checkout — auth. Create a Stripe subscription Checkout session
+/// for the Family plan and return its hosted URL for the app to redirect to. The
+/// account id rides in the session + subscription metadata so the webhook applies
+/// the plan on completion. 503 if checkout is unconfigured; 502 on a Stripe error.
+///
+/// NOTE: this makes a **blocking** outbound HTTPS call and the server processes
+/// requests sequentially, so a slow Stripe response briefly stalls other requests.
+/// Checkout is infrequent; a threaded request model is a production follow-up.
+fn handle_billing_checkout(request: Request, app: &App) {
+    let account = match identity_for(&request, app) {
+        Some(i) => i.account_id,
+        None => {
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+    let Some(cfg) = &app.stripe_checkout else {
+        respond(request, text("checkout not configured", 503));
+        return;
+    };
+    let form = [
+        ("mode", "subscription"),
+        ("line_items[0][price]", cfg.price_family.as_str()),
+        ("line_items[0][quantity]", "1"),
+        ("success_url", cfg.success_url.as_str()),
+        ("cancel_url", cfg.cancel_url.as_str()),
+        ("client_reference_id", account.as_str()),
+        ("metadata[account_id]", account.as_str()),
+        ("subscription_data[metadata][account_id]", account.as_str()),
+        ("subscription_data[metadata][plan]", "family"),
+    ];
+    let result = ureq::post("https://api.stripe.com/v1/checkout/sessions")
+        .set("Authorization", &format!("Bearer {}", cfg.secret_key))
+        .send_form(&form);
+    match result {
+        Ok(resp) => match resp
+            .into_string()
+            .ok()
+            .and_then(|body| serde_json::from_str::<serde_json::Value>(&body).ok())
+        {
+            Some(v) => match v.get("url").and_then(|u| u.as_str()) {
+                Some(url) => {
+                    eprintln!("POST /v1/billing/checkout -> 200 (session for account={account})");
+                    respond(
+                        request,
+                        json(serde_json::json!({ "url": url }).to_string(), 200),
+                    );
+                }
+                None => respond(request, text("stripe: no checkout url in response", 502)),
+            },
+            None => respond(request, text("stripe: unreadable response", 502)),
+        },
+        Err(e) => {
+            eprintln!("stripe checkout error: {e}");
+            respond(request, text("could not create checkout session", 502));
+        }
+    }
 }
 
 /// POST /v1/billing/webhook — Stripe webhook. Verifies the `Stripe-Signature`

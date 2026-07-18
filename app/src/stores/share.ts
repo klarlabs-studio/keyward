@@ -8,7 +8,7 @@ import type { Entry, Login } from '../lib/passbook-types';
 import { nowUnix } from '../lib/passbook';
 import * as share from '../lib/sharing';
 import type { FamilyVault, GroupRef, MemberIdentity } from '../lib/sharing';
-import { fetchAccount, planLabel, type AccountInfo } from '../lib/account';
+import { fetchAccount, planLabel, startCheckout, type AccountInfo } from '../lib/account';
 import { toast } from '../composables/useToast';
 
 interface ShareState {
@@ -76,6 +76,32 @@ export const useShareStore = defineStore('share', {
     /** Load the account's entitlements from the server (best-effort). */
     async loadAccount() {
       this.account = await fetchAccount();
+    },
+
+    /**
+     * Start hosted Stripe Checkout for the Family plan and redirect. On a
+     * deployment without billing (e.g. self-host) this explains rather than fails
+     * silently, and re-checks the plan in case it changed elsewhere.
+     */
+    async upgrade() {
+      this.busy = true;
+      try {
+        const result = await startCheckout();
+        if ('url' in result) {
+          window.location.href = result.url;
+          return;
+        }
+        if (result.error === 'no-sync') {
+          toast('Turn on cloud sync first.');
+        } else if (result.error === 'not-configured') {
+          toast('This server has no billing configured — upgrade via your cloud provider.');
+        } else {
+          toast('Could not start checkout — please try again.');
+        }
+        await this.loadAccount();
+      } finally {
+        this.busy = false;
+      }
     },
 
     /** Create a new family vault owned by this device, and open it. */

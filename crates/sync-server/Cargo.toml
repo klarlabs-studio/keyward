@@ -16,3 +16,5 @@ hmac = "0.12"
 serde_json = "1"
 sha2 = "0.10"
 tiny_http = "0.12"
+# Blocking HTTPS client for the Stripe Checkout call (rustls, no OpenSSL).
+ureq = "2"

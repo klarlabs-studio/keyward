@@ -1,0 +1,106 @@
+# Network hardening for the `proctor` namespace (GA / CONT-001).
+#
+# Strategy: DEFAULT-DENY INGRESS for the whole namespace, then explicit allows
+# for the only two flows that must exist:
+#   1. ingress-controller  ─▶ app pods    :8787
+#   2. Prometheus          ─▶ app pods     :8787 (/metrics scrape)
+#   3. app pods            ─▶ Postgres     :5432   (enforced on the Postgres side)
+#
+# EGRESS IS LEFT PERMISSIVE on purpose. A too-tight egress policy silently breaks
+# DNS (kube-dns), cert-manager's ACME calls, and the app's outbound HTTPS to
+# Stripe. Locking egress down is tracked as a follow-up; if you add an egress
+# policy later you MUST allow, at minimum: DNS to kube-dns (UDP+TCP 53),
+# app ─▶ Postgres :5432, and app ─▶ internet :443 (Stripe / ACME).
+#
+# NOTE: This file only restricts traffic if a NetworkPolicy-enforcing CNI is
+# installed (Calico, Cilium, etc.). On a CNI that ignores NetworkPolicy these
+# objects are inert but harmless.
+#
+# KUBELET PROBES: liveness/readiness probes originate from the NODE, not a pod.
+# Most CNIs exempt host/kubelet traffic from NetworkPolicy, but a few strict
+# configurations do not — if pods start failing their probes after applying this,
+# add an allow rule for the node CIDR (ipBlock) on port 8787.
+---
+# 1) Default-deny all ingress in the namespace. With no `ingress:` rules, every
+#    pod selected (podSelector: {} = all pods) rejects all inbound traffic until
+#    another policy explicitly allows it. Egress is untouched (policyTypes lists
+#    Ingress only), so outbound DNS/Stripe/ACME keep working.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: proctor
+  labels:
+    app.kubernetes.io/part-of: proctor
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# 2) Allow inbound to the APP pods on TCP 8787 from:
+#      (a) the ingress-controller namespace (client HTTPS terminated at nginx),
+#      (b) a monitoring namespace (Prometheus scraping /metrics).
+#
+#    Least privilege: nothing else may reach the app. If you run Prometheus (or
+#    any scraper) INSIDE the `proctor` namespace, add a `- podSelector: {}` entry
+#    to the `from` list below — note that allows every pod in this namespace.
+#
+#    PER-CLUSTER ADJUSTMENTS — change these namespaceSelector labels to match
+#    where your controllers actually run:
+#      * ingress-nginx is commonly installed in the `ingress-nginx` namespace.
+#        The `kubernetes.io/metadata.name` label is auto-set by Kubernetes on
+#        every namespace (v1.21+), so it is the most portable selector. If your
+#        ingress lives elsewhere (e.g. `kube-system`), change the value below.
+#      * Prometheus commonly runs in a `monitoring` namespace (kube-prometheus-
+#        stack default). Change the value if yours differs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-app
+  namespace: proctor
+  labels:
+    app.kubernetes.io/part-of: proctor
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: proctor-sync-server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # (a) ingress-nginx controller namespace. ADJUST to your cluster.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        # (b) Prometheus / monitoring namespace. ADJUST to your cluster.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8787
+---
+# 3) Allow inbound to POSTGRES pods on TCP 5432 ONLY from the app pods. Nothing
+#    else in (or out of) the namespace may reach the database. Combined with the
+#    default-deny above, this is the sole path to Postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-postgres
+  namespace: proctor
+  labels:
+    app.kubernetes.io/part-of: proctor
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: proctor-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: proctor-sync-server
+      ports:
+        - protocol: TCP
+          port: 5432

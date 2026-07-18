@@ -816,6 +816,30 @@
       "severity": "medium",
       "reason": "False positive: deploy/README.md shows `--from-literal=postgres-password=\"$PG_PASSWORD\"` — a documented shell VARIABLE reference for creating the Secret out-of-band, not a hardcoded password.",
       "created_at": "2026-07-18T09:07:14.10139Z"
+    },
+    {
+      "fingerprint": "7c61e992a979357ceee070ade9518d1746c908c851588bfbc670565768c934eb",
+      "rule_id": "IAC-395",
+      "file_path": "deploy/k8s/pdb.yaml",
+      "severity": "medium",
+      "reason": "GA-hardening manifests (v1.36.0), all informational. IAC-395 is a POSITIVE finding — it fires because we now ship a PodDisruptionBudget; minAvailable:1 against replicas:2 (HPA 2→10) is intentional and correct, and Postgres is deliberately left without a PDB so node drains aren't blocked. IAC-464 ×2 are the standard \"namespace defined\" informationals for the new networkpolicy.yaml / pdb.yaml.",
+      "created_at": "2026-07-18T10:03:15.955452Z"
+    },
+    {
+      "fingerprint": "3698cd0a683df7c7836e2020b778e8801918a45e3978c584a5ad3b110a16de37",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/networkpolicy.yaml",
+      "severity": "medium",
+      "reason": "GA-hardening manifests (v1.36.0), all informational. IAC-395 is a POSITIVE finding — it fires because we now ship a PodDisruptionBudget; minAvailable:1 against replicas:2 (HPA 2→10) is intentional and correct, and Postgres is deliberately left without a PDB so node drains aren't blocked. IAC-464 ×2 are the standard \"namespace defined\" informationals for the new networkpolicy.yaml / pdb.yaml.",
+      "created_at": "2026-07-18T10:03:15.955452Z"
+    },
+    {
+      "fingerprint": "51df7c3815212a2be8819a0627dd6e398493042c2a0ea35067a5acee0eb4ecb5",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/pdb.yaml",
+      "severity": "medium",
+      "reason": "GA-hardening manifests (v1.36.0), all informational. IAC-395 is a POSITIVE finding — it fires because we now ship a PodDisruptionBudget; minAvailable:1 against replicas:2 (HPA 2→10) is intentional and correct, and Postgres is deliberately left without a PDB so node drains aren't blocked. IAC-464 ×2 are the standard \"namespace defined\" informationals for the new networkpolicy.yaml / pdb.yaml.",
+      "created_at": "2026-07-18T10:03:15.955452Z"
     }
   ]
 }
