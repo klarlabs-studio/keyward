@@ -18,6 +18,11 @@
 pub mod accounts;
 pub mod groups;
 
+/// Reusable port-contract test suites, shared by every adapter (file, memory, and
+/// the out-of-tree Postgres cloud backend). Gated so it never ships in normal builds.
+#[cfg(feature = "testkit")]
+pub mod contract;
+
 pub use accounts::{
     Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, TokenIdentity,
 };

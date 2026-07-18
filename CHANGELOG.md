@@ -3,6 +3,58 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.32.0] — 2026-07-18
+
+**Managed cloud, phase 1: the scalable Postgres backend + the cloud plan.**
+
+Discussed and locked the cloud direction (1Password-shaped packaging **with** a
+free tier; managed cloud is paid; scale to thousands later), then built the
+foundational backend swap.
+
+### Added — the plan
+- **[ADR-0005](docs/architecture/ADR-0005-managed-cloud.md)** — the managed-cloud
+  architecture + product plan: packaging (free self-host + a free managed tier, paid
+  Individual/Family), the Postgres-behind-the-ports architecture, a custodian-lens
+  threat model, ops/durability requirements, the open-core boundary, and a phased
+  roadmap with the **crypto-review gate first**.
+
+### Added — `crates/sync-postgres` (the scalable backend)
+- PostgreSQL adapters — `PostgresSyncStore`, `PostgresAccountStore`,
+  `PostgresShareGroupStore` — implementing the **existing** `SyncStore` /
+  `AccountStore` / `ShareGroupStore` ports (the hexagonal payoff: the cloud is new
+  adapters, not a rewrite). Metadata **and** the opaque vault blobs live in Postgres
+  (`bytea`; object storage deferred), so the API is **stateless and horizontally
+  scalable** — N replicas over one datastore, versus the single-replica file store.
+  Synchronous `r2d2` pool (matches the blocking server; no async runtime).
+  DB-enforced optimistic concurrency and a transactional `redeem_invite`.
+- **Zero-knowledge preserved**: Postgres stores only ciphertext, X25519 *public*
+  keys, and SHA-256 *hashes* of tokens/invite codes. An `accounts.plan` column seeds
+  the entitlements plane (free/individual/family).
+
+### Added — reusable port contracts (`proctor-sync` `testkit` feature)
+- The port-behaviour suites (`sync_store_contract` / `account_store_contract` /
+  `share_group_store_contract`) are now shared: File, Memory, **and** Postgres run
+  the *identical* contracts, so every backend is provably behaviourally equal.
+
+### Changed — server backend selection
+- `proctor-sync-server` picks its backend by precedence: **`PROCTOR_SYNC_PG`**
+  (Postgres, managed cloud) → `PROCTOR_SYNC_DIR` (file, self-host) → in-memory. New
+  `PROCTOR_SYNC_PG_POOL` (default 8). Added `deploy/docker-compose.pg.yml` to run the
+  scalable backend locally.
+
+### Verified
+- The 3 Postgres adapters pass the **same contracts** as file/memory (run against a
+  real Postgres 16 in Docker). The **full family-sharing protocol** was re-run
+  end-to-end against the server on Postgres (create→invite→join→auto-grant→
+  cross-member read→add→revoke+rotate→lockout) — all green; `/healthz` 200. Full
+  workspace tests pass; nox 0 active findings (7 new baselined: local-dev compose
+  creds, a test-fixture email, the `0.0.0.0` bind).
+
+### Next (per ADR-0005)
+- Accounts + email verification + **Stripe** + entitlement enforcement (phase 2);
+  ops/monitoring/backups/status/whitepaper (phase 3); then HA/multi-region/object
+  storage. The **formal crypto review** remains the gate before onboarding paying users.
+
 ## [1.31.0] — 2026-07-18
 
 **Three parallel tracks: an honesty banner, the managed-cloud (k8s) deployment, and

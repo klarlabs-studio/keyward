@@ -9,6 +9,9 @@
 //!
 //! Config (env):
 //!   PROCTOR_SYNC_ADDR             listen address (default 127.0.0.1:8787)
+//!   PROCTOR_SYNC_PG              PostgreSQL URL → the scalable managed-cloud backend
+//!                               (takes precedence over PROCTOR_SYNC_DIR)
+//!   PROCTOR_SYNC_PG_POOL        Postgres pool size per replica (default 8)
 //!   PROCTOR_SYNC_DIR              storage dir (FileStore + FileAccountStore); unset → in-memory
 //!   PROCTOR_SYNC_TOKENS           optional pre-seed "token1:account1,token2:account2"
 //!                                 (the registry is the source of truth; this is a fallback
@@ -175,27 +178,63 @@ fn token_ttl_from_env() -> Option<u64> {
         .filter(|&ttl| ttl > 0)
 }
 
+/// Postgres connection-pool size per replica (`PROCTOR_SYNC_PG_POOL`, default 8).
+fn pg_pool_size() -> u32 {
+    std::env::var("PROCTOR_SYNC_PG_POOL")
+        .ok()
+        .and_then(|v| v.trim().parse::<u32>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(8)
+}
+
+/// The three driven ports as trait objects, so `main` can pick a backend at runtime.
+type BoxedSyncStore = Box<dyn SyncStore + Send + Sync>;
+type BoxedAccountStore = Box<dyn AccountStore + Send + Sync>;
+type BoxedGroupStore = Box<dyn ShareGroupStore + Send + Sync>;
+
 fn main() {
     let addr = std::env::var("PROCTOR_SYNC_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
     let seed_tokens = parse_tokens(&std::env::var("PROCTOR_SYNC_TOKENS").unwrap_or_default());
     let token_ttl = token_ttl_from_env();
 
-    let (store, accounts, groups): (
-        Box<dyn SyncStore + Send + Sync>,
-        Box<dyn AccountStore + Send + Sync>,
-        Box<dyn ShareGroupStore + Send + Sync>,
-    ) = match std::env::var("PROCTOR_SYNC_DIR") {
-        Ok(dir) if !dir.is_empty() => (
-            Box::new(FileStore::new(&dir)),
-            Box::new(FileAccountStore::new(&dir)),
-            Box::new(FileShareGroupStore::new(&dir)),
-        ),
-        _ => (
-            Box::new(MemoryStore::new()),
-            Box::new(MemoryAccountStore::new()),
-            Box::new(MemoryShareGroupStore::new()),
-        ),
+    // Backend precedence: PostgreSQL (the managed-cloud, horizontally-scalable
+    // backend) → filesystem (self-host) → in-memory (dev/tests).
+    let pg_url = std::env::var("PROCTOR_SYNC_PG").unwrap_or_default();
+    let (store, accounts, groups, backend): (
+        BoxedSyncStore,
+        BoxedAccountStore,
+        BoxedGroupStore,
+        &str,
+    ) = if !pg_url.is_empty() {
+        let pool = proctor_sync_postgres::connect(&pg_url, pg_pool_size()).unwrap_or_else(|e| {
+            eprintln!("error: cannot connect to PROCTOR_SYNC_PG: {e}");
+            std::process::exit(1);
+        });
+        (
+            Box::new(proctor_sync_postgres::PostgresSyncStore::new(pool.clone())),
+            Box::new(proctor_sync_postgres::PostgresAccountStore::new(
+                pool.clone(),
+            )),
+            Box::new(proctor_sync_postgres::PostgresShareGroupStore::new(pool)),
+            "postgres",
+        )
+    } else {
+        match std::env::var("PROCTOR_SYNC_DIR") {
+            Ok(dir) if !dir.is_empty() => (
+                Box::new(FileStore::new(&dir)),
+                Box::new(FileAccountStore::new(&dir)),
+                Box::new(FileShareGroupStore::new(&dir)),
+                "file",
+            ),
+            _ => (
+                Box::new(MemoryStore::new()),
+                Box::new(MemoryAccountStore::new()),
+                Box::new(MemoryShareGroupStore::new()),
+                "memory",
+            ),
+        }
     };
+    eprintln!("proctor-sync-server backend: {backend}");
 
     let limiter = RateLimiter::from_env();
 

@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Exposes `contract` — reusable port-contract suites for adapter tests. Off by default.
+testkit = []
+
 [dependencies]
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }

@@ -640,6 +640,62 @@
       "severity": "medium",
       "reason": "False positive: FamilyDetail.vue renders the selected shared login's password in the vault UI (masked, with a Show toggle) — this is displaying a user's own vault field, not a hardcoded credential/secret.",
       "created_at": "2026-07-18T07:23:39.997898Z"
+    },
+    {
+      "fingerprint": "b3f7bbfb79e4dc7fbea418aabdbc98f5aa7b1a922a55322c1eede833f9a5def8",
+      "rule_id": "IAC-254",
+      "file_path": "deploy/docker-compose.pg.yml",
+      "severity": "critical",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "created_at": "2026-07-18T08:18:05.747181Z"
+    },
+    {
+      "fingerprint": "a6194765ac1c5438fef218e60ad4ef5b9391ad69ab50f3173fc73bc73191d416",
+      "rule_id": "IAC-351",
+      "file_path": "deploy/docker-compose.pg.yml",
+      "severity": "critical",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "created_at": "2026-07-18T08:18:05.747181Z"
+    },
+    {
+      "fingerprint": "0f809f31458dfdd00654beaa228b37c372aee0ae3768df7d6f2f034ae8f99ca9",
+      "rule_id": "SEC-073",
+      "file_path": "deploy/docker-compose.pg.yml",
+      "severity": "critical",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "created_at": "2026-07-18T08:18:05.747181Z"
+    },
+    {
+      "fingerprint": "6fc84273768baa03ddaa2028804f780908c6e020cd99f11469d962fc574df9cb",
+      "rule_id": "SEC-430",
+      "file_path": "deploy/docker-compose.pg.yml",
+      "severity": "high",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "created_at": "2026-07-18T08:18:05.747181Z"
+    },
+    {
+      "fingerprint": "1445704d9724eccb94836bf22f5aad51576ab8b0ddb0090bed84dfa3db714461",
+      "rule_id": "DATA-005",
+      "file_path": "deploy/docker-compose.pg.yml",
+      "severity": "medium",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "created_at": "2026-07-18T08:18:05.747181Z"
+    },
+    {
+      "fingerprint": "d16b0d74f7956074b9eed84b6cbe4d9393db7f326d167bd68886a4bb5702d92e",
+      "rule_id": "DATA-001",
+      "file_path": "crates/sync/src/contract.rs",
+      "severity": "medium",
+      "reason": "Test fixture: 'a@example.com' is a reserved-domain example email used in the AccountStore port-contract test suite (contract.rs), not real PII.",
+      "created_at": "2026-07-18T08:18:20.009025Z"
+    },
+    {
+      "fingerprint": "0e9e52f82a91897a8cbd256406777cdea950f98e47f7035288c623297252176d",
+      "rule_id": "DATA-005",
+      "file_path": ".nox/baseline.json",
+      "severity": "medium",
+      "reason": "False positive: the scanner is matching a snippet inside its own .nox/baseline.json (a previously-recorded finding's context), not live code or config.",
+      "created_at": "2026-07-18T08:18:39.772474Z"
     }
   ]
 }

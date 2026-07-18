@@ -1,0 +1,46 @@
+# Local run of the SCALABLE (Postgres-backed) sync server — the managed-cloud
+# backend. Unlike the file-backed self-host path, this backs the API with a shared
+# database so it can run stateless behind a load balancer (many replicas, one DB).
+#
+#   docker compose -f deploy/docker-compose.pg.yml up --build
+#
+# In production the database is a managed instance (Cloud SQL / RDS / a Postgres
+# operator) and the server runs from deploy/k8s with PROCTOR_SYNC_PG set from a
+# Secret. Zero-knowledge is unchanged: Postgres only ever holds ciphertext blobs,
+# public keys, and hashed tokens/invite codes.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: proctor
+      POSTGRES_PASSWORD: proctor
+      POSTGRES_DB: proctor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proctor"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  sync:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      PROCTOR_SYNC_ADDR: 0.0.0.0:8787
+      # The Postgres backend takes precedence over the file store; the server
+      # applies the schema on startup.
+      PROCTOR_SYNC_PG: postgres://proctor:proctor@db:5432/proctor
+      PROCTOR_SYNC_PG_POOL: "8"
+      PROCTOR_SYNC_TOKEN_TTL: "2592000"
+      PROCTOR_SYNC_RATELIMIT_PER_MIN: "30"
+    ports:
+      - "8787:8787"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
