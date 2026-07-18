@@ -23,7 +23,12 @@ use wasm_bindgen::prelude::*;
 /// 30-second TOTP window (RFC 6238 default), matching `totp::code_now`.
 const TOTP_STEP_SECONDS: u64 = 30;
 
-/// Estimate a password's strength in bits (character-space × length).
+/// Estimate a password's strength in bits.
+///
+/// Structure-aware: a passphrase built from the bundled wordlist is scored by
+/// word entropy (words × log2(list size)); anything else falls back to
+/// character-space × length. See `watchtower::strength_bits` for why the
+/// character-space estimate alone materially overstated generated passphrases.
 #[wasm_bindgen]
 pub fn password_strength(password: &str) -> u32 {
     strength_bits(password)

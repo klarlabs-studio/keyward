@@ -15,10 +15,32 @@ pub enum Issue {
     Missing2fa(String),
 }
 
-/// Crude password-strength estimate in bits (character-space × length).
+/// Password-strength estimate in bits.
+///
+/// STRUCTURE-AWARE. A passphrase is recognised first and scored by word
+/// entropy; only genuinely unstructured strings fall through to the
+/// character-space × length estimate.
+///
+/// Why this matters: character-space scoring treats every character as an
+/// independent draw. For `moon-cedar-flint-lark-vapor` it computes
+/// 26+32 = 58 symbols over 26 characters and reports ~152 bits, when the string
+/// carries 5 × 12.924 = 64.6. With the previous 170-word list, real entropy was
+/// 22–59 bits while this function reported 82–275 — so the shortest reachable
+/// output still scored above `WEAK_BELOW_BITS`, meaning **no generated
+/// passphrase could ever be flagged Weak** and a 22-bit phrase was presented to
+/// the user as "Excellent".
+///
+/// The separators tried are those the generator can emit. A phrase whose words
+/// are not all in the list falls through, which over-estimates — unavoidable
+/// without knowing provenance, and the same as any other user-supplied string.
 pub fn strength_bits(password: &str) -> u32 {
     if password.is_empty() {
         return 0;
+    }
+    for sep in ["-", " ", ".", "_"] {
+        if let Some(words) = crate::generate::passphrase_word_count(password, sep) {
+            return crate::generate::passphrase_bits(words) as u32;
+        }
     }
     let mut space = 0u32;
     if password.chars().any(|c| c.is_ascii_lowercase()) {
