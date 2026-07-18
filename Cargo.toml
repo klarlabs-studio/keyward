@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/crypto", "crates/vault", "crates/broker", "crates/cli", "crates/mcp", "crates/mint", "crates/profiles", "crates/passbook", "crates/passbook-cli", "crates/passbook-wasm", "crates/sync", "crates/sync-postgres", "crates/sync-server"]
 
 [workspace.package]
-version = "1.36.0"
+version = "1.37.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/klarlabs/proctor"

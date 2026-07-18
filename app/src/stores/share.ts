@@ -44,7 +44,13 @@ export const useShareStore = defineStore('share', {
   getters: {
     isOwner(s): boolean {
       const id = s.identity?.id;
-      return !!s.active?.members.some((m) => m.is_owner && m.member_id === id);
+      return !!s.active?.members.some((m) => m.role === 'owner' && m.member_id === id);
+    },
+    /** Whether I may invite/remove members in the open vault (Admin or Owner). */
+    canManageMembers(s): boolean {
+      const id = s.identity?.id;
+      const me = s.active?.members.find((m) => m.member_id === id);
+      return !!me && share.canManageMembers(me.role);
     },
     /** Whether this account may create/own a family vault (Family plan). */
     canShare(s): boolean {
@@ -243,6 +249,21 @@ export const useShareStore = defineStore('share', {
         }
       } catch (e) {
         toast(e instanceof Error ? e.message : 'Could not remove the item');
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    /** Promote/demote a member (Owner only), then reload the directory. */
+    async setRole(memberId: string, role: share.Role): Promise<void> {
+      if (!this.active) return;
+      this.busy = true;
+      try {
+        await share.setMemberRole(this.active.groupId, memberId, role);
+        toast(role === 'admin' ? 'Member promoted to admin' : 'Admin demoted to member');
+        await this.reloadActive();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Could not change the role');
       } finally {
         this.busy = false;
       }

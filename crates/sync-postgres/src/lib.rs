@@ -22,7 +22,9 @@ use std::fmt::Display;
 use std::io;
 
 use proctor_sync::accounts::{Account, AccountStore, DeviceInfo, Plan, TokenIdentity};
-use proctor_sync::groups::{GroupInvite, GroupMember, RedeemOutcome, ShareGroup, ShareGroupStore};
+use proctor_sync::groups::{
+    GroupInvite, GroupMember, RedeemOutcome, Role, ShareGroup, ShareGroupStore,
+};
 use proctor_sync::{SyncEnvelope, SyncError, SyncStore};
 
 type Pool = r2d2::Pool<PostgresConnectionManager<NoTls>>;
@@ -66,10 +68,24 @@ CREATE TABLE IF NOT EXISTS group_members (
     account_id    TEXT NOT NULL,
     name          TEXT NOT NULL,
     public_key    TEXT NOT NULL,
-    is_owner      BOOLEAN NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'member',
     added_epoch    BIGINT NOT NULL,
     PRIMARY KEY (group_id, member_id)
 );
+-- Migrate databases created before roles existed: add the column, then relax the
+-- legacy NOT NULL `is_owner` (so inserts may omit it) and backfill Owner from it.
+-- A no-op on fresh databases, which never had `is_owner`.
+ALTER TABLE group_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'group_members' AND column_name = 'is_owner'
+    ) THEN
+        EXECUTE 'ALTER TABLE group_members ALTER COLUMN is_owner DROP NOT NULL';
+        EXECUTE 'UPDATE group_members SET role = ''owner'' WHERE is_owner IS TRUE AND role = ''member''';
+    END IF;
+END $$;
 CREATE TABLE IF NOT EXISTS group_invites (
     group_id      TEXT NOT NULL REFERENCES share_groups (group_id) ON DELETE CASCADE,
     code_hash     TEXT NOT NULL,
@@ -423,7 +439,7 @@ fn load_group(
     };
     let members = client
         .query(
-            "SELECT member_id, account_id, name, public_key, is_owner, added_epoch \
+            "SELECT member_id, account_id, name, public_key, role, added_epoch \
              FROM group_members WHERE group_id = $1 ORDER BY added_epoch",
             &[&group_id],
         )
@@ -434,7 +450,7 @@ fn load_group(
             account_id: r.get(1),
             name: r.get(2),
             public_key: r.get(3),
-            is_owner: r.get(4),
+            role: Role::parse(&r.get::<_, String>(4)),
             added_epoch: r.get::<_, i64>(5) as u64,
         })
         .collect();
@@ -472,7 +488,7 @@ fn insert_member(
     client
         .execute(
             "INSERT INTO group_members \
-             (group_id, member_id, account_id, name, public_key, is_owner, added_epoch) \
+             (group_id, member_id, account_id, name, public_key, role, added_epoch) \
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
             &[
                 &group_id,
@@ -480,7 +496,7 @@ fn insert_member(
                 &m.account_id,
                 &m.name,
                 &m.public_key,
-                &m.is_owner,
+                &m.role.as_str(),
                 &(m.added_epoch as i64),
             ],
         )
@@ -598,6 +614,22 @@ impl ShareGroupStore for PostgresShareGroupStore {
             .execute(
                 "DELETE FROM group_members WHERE group_id = $1 AND member_id = $2",
                 &[&group_id, &member_id],
+            )
+            .map_err(db_err)?;
+        Ok(n > 0)
+    }
+
+    fn set_member_role(
+        &self,
+        group_id: &str,
+        member_id: &str,
+        role: Role,
+    ) -> Result<bool, SyncError> {
+        let mut c = self.pool.get().map_err(db_err)?;
+        let n = c
+            .execute(
+                "UPDATE group_members SET role = $1 WHERE group_id = $2 AND member_id = $3",
+                &[&role.as_str(), &group_id, &member_id],
             )
             .map_err(db_err)?;
         Ok(n > 0)

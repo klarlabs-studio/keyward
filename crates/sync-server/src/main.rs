@@ -62,7 +62,10 @@
 //!   PUT    /v1/groups/{id}/keys           -> 200 + version | 409 (member; If-Match)
 //!   GET    /v1/groups/{id}/vault          -> 200 + shared blob (+ X-Vault-Version) | 404
 //!   PUT    /v1/groups/{id}/vault          -> 200 + version | 409 (member; If-Match)
-//!   DELETE /v1/groups/{id}/members/{mid}  -> 200 {removed:true} | 403 (owner only)
+//!   DELETE /v1/groups/{id}/members/{mid}  -> 200 {removed:true} | 403 (admin/owner; owners are never removable)
+//!   POST   /v1/groups/{id}/members/{mid}/role -> 200 {role} | 403 (owner only; body {role})
+//!   Roles: Owner > Admin > Member. Admin+ may invite and remove members; only an
+//!   Owner may change roles. Unknown role names fail closed to Member.
 //!   The server sees only public keys, opaque wrapped keys, opaque blobs, and
 //!   hashed invite codes — never a vault key, master password, or Secret Key.
 
@@ -70,8 +73,8 @@ use hmac::{Hmac, Mac};
 use proctor_sync::groups::{self, GroupInvite, GroupMember};
 use proctor_sync::{
     AccountStore, FileAccountStore, FileShareGroupStore, FileStore, MemoryAccountStore,
-    MemoryShareGroupStore, MemoryStore, Plan, RedeemOutcome, ShareGroupStore, SyncError, SyncStore,
-    TokenIdentity,
+    MemoryShareGroupStore, MemoryStore, Plan, RedeemOutcome, Role, ShareGroupStore, SyncError,
+    SyncStore, TokenIdentity,
 };
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -824,6 +827,9 @@ fn handle_groups(request: Request, app: &App, method: Method, url: &str) {
         ([id, "members", mid], Method::Delete) => {
             handle_group_remove(request, app, &account, id, mid)
         }
+        ([id, "members", mid, "role"], Method::Post) => {
+            handle_group_set_role(request, app, &account, id, mid)
+        }
         ([id, "keys"], _) => handle_group_blob(request, app, &account, id, method, Blob::Keys),
         ([id, "vault"], _) => handle_group_blob(request, app, &account, id, method, Blob::Content),
         _ => respond(request, text("not found", 404)),
@@ -864,7 +870,7 @@ fn handle_group_create(mut request: Request, app: &App, account: &str) {
         account_id: account.to_string(),
         name: str_field(&body, "name").unwrap_or_default(),
         public_key,
-        is_owner: true,
+        role: Role::Owner,
         added_epoch: now_unix(),
     };
     let group_id = groups::new_id();
@@ -907,13 +913,18 @@ fn handle_group_get(request: Request, app: &App, account: &str, id: &str) {
     respond(request, json(body, 200));
 }
 
-/// POST /v1/groups/{id}/invites — mint a single-use, TTL'd invite (members only).
-/// Body: `{ttl_seconds?}`. Returns the plaintext `invite_code` (shown once); the
-/// server keeps only its hash.
+/// POST /v1/groups/{id}/invites — mint a single-use, TTL'd invite. Requires
+/// **Admin or Owner** (inviting expands who can read the vault, so it is a
+/// member-management action). Body: `{ttl_seconds?}`. Returns the plaintext
+/// `invite_code` (shown once); the server keeps only its hash.
 fn handle_group_invite(mut request: Request, app: &App, account: &str, id: &str) {
-    // Membership check.
+    // Authorization: Admin or Owner.
     match app.groups.get(id) {
-        Ok(Some(g)) if g.is_member(account) => {}
+        Ok(Some(g)) if g.can_manage_members(account) => {}
+        Ok(Some(g)) if g.is_member(account) => {
+            respond(request, text("admin or owner required to invite", 403));
+            return;
+        }
         Ok(Some(_)) => {
             respond(request, text("not a member", 403));
             return;
@@ -975,7 +986,7 @@ fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
         account_id: account.to_string(),
         name: str_field(&body, "name").unwrap_or_default(),
         public_key,
-        is_owner: false,
+        role: Role::Member,
         added_epoch: now_unix(),
     };
     match app
@@ -995,14 +1006,29 @@ fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
     }
 }
 
-/// DELETE /v1/groups/{id}/members/{mid} — remove a member (owner only). True
-/// revocation also requires the client to rotate the vault key and re-push
-/// `/keys` + `/vault`; the server only drops the directory entry.
+/// DELETE /v1/groups/{id}/members/{mid} — remove a member. Requires **Admin or
+/// Owner**, and an Owner can never be removed (protects the group from being
+/// orphaned or captured). True revocation also requires the client to rotate the
+/// vault key and re-push `/keys` + `/vault`; the server only drops the directory
+/// entry.
 fn handle_group_remove(request: Request, app: &App, account: &str, id: &str, member_id: &str) {
     match app.groups.get(id) {
-        Ok(Some(g)) if g.is_owner(account) => {}
+        Ok(Some(g)) if g.can_manage_members(account) => {
+            // Never remove an Owner, even as another Owner/Admin.
+            if g.members
+                .iter()
+                .any(|m| m.member_id == member_id && m.role == Role::Owner)
+            {
+                respond(request, text("an owner cannot be removed", 403));
+                return;
+            }
+        }
+        Ok(Some(g)) if g.is_member(account) => {
+            respond(request, text("admin or owner required", 403));
+            return;
+        }
         Ok(Some(_)) => {
-            respond(request, text("owner only", 403));
+            respond(request, text("not a member", 403));
             return;
         }
         Ok(None) => {
@@ -1018,6 +1044,68 @@ fn handle_group_remove(request: Request, app: &App, account: &str, id: &str, mem
         Ok(true) => {
             eprintln!("DELETE /v1/groups/{id}/members/{member_id} -> 200 (removed)");
             respond(request, json(r#"{"removed":true}"#.to_string(), 200));
+        }
+        Ok(false) => respond(request, text("no such member", 404)),
+        Err(e) => respond_500(request, &e),
+    }
+}
+
+/// POST /v1/groups/{id}/members/{mid}/role — change a member's role. **Owner
+/// only**. Body: `{role: "member"|"admin"|"owner"}`. An Owner's role cannot be
+/// changed (no demoting/capturing the owner), and an unrecognized role name fails
+/// closed to `member` via [`Role::parse`].
+fn handle_group_set_role(
+    mut request: Request,
+    app: &App,
+    account: &str,
+    id: &str,
+    member_id: &str,
+) {
+    match app.groups.get(id) {
+        Ok(Some(g)) if g.can_change_roles(account) => {
+            if g.members
+                .iter()
+                .any(|m| m.member_id == member_id && m.role == Role::Owner)
+            {
+                respond(request, text("an owner's role cannot be changed", 403));
+                return;
+            }
+        }
+        Ok(Some(g)) if g.is_member(account) => {
+            respond(request, text("owner only", 403));
+            return;
+        }
+        Ok(Some(_)) => {
+            respond(request, text("not a member", 403));
+            return;
+        }
+        Ok(None) => {
+            respond(request, text("no such group", 404));
+            return;
+        }
+        Err(e) => {
+            respond_500(request, &e);
+            return;
+        }
+    }
+    let Some(role_name) = str_field(&read_body_json(&mut request), "role") else {
+        respond(request, text("role required", 400));
+        return;
+    };
+    let role = Role::parse(&role_name);
+    match app.groups.set_member_role(id, member_id, role) {
+        Ok(true) => {
+            eprintln!(
+                "POST /v1/groups/{id}/members/{member_id}/role -> 200 ({})",
+                role.as_str()
+            );
+            respond(
+                request,
+                json(
+                    serde_json::json!({ "role": role.as_str() }).to_string(),
+                    200,
+                ),
+            );
         }
         Ok(false) => respond(request, text("no such member", 404)),
         Err(e) => respond_500(request, &e),

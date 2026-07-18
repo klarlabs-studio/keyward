@@ -5,7 +5,7 @@
 //!
 //! Enabled by the `testkit` feature so the assertions don't ship in normal builds.
 
-use crate::groups::{GroupInvite, GroupMember, RedeemOutcome, ShareGroupStore};
+use crate::groups::{GroupInvite, GroupMember, RedeemOutcome, Role, ShareGroupStore};
 use crate::{AccountStore, Plan, SyncError, SyncStore};
 
 /// Contract for a [`SyncStore`]: versioned blob get/put/delete with optimistic
@@ -142,7 +142,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
         account_id: "acct-owner".into(),
         name: "Alice".into(),
         public_key: "alice-pub".into(),
-        is_owner: true,
+        role: Role::Owner,
         added_epoch: 100,
     };
     let bob = GroupMember {
@@ -150,7 +150,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
         account_id: "acct-bob".into(),
         name: "Bob".into(),
         public_key: "bob-pub".into(),
-        is_owner: false,
+        role: Role::Member,
         added_epoch: 200,
     };
     let invite = |h: &str, exp: u64| GroupInvite {
@@ -241,6 +241,27 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
             .unwrap_err(),
         SyncError::NotFound
     ));
+
+    // Roles: Bob joins as Member; promoting/demoting flows through the directory.
+    let g = store.get(group_id).unwrap().unwrap();
+    assert_eq!(g.role_of("acct-bob"), Some(Role::Member));
+    assert!(g.is_owner("acct-owner"));
+    assert!(g.can_manage_members("acct-owner"));
+    assert!(!g.can_manage_members("acct-bob"));
+    assert!(!g.can_change_roles("acct-bob"));
+
+    assert!(store
+        .set_member_role(group_id, "m-bob", Role::Admin)
+        .unwrap());
+    let g = store.get(group_id).unwrap().unwrap();
+    assert_eq!(g.role_of("acct-bob"), Some(Role::Admin));
+    // An Admin may manage members but may NOT change roles.
+    assert!(g.can_manage_members("acct-bob"));
+    assert!(!g.can_change_roles("acct-bob"));
+    // Unknown member → false.
+    assert!(!store
+        .set_member_role(group_id, "no-such-member", Role::Admin)
+        .unwrap());
 
     // Remove Bob; delete is idempotent.
     assert!(store.remove_member(group_id, "m-bob").unwrap());

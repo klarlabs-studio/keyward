@@ -27,7 +27,7 @@ pub use accounts::{
     Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, Plan, TokenIdentity,
 };
 pub use groups::{
-    FileShareGroupStore, GroupInvite, GroupMember, MemoryShareGroupStore, RedeemOutcome,
+    FileShareGroupStore, GroupInvite, GroupMember, MemoryShareGroupStore, RedeemOutcome, Role,
     ShareGroup, ShareGroupStore,
 };
 

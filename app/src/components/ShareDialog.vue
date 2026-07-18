@@ -234,10 +234,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
             <div v-for="m in s.active.members" :key="m.member_id" class="member">
               <span class="dot"></span>
               <span class="m-name">{{ m.name || m.member_id }}</span>
-              <span v-if="m.is_owner" class="tag">Owner</span>
-              <span v-else-if="m.member_id === s.identity?.id" class="tag you">You</span>
+              <span v-if="m.role === 'owner'" class="tag">Owner</span>
+              <span v-else-if="m.role === 'admin'" class="tag">Admin</span>
+              <span v-if="m.member_id === s.identity?.id" class="tag you">You</span>
+              <!-- Owner can promote/demote; owners themselves are immutable. -->
               <button
-                v-if="s.isOwner && !m.is_owner"
+                v-if="s.isOwner && m.role !== 'owner'"
+                class="mini"
+                :title="m.role === 'admin' ? 'Demote to member' : 'Promote to admin'"
+                @click="s.setRole(m.member_id, m.role === 'admin' ? 'member' : 'admin')"
+              >
+                {{ m.role === 'admin' ? 'Demote' : 'Make admin' }}
+              </button>
+              <!-- Admin or Owner can remove; an Owner is never removable. -->
+              <button
+                v-if="s.canManageMembers && m.role !== 'owner'"
                 class="mini danger"
                 title="Remove member"
                 @click="s.revoke(m.member_id)"

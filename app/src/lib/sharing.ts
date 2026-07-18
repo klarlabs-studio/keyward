@@ -43,14 +43,22 @@ export interface GroupRef {
   name: string;
 }
 
+/** A member's role in a group. Owner > Admin > Member (see ADR-0006). */
+export type Role = 'owner' | 'admin' | 'member';
+
 /** A member of a group, as the relay's directory reports it. */
 export interface GroupMemberView {
   member_id: string;
   account_id: string;
   name: string;
   public_key: string;
-  is_owner: boolean;
+  role: Role;
   added_epoch: number;
+}
+
+/** Admin or Owner — may invite and remove members. */
+export function canManageMembers(role: Role): boolean {
+  return role === 'admin' || role === 'owner';
 }
 
 /** A loaded family vault: its members, decrypted entries, and my access state. */
@@ -423,6 +431,24 @@ export async function saveFamilyEntries(
   const vaultKey = unwrap_vault_key(keys.json, member.secret, member.id);
   const content = seal_group_content(JSON.stringify(entries), vaultKey);
   return putContent(groupId, content, contentVersion);
+}
+
+/**
+ * Change a member's role (Owner only, enforced server-side). Owners' roles are
+ * immutable — the server rejects that with 403.
+ */
+export async function setMemberRole(
+  groupId: string,
+  memberId: string,
+  role: Role,
+): Promise<void> {
+  const { base, token } = relay();
+  const res = await fetch(
+    `${base}/v1/groups/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/role`,
+    { method: 'POST', headers: authJson(token), body: JSON.stringify({ role }) },
+  );
+  if (res.status === 403) throw new Error('Only the owner can change roles.');
+  if (!res.ok) throw new Error(`Could not change role (HTTP ${res.status}).`);
 }
 
 /**

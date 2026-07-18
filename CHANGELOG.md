@@ -3,6 +3,45 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.37.0] — 2026-07-18
+
+**Team foundations: member roles + the Team/Enterprise design.**
+
+### Added — [ADR-0006](docs/architecture/ADR-0006-team-and-enterprise.md)
+- The Team & Enterprise trajectory, **design-only**. A Team *is* a share group with
+  more members — the crypto, relay, and invites are indifferent to group size. What
+  isn't free: roles, **per-vault access** (a team owning N vaults, each with its own
+  key/wraps/content and member subset), SSO/SCIM, deprovisioning (which must rotate
+  keys), admin recovery vs zero-knowledge, audit, and per-seat billing. It also
+  names two hard limits honestly: SCIM deprovision **can't** rotate synchronously
+  (rotation needs an online member holding the key), and any server-openable escrow
+  would break zero-knowledge and must not be built. Recommendation: **design the
+  seams now, build after B2C is validated.**
+
+### Added — roles (built)
+- A `Role` enum — **Owner > Admin > Member** — replacing the flat `is_owner` bool,
+  ordered so `role >= Role::Admin` works, and **failing closed** (unknown role names
+  parse to `Member`).
+- Permission matrix, enforced server-side: **Admin+** may invite and remove members;
+  **Owner only** may change roles; an **Owner can never be removed or demoted** (no
+  orphaning or capturing a group). New `POST /v1/groups/{id}/members/{mid}/role`.
+- `set_member_role` across all three adapters (memory, file, Postgres) + role
+  coverage in the shared port contract.
+- **Postgres migration** for databases created before roles: adds the column,
+  relaxes the legacy `is_owner NOT NULL`, and backfills `role='owner'` from it — a
+  no-op on fresh databases.
+- App: members show Owner/Admin badges, Owners can promote/demote, and Remove is
+  gated on Admin+ (matching the server rather than guessing).
+
+### Verified
+- Role migration verified **on the live demo Postgres**: a pre-role member with
+  `is_owner=true` came back as `role=owner` (ownership preserved).
+- Full permission matrix exercised live: member invite/remove/role-change → 403;
+  owner promotes → `{"role":"admin"}`; admin invite → 200; admin role-change → 403;
+  admin removing the **Owner** → 403; owner removes admin → 200.
+- Port contracts pass on memory, file, **and Postgres**; full workspace tests +
+  clippy clean; nox 0 active.
+
 ## [1.36.0] — 2026-07-18
 
 **GA hardening, Stripe Checkout, and the plans UX.**

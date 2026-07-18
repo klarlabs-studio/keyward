@@ -42,6 +42,53 @@ pub fn hash_code(code: &str) -> String {
         .collect()
 }
 
+/// A member's role in a group — the authorization model. A family vault uses just
+/// Owner + Member; Teams (see ADR-0006) add Admin. Ordered by privilege, so
+/// comparisons like `role >= Role::Admin` work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    /// Read and write shared content. Cannot invite or manage members.
+    #[default]
+    Member,
+    /// Everything a Member can do, plus invite and remove members.
+    Admin,
+    /// Full control: everything an Admin can do, plus changing roles. Created with
+    /// the group; an Owner cannot be removed by anyone else.
+    Owner,
+}
+
+impl Role {
+    /// The canonical lowercase name (stored in Postgres / group JSON).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::Member => "member",
+            Role::Admin => "admin",
+            Role::Owner => "owner",
+        }
+    }
+
+    /// Parse a stored role name; anything unrecognized falls back to `Member`
+    /// (fail closed — an unknown role gets the fewest privileges).
+    pub fn parse(s: &str) -> Role {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "owner" => Role::Owner,
+            "admin" => Role::Admin,
+            _ => Role::Member,
+        }
+    }
+
+    /// May invite new members and remove existing ones (Admin or Owner).
+    pub fn can_manage_members(&self) -> bool {
+        *self >= Role::Admin
+    }
+
+    /// May change other members' roles (Owner only).
+    pub fn can_change_roles(&self) -> bool {
+        *self == Role::Owner
+    }
+}
+
 /// A member of a share group — public identity only.
 ///
 /// Zero-knowledge: `public_key` is the member's X25519 **public** key (opaque
@@ -57,8 +104,11 @@ pub struct GroupMember {
     pub name: String,
     /// The member's X25519 public key, opaque to the server (base64/hex client-side).
     pub public_key: String,
-    /// Whether this member owns the group (owner-only ops like revoke).
-    pub is_owner: bool,
+    /// This member's role. `#[serde(default)]` keeps pre-role group JSON loadable
+    /// (those members load as `Member`; Postgres backfills Owner from the legacy
+    /// `is_owner` column on migration).
+    #[serde(default)]
+    pub role: Role,
     /// When the member joined (unix seconds).
     pub added_epoch: u64,
 }
@@ -108,11 +158,26 @@ impl ShareGroup {
         self.member_by_account(account_id).is_some()
     }
 
+    /// The role `account_id` holds in this group, if they are a member.
+    pub fn role_of(&self, account_id: &str) -> Option<Role> {
+        self.member_by_account(account_id).map(|m| m.role)
+    }
+
     /// Whether `account_id` owns this group.
     pub fn is_owner(&self, account_id: &str) -> bool {
-        self.member_by_account(account_id)
-            .map(|m| m.is_owner)
-            .unwrap_or(false)
+        self.role_of(account_id) == Some(Role::Owner)
+    }
+
+    /// Whether `account_id` may invite/remove members (Admin or Owner).
+    pub fn can_manage_members(&self, account_id: &str) -> bool {
+        self.role_of(account_id)
+            .is_some_and(|r| r.can_manage_members())
+    }
+
+    /// Whether `account_id` may change other members' roles (Owner only).
+    pub fn can_change_roles(&self, account_id: &str) -> bool {
+        self.role_of(account_id)
+            .is_some_and(|r| r.can_change_roles())
     }
 }
 
@@ -154,6 +219,15 @@ pub trait ShareGroupStore {
 
     /// Remove a member. Returns `true` if a member was removed.
     fn remove_member(&self, group_id: &str, member_id: &str) -> Result<bool, SyncError>;
+
+    /// Change a member's role. Returns `true` if a matching member was updated.
+    /// Authorization (who may call this) is enforced by the server, not the store.
+    fn set_member_role(
+        &self,
+        group_id: &str,
+        member_id: &str,
+        role: Role,
+    ) -> Result<bool, SyncError>;
 
     /// Replace the per-member wrapped keys under optimistic concurrency. Returns
     /// the new `keys_version`, or [`SyncError::Conflict`]/[`SyncError::NotFound`].
@@ -271,6 +345,25 @@ impl ShareGroupStore for MemoryShareGroupStore {
                 let before = g.members.len();
                 g.members.retain(|m| m.member_id != member_id);
                 Ok(g.members.len() != before)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn set_member_role(
+        &self,
+        group_id: &str,
+        member_id: &str,
+        role: Role,
+    ) -> Result<bool, SyncError> {
+        let mut map = self.inner.lock().unwrap();
+        match map
+            .get_mut(group_id)
+            .and_then(|g| g.members.iter_mut().find(|m| m.member_id == member_id))
+        {
+            Some(member) => {
+                member.role = role;
+                Ok(true)
             }
             None => Ok(false),
         }
@@ -430,6 +523,26 @@ impl ShareGroupStore for FileShareGroupStore {
         }
     }
 
+    fn set_member_role(
+        &self,
+        group_id: &str,
+        member_id: &str,
+        role: Role,
+    ) -> Result<bool, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        match self.read(group_id)? {
+            Some(mut g) => {
+                let Some(member) = g.members.iter_mut().find(|m| m.member_id == member_id) else {
+                    return Ok(false);
+                };
+                member.role = role;
+                self.write(&g)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     fn put_keys(
         &self,
         group_id: &str,
@@ -480,7 +593,7 @@ mod tests {
             account_id: "acct-owner".into(),
             name: "Alice".into(),
             public_key: "alice-pub".into(),
-            is_owner: true,
+            role: Role::Owner,
             added_epoch: 100,
         }
     }
@@ -491,7 +604,7 @@ mod tests {
             account_id: "acct-bob".into(),
             name: "Bob".into(),
             public_key: "bob-pub".into(),
-            is_owner: false,
+            role: Role::Member,
             added_epoch: 200,
         }
     }
