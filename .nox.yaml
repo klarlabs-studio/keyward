@@ -63,12 +63,9 @@ plugins:
   # so this costs nothing today and prevents a silent downgrade later.
   trust_policy: default
 
-  # Do NOT auto-install: red-team is currently a LOCAL development build
-  # (nox plugin install --local) carrying the per-tool safety declarations that
-  # are not in the published 0.6.6 artifact yet. Auto-install would silently
-  # replace it with the marketplace build and the passive `analyze` path would
-  # start failing again. Re-enable once a release ships.
-  auto_install: false
+  # Auto-install is back on: red-team 0.7.0 is published, signature-verified,
+  # and carries the per-tool safety declarations, so there is no longer a local
+  # development build to protect.
 
 scan:
   exclude:
