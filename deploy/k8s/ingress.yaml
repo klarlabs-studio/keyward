@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: proctor-sync-server
+  namespace: proctor
+  labels:
+    app.kubernetes.io/name: proctor-sync-server
+    app.kubernetes.io/part-of: proctor
+  annotations:
+    # cert-manager issues + renews the TLS cert for the host below. Replace with
+    # your ClusterIssuer name (must already exist in the cluster).
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Sealed-vault blobs can be larger than nginx's 1m default; raise the cap.
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        # CHANGE ME to your real hostname (cert-manager provisions this cert).
+        - sync.proctor.example
+      secretName: proctor-sync-tls
+  rules:
+    # CHANGE ME to match the host above.
+    - host: sync.proctor.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: proctor-sync-server
+                port:
+                  name: http

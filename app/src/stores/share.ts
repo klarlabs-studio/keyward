@@ -18,6 +18,11 @@ interface ShareState {
   busy: boolean;
   // The last minted invite, shown once to copy out-of-band.
   invite: { code: string; expiresEpoch: number } | null;
+  // Which family vault (if any) is currently shown in the MAIN 3-pane view.
+  // null = the personal vault is shown.
+  mainGroupId: string | null;
+  // The selected shared entry in the main view.
+  selectedSharedId: string | null;
 }
 
 export const useShareStore = defineStore('share', {
@@ -28,12 +33,23 @@ export const useShareStore = defineStore('share', {
     active: null,
     busy: false,
     invite: null,
+    mainGroupId: null,
+    selectedSharedId: null,
   }),
 
   getters: {
     isOwner(s): boolean {
       const id = s.identity?.id;
       return !!s.active?.members.some((m) => m.is_owner && m.member_id === id);
+    },
+    /** The family vault shown in the main view (loaded and matching), or null. */
+    mainVault(s): FamilyVault | null {
+      return s.active && s.active.groupId === s.mainGroupId ? s.active : null;
+    },
+    /** The selected shared entry in the main view. */
+    selectedShared(s): Entry | null {
+      if (!s.active || s.active.groupId !== s.mainGroupId) return null;
+      return s.active.entries.find((e) => e.id === s.selectedSharedId) ?? null;
     },
   },
 
@@ -102,6 +118,25 @@ export const useShareStore = defineStore('share', {
       this.invite = null;
     },
 
+    /** Show a family vault in the main 3-pane view (loading it if needed). */
+    async showInMain(ref: GroupRef): Promise<void> {
+      await this.open(ref.groupId, ref.name);
+      this.mainGroupId = ref.groupId;
+      const first = this.active?.entries[0]?.id ?? null;
+      this.selectedSharedId = first;
+    },
+
+    /** Return the main view to the personal vault. */
+    showPersonal() {
+      this.mainGroupId = null;
+      this.selectedSharedId = null;
+    },
+
+    /** Select a shared entry in the main view. */
+    selectShared(id: string) {
+      this.selectedSharedId = id;
+    },
+
     /** Mint a single-use invite for the open vault and surface it to copy. */
     async createInvite(): Promise<void> {
       if (!this.active) return;
@@ -137,6 +172,7 @@ export const useShareStore = defineStore('share', {
         );
         this.active.entries = next;
         this.active.contentVersion = version;
+        this.selectedSharedId = entry.id;
         return true;
       } catch (e) {
         toast(e instanceof Error ? e.message : 'Could not add the item');
@@ -159,6 +195,9 @@ export const useShareStore = defineStore('share', {
         );
         this.active.entries = next;
         this.active.contentVersion = version;
+        if (this.selectedSharedId === id) {
+          this.selectedSharedId = next[0]?.id ?? null;
+        }
       } catch (e) {
         toast(e instanceof Error ? e.message : 'Could not remove the item');
       } finally {
@@ -185,6 +224,7 @@ export const useShareStore = defineStore('share', {
     leave(groupId: string) {
       share.forgetGroup(groupId);
       if (this.active?.groupId === groupId) this.close();
+      if (this.mainGroupId === groupId) this.showPersonal();
       this.refresh();
     },
   },

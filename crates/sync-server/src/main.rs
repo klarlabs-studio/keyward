@@ -8,17 +8,29 @@
 //! (`If-Match`), so a stale push gets 409 and must pull first.
 //!
 //! Config (env):
-//!   PROCTOR_SYNC_ADDR       listen address (default 127.0.0.1:8787)
-//!   PROCTOR_SYNC_DIR        storage dir (FileStore + FileAccountStore); unset → in-memory
-//!   PROCTOR_SYNC_TOKENS     optional pre-seed "token1:account1,token2:account2"
-//!                           (the registry is the source of truth; this is a fallback
-//!                           for tests/bootstrapping)
-//!   PROCTOR_SYNC_TOKEN_TTL  optional device-token lifetime in seconds, applied on
-//!                           register / add-device (unset or 0 → tokens never expire,
-//!                           the backward-compatible default)
+//!   PROCTOR_SYNC_ADDR             listen address (default 127.0.0.1:8787)
+//!   PROCTOR_SYNC_DIR              storage dir (FileStore + FileAccountStore); unset → in-memory
+//!   PROCTOR_SYNC_TOKENS           optional pre-seed "token1:account1,token2:account2"
+//!                                 (the registry is the source of truth; this is a fallback
+//!                                 for tests/bootstrapping)
+//!   PROCTOR_SYNC_TOKEN_TTL        optional device-token lifetime in seconds, applied on
+//!                                 register / add-device (unset or 0 → tokens never expire,
+//!                                 the backward-compatible default)
+//!   PROCTOR_SYNC_RATELIMIT_PER_MIN  per-client-IP fixed-window rate limit for the
+//!                                 abuse-prone unauthenticated/expensive endpoints
+//!                                 (POST /v1/register, POST /v1/groups/{id}/invites).
+//!                                 Unset → 30/min; 0 disables limiting. Over the limit → 429.
+//!
+//! Abuse controls: the endpoints above are rate-limited per client IP (see
+//! `PROCTOR_SYNC_RATELIMIT_PER_MIN`) to close the DoS item in ADR-0004's threat
+//! model (invite/register spam). The limiter is in-memory and dependency-free.
+//!
+//! Health (no auth, for k8s / load-balancer probes):
+//!   GET    /healthz           -> 200 {status:"ok"}   (liveness)
+//!   GET    /readyz            -> 200 {status:"ok"}   (readiness)
 //!
 //! API (every response, including errors, carries permissive CORS headers):
-//!   POST   /v1/register       -> 200 {account_id, device_token, device_id}    (no auth)
+//!   POST   /v1/register       -> 200 {account_id, device_token, device_id}    (no auth; rate-limited)
 //!   POST   /v1/devices        -> 200 {device_token, device_id} (same account) | 401
 //!   POST   /v1/devices/rotate -> 200 {device_token, device_id} (same device)  | 401
 //!   GET    /v1/devices        -> 200 {devices:[{id,label,created_epoch,expires_epoch,current}]} | 401
@@ -32,7 +44,7 @@
 //! Family sharing — the zero-knowledge share-group relay (all auth'd):
 //!   POST   /v1/groups                     -> 200 {group_id} (owner from body member)
 //!   GET    /v1/groups/{id}                -> 200 {group_id,members,keys_version,content_version} | 403/404
-//!   POST   /v1/groups/{id}/invites        -> 200 {invite_code,expires_epoch} (member; body {ttl_seconds})
+//!   POST   /v1/groups/{id}/invites        -> 200 {invite_code,expires_epoch} (member; body {ttl_seconds}; rate-limited)
 //!   POST   /v1/groups/{id}/members        -> 200 {joined:true} | 403 (invitee; body {code,member_id,name,public_key})
 //!   GET    /v1/groups/{id}/keys           -> 200 + wrapped-keys blob (+ X-Vault-Version) | 404
 //!   PUT    /v1/groups/{id}/keys           -> 200 + version | 409 (member; If-Match)
@@ -50,6 +62,7 @@ use proctor_sync::{
 };
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_http::{Header, Method, Request, Response, Server};
 
@@ -58,6 +71,82 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Fixed-window in-memory rate limiter, keyed by client IP. Dependency-free and
+/// thread-safe (a single `Mutex<HashMap>` — the request loop is not hot enough
+/// to need sharded locking). Guards the abuse-prone unauthenticated/expensive
+/// endpoints (register + invite mint) against the DoS vector in ADR-0004.
+///
+/// `limit` requests are allowed per `window_secs` per key; a `limit` of `0`
+/// disables limiting entirely (every request is allowed).
+struct RateLimiter {
+    limit: u32,
+    window_secs: u64,
+    windows: Mutex<HashMap<String, Window>>,
+}
+
+/// One key's current fixed window: when it started and how many hits it has taken.
+struct Window {
+    start: u64,
+    count: u32,
+}
+
+/// Opportunistic-sweep threshold: once the map exceeds this many keys, expired
+/// windows are dropped on the next `allow` call so memory stays bounded even
+/// under a churn of distinct source IPs.
+const RATE_LIMIT_MAX_KEYS: usize = 100_000;
+
+impl RateLimiter {
+    /// A limiter allowing `limit` hits per 60s window (`limit == 0` disables it).
+    fn per_minute(limit: u32) -> Self {
+        RateLimiter {
+            limit,
+            window_secs: 60,
+            windows: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Read `PROCTOR_SYNC_RATELIMIT_PER_MIN`. Unset/unparseable → 30/min (a
+    /// sensible default that protects the managed cloud out of the box); an
+    /// explicit `0` disables limiting.
+    fn from_env() -> Self {
+        let limit = std::env::var("PROCTOR_SYNC_RATELIMIT_PER_MIN")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .unwrap_or(30);
+        RateLimiter::per_minute(limit)
+    }
+
+    /// Record a hit for `key` at `now`, returning `true` if it is within the
+    /// limit and `false` if the limit is exceeded (the caller should 429).
+    fn allow(&self, key: &str, now: u64) -> bool {
+        if self.limit == 0 {
+            return true;
+        }
+        let mut windows = self.windows.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Bound memory: drop windows that have fully expired before inserting more.
+        if windows.len() > RATE_LIMIT_MAX_KEYS {
+            let window_secs = self.window_secs;
+            windows.retain(|_, w| now.saturating_sub(w.start) < window_secs);
+        }
+
+        let window = windows.entry(key.to_string()).or_insert(Window {
+            start: now,
+            count: 0,
+        });
+        if now.saturating_sub(window.start) >= self.window_secs {
+            // The previous window has elapsed — start a fresh one.
+            window.start = now;
+            window.count = 0;
+        }
+        if window.count >= self.limit {
+            return false;
+        }
+        window.count += 1;
+        true
+    }
 }
 
 /// Bundle of the two driven ports plus the optional static token pre-seed.
@@ -73,6 +162,8 @@ struct App {
     /// Optional device-token lifetime (seconds) applied on register/add-device.
     /// `None` → tokens never expire (backward-compatible default).
     token_ttl: Option<u64>,
+    /// Per-client-IP rate limiter for the abuse-prone endpoints (register + invite mint).
+    limiter: RateLimiter,
 }
 
 /// Read `PROCTOR_SYNC_TOKEN_TTL` as an optional lifetime in seconds. Unset,
@@ -106,12 +197,15 @@ fn main() {
         ),
     };
 
+    let limiter = RateLimiter::from_env();
+
     let app = App {
         store,
         accounts,
         groups,
         seed_tokens,
         token_ttl,
+        limiter,
     };
 
     let server = Server::http(&addr).unwrap_or_else(|e| {
@@ -119,11 +213,15 @@ fn main() {
         std::process::exit(1);
     });
     eprintln!(
-        "proctor-sync-server listening on {addr} ({} pre-seeded token(s), token ttl: {})",
+        "proctor-sync-server listening on {addr} ({} pre-seeded token(s), token ttl: {}, rate limit: {})",
         app.seed_tokens.len(),
         match app.token_ttl {
             Some(ttl) => format!("{ttl}s"),
             None => "none".to_string(),
+        },
+        match app.limiter.limit {
+            0 => "disabled".to_string(),
+            n => format!("{n}/min per IP"),
         }
     );
 
@@ -214,6 +312,22 @@ fn identity_for(request: &Request, app: &App) -> Option<TokenIdentity> {
     })
 }
 
+/// Client IP (without the ephemeral port) for rate-limit keying. Falls back to a
+/// shared `"unknown"` bucket if the peer address is unavailable (e.g. a Unix
+/// socket) so such callers are still collectively bounded rather than unlimited.
+fn client_ip(request: &Request) -> String {
+    request
+        .remote_addr()
+        .map(|addr| addr.ip().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Whether this request should be rejected with 429. Records the hit against the
+/// caller's IP; returns `true` when the per-IP limit is exceeded.
+fn rate_limited(request: &Request, app: &App) -> bool {
+    !app.limiter.allow(&client_ip(request), now_unix())
+}
+
 fn if_match(request: &Request) -> Option<u64> {
     request
         .headers()
@@ -237,8 +351,24 @@ fn handle(request: Request, app: &App) {
         return;
     }
 
+    // Health probes — no auth, no rate limit, so k8s liveness/readiness never
+    // gets throttled or blocked. Answered before the versioned API.
+    if method == Method::Get && (url == "/healthz" || url == "/readyz") {
+        respond(request, json(r#"{"status":"ok"}"#.to_string(), 200));
+        return;
+    }
+
     match (&method, url.as_str()) {
-        (Method::Post, "/v1/register") => handle_register(request, app),
+        (Method::Post, "/v1/register") => {
+            if rate_limited(&request, app) {
+                respond(
+                    request,
+                    text("rate limit exceeded — try again shortly", 429),
+                );
+            } else {
+                handle_register(request, app);
+            }
+        }
         (Method::Post, "/v1/devices/rotate") => handle_rotate_device(request, app),
         (Method::Post, "/v1/devices") => handle_add_device(request, app),
         (Method::Get, "/v1/devices") => handle_list_devices(request, app),
@@ -511,7 +641,16 @@ fn handle_groups(request: Request, app: &App, method: Method, url: &str) {
     let segs: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
     match (segs.as_slice(), &method) {
         ([id], Method::Get) => handle_group_get(request, app, &account, id),
-        ([id, "invites"], Method::Post) => handle_group_invite(request, app, &account, id),
+        ([id, "invites"], Method::Post) => {
+            if rate_limited(&request, app) {
+                respond(
+                    request,
+                    text("rate limit exceeded — try again shortly", 429),
+                );
+            } else {
+                handle_group_invite(request, app, &account, id);
+            }
+        }
         ([id, "members"], Method::Post) => handle_group_join(request, app, &account, id),
         ([id, "members", mid], Method::Delete) => {
             handle_group_remove(request, app, &account, id, mid)
@@ -774,4 +913,68 @@ fn handle_group_blob(
 fn respond_500(request: Request, err: &SyncError) {
     eprintln!("error: {err}");
     respond(request, text("server error", 500));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_up_to_the_limit_then_blocks_within_a_window() {
+        let rl = RateLimiter::per_minute(3);
+        // First three hits in the same second are allowed.
+        assert!(rl.allow("1.2.3.4", 1000));
+        assert!(rl.allow("1.2.3.4", 1000));
+        assert!(rl.allow("1.2.3.4", 1005));
+        // The fourth within the 60s window is blocked.
+        assert!(!rl.allow("1.2.3.4", 1010));
+        assert!(!rl.allow("1.2.3.4", 1059));
+    }
+
+    #[test]
+    fn window_resets_after_it_elapses() {
+        let rl = RateLimiter::per_minute(2);
+        assert!(rl.allow("ip", 0));
+        assert!(rl.allow("ip", 30));
+        assert!(!rl.allow("ip", 59)); // still inside the first 60s window
+                                      // At t=60 the window has elapsed → a fresh allowance.
+        assert!(rl.allow("ip", 60));
+        assert!(rl.allow("ip", 61));
+        assert!(!rl.allow("ip", 62));
+    }
+
+    #[test]
+    fn limits_are_per_key() {
+        let rl = RateLimiter::per_minute(1);
+        assert!(rl.allow("a", 0));
+        assert!(!rl.allow("a", 0));
+        // A different key has its own independent budget.
+        assert!(rl.allow("b", 0));
+        assert!(!rl.allow("b", 0));
+    }
+
+    #[test]
+    fn zero_limit_disables_limiting() {
+        let rl = RateLimiter::per_minute(0);
+        for _ in 0..1000 {
+            assert!(rl.allow("anyone", 0));
+        }
+    }
+
+    #[test]
+    fn expired_windows_are_swept_when_the_map_grows() {
+        let rl = RateLimiter::per_minute(1);
+        // Seed more than the sweep threshold of distinct, long-expired keys.
+        for i in 0..=RATE_LIMIT_MAX_KEYS {
+            rl.allow(&format!("k{i}"), 0);
+        }
+        // A hit far in the future triggers the opportunistic sweep; expired
+        // entries are dropped so the map does not grow without bound.
+        rl.allow("trigger", 10_000);
+        let len = rl.windows.lock().unwrap().len();
+        assert!(
+            len <= 2,
+            "expected stale windows to be swept, map still holds {len} entries"
+        );
+    }
 }

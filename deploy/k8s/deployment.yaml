@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proctor-sync-server
+  namespace: proctor
+  labels:
+    app.kubernetes.io/name: proctor-sync-server
+    app.kubernetes.io/part-of: proctor
+spec:
+  # Single writer: the server persists to a ReadWriteOnce PVC, so exactly one
+  # replica may mount it. Do NOT scale this beyond 1 without moving to a shared
+  # backing store; a second replica would fail to attach the volume.
+  replicas: 1
+  # Recreate (not RollingUpdate): a rolling update would briefly run two pods,
+  # and the second cannot attach the RWO volume. Recreate stops the old pod first.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: proctor-sync-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: proctor-sync-server
+        app.kubernetes.io/part-of: proctor
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        # fsGroup makes the PVC group-owned by the app user so it can write /data.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: proctor-sync-server
+          # Parameterize this image ref for your registry / release tag.
+          image: ghcr.io/klarlabs/proctor-sync-server:1.30.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8787
+          env:
+            - name: PROCTOR_SYNC_ADDR
+              value: "0.0.0.0:8787"
+            - name: PROCTOR_SYNC_DIR
+              value: "/data"
+            # Device-token lifetime in seconds (0 / unset → tokens never expire).
+            # 30 days here; tune to your security posture.
+            - name: PROCTOR_SYNC_TOKEN_TTL
+              value: "2592000"
+            # Per-client-IP rate limit for register + invite mint (0 disables).
+            - name: PROCTOR_SYNC_RATELIMIT_PER_MIN
+              value: "30"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: "500m"
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: proctor-sync-data

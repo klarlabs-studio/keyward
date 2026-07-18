@@ -91,6 +91,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
       </div>
 
       <div class="dlg-body">
+        <!-- Honesty: the sharing crypto has not had a formal external review yet. -->
+        <p class="note proto">
+          <b>Prototype.</b> Family sharing works, but its cryptography hasn't had an
+          independent security review yet. Don't trust it with irreplaceable secrets
+          until it has.
+        </p>
+
         <!-- Sharing needs cloud sync. -->
         <p v-if="!s.available" class="note warn">
           Family sharing runs over cloud sync. Turn on <b>Cloud sync</b> first, then
@@ -481,6 +488,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 .note.warn {
   background: var(--warn-soft);
   color: var(--warn);
+}
+.note.proto {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border: 1px solid var(--accent);
+}
+.note.proto b {
+  color: var(--accent-ink);
 }
 .note a {
   color: inherit;

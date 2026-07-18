@@ -4,12 +4,15 @@
 
 import { ref } from 'vue';
 import { useVaultStore } from '@/stores/vault';
+import { useShareStore } from '@/stores/share';
 import BrandBar from './BrandBar.vue';
 import TopBar from './TopBar.vue';
 import SideNav from './SideNav.vue';
 import ItemList from './ItemList.vue';
 import ItemDetail from './ItemDetail.vue';
 import WatchtowerView from './WatchtowerView.vue';
+import FamilyList from './FamilyList.vue';
+import FamilyDetail from './FamilyDetail.vue';
 import AddItemDialog from './AddItemDialog.vue';
 import EmergencyKitDialog from './EmergencyKitDialog.vue';
 import ImportDialog from './ImportDialog.vue';
@@ -18,6 +21,7 @@ import SyncDialog from './SyncDialog.vue';
 import ShareDialog from './ShareDialog.vue';
 
 const vault = useVaultStore();
+const share = useShareStore();
 const showAdd = ref(false);
 const showKit = ref(false);
 const showImport = ref(false);
@@ -32,7 +36,7 @@ const navOpen = ref(false);
   <div class="app" :class="{ 'nav-open': navOpen }">
     <BrandBar />
     <TopBar
-      @new-item="showAdd = true"
+      @new-item="share.mainGroupId ? (showShare = true) : (showAdd = true)"
       @view-kit="showKit = true"
       @import="showImport = true"
       @export="showExport = true"
@@ -42,9 +46,15 @@ const navOpen = ref(false);
     />
     <div v-if="navOpen" class="nav-backdrop" @click="navOpen = false"></div>
     <SideNav :open="navOpen" @navigate="navOpen = false" />
-    <ItemList />
-    <WatchtowerView v-if="vault.filter === 'watchtower'" />
-    <ItemDetail v-else />
+    <template v-if="share.mainGroupId">
+      <FamilyList @manage="showShare = true" />
+      <FamilyDetail />
+    </template>
+    <template v-else>
+      <ItemList />
+      <WatchtowerView v-if="vault.filter === 'watchtower'" />
+      <ItemDetail v-else />
+    </template>
   </div>
   <AddItemDialog v-if="showAdd" @close="showAdd = false" />
   <ImportDialog v-if="showImport" @close="showImport = false" />

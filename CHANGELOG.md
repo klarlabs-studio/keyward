@@ -3,6 +3,48 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.31.0] — 2026-07-18
+
+**Three parallel tracks: an honesty banner, the managed-cloud (k8s) deployment, and
+shared items in the main vault view.**
+
+### Added — shared items in the main 3-pane view
+- Selecting a family vault from a new **"Family vaults"** section in the side rail
+  now shows its items in the main list + detail panes (`FamilyList.vue` /
+  `FamilyDetail.vue`), reusing the personal vault's row/card styling — with
+  copy/reveal, remove, "‹ Personal vault", and "Manage & invite". "New item" while
+  a family vault is active routes to the sharing manager. The personal 3-pane is
+  unchanged; a small `mainGroupId`/`selectedShared` layer in the share store drives
+  the switch. Verified live (visible browser): create a family vault → add "Netflix"
+  → it appears in the sidebar and renders in the main panes, zero console errors.
+
+### Added — honesty: a prototype banner
+- The Family sharing dialog now leads with a persistent **"Prototype — crypto not
+  independently reviewed"** notice, so no one trusts sharing with irreplaceable
+  secrets before the formal review.
+
+### Added — managed cloud (Kubernetes) — `deploy/`
+- The managed cloud is a **paid, Kubernetes-hosted** instance (self-host stays
+  free — open-core). New `deploy/`: a production **Dockerfile** (multi-stage,
+  server-only, non-root, `/data` volume, healthcheck) and **k8s manifests**
+  (Deployment with non-root/read-only-rootfs/dropped-caps + probes, Service, PVC,
+  Ingress with **cert-manager TLS**, Namespace, Kustomization) plus a runbook.
+  TLS terminates at the ingress — the Rust server stays plain HTTP behind it.
+- **`proctor-sync-server`**: added `GET /healthz` + `/readyz` (unauthenticated,
+  not rate-limited) and a dependency-free per-client-IP **rate limiter**
+  (fixed-window) on `POST /v1/register` and invite-mint, returning 429 over the
+  limit (`PROCTOR_SYNC_RATELIMIT_PER_MIN`, default 30/min, `0` disables). Closes the
+  invite/register DoS item from ADR-0004's threat model. 5 new unit tests; verified
+  at runtime (healthz 200; 4th register → 429 at limit 3).
+
+### Notes
+- The 16 new `deploy/` scanner findings are baselined with rationale (single
+  replica + Recreate are required by the RWO file-backed store; ingress TLS is
+  present; NetworkPolicy/HA deferred to managed-cloud GA; `0.0.0.0` is the intended
+  container bind). Grade stays clean (0 active findings).
+- Still a hard gate before GA: a formal external review of the sharing crypto, and
+  digest-pinning + HA hardening for the paid cloud.
+
 ## [1.30.0] — 2026-07-18
 
 **Family sharing, slice 3: the app UX — a person can now actually share a vault.**

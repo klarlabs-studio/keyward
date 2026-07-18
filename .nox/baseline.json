@@ -512,6 +512,134 @@
       "severity": "medium",
       "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
       "created_at": "2026-07-17T11:58:18.804646Z"
+    },
+    {
+      "fingerprint": "88a34f2ae4316e9ad33e037ff656968431c455ee9e68b17cd2847024c2fd3994",
+      "rule_id": "CONT-001",
+      "file_path": "deploy/Dockerfile",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "cc2389130b8b14433d17f9b0101c40cf06dcd7a1a646cabeb8d8bfac0b0aed36",
+      "rule_id": "CONT-001",
+      "file_path": "deploy/Dockerfile",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "2ee4d5c6d0ebff1e198f39147b3958d6c64a103714241d1810fc46119440fcc7",
+      "rule_id": "IAC-131",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "56b94d7e8d6bb05f1ea39fd7a6bfb42a75fe597d486e418c29e2ac54c870e914",
+      "rule_id": "IAC-141",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "1986017a5874eab47fe7f803905a15c489af1e9035df7d300ad0ff46670db503",
+      "rule_id": "IAC-286",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "low",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "85b7f20990ffccfb30b519db457890575a6ce38dbfc352d097dad5941931f3ea",
+      "rule_id": "IAC-296",
+      "file_path": "deploy/k8s/ingress.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "cdb28c809666687dd66b816494e6bc7983383744f957f5717f1c1804bfd5a4ae",
+      "rule_id": "IAC-363",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "c68a7332f34d31549185248cd58d28ac143d7b714fd9e68a7505a58c4fd0a4e8",
+      "rule_id": "IAC-370",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "low",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "8b76f07ba1ee99e66718fdd9c8928aa8346c1997e1e9b8fc5c6b8179e3117515",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/deployment.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "e193b37009210456298b28bab00609e0e014f49b164930ecbf3a1e5ca769966c",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/ingress.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "344aef474286acfd7c7b8fe626723b8f0dcc8ec9f0fe9f6533337837a22642a3",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/kustomization.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "bfb25a39ce7122634761a1e275ab58fa3f86d45608b7ab87e9bc854ae9c516a3",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/namespace.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "139067b670d872cc2b872b8691832467affbf8e8cde7ab76d67ffffbc34993dc",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/pvc.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "b8f769f44d4496f17211d12e7eebb94c5ccc025468da988ac16db890368d84c0",
+      "rule_id": "IAC-464",
+      "file_path": "deploy/k8s/service.yaml",
+      "severity": "medium",
+      "reason": "deploy/ k8s template — intentional design for the self-host / paid-managed-cloud target (v1.31.0). Single replica + Recreate strategy are REQUIRED by the file-backed store on a ReadWriteOnce PVC (documented in deploy/README.md). Ingress TLS IS present via cert-manager. NetworkPolicy/HA/PodDisruptionBudget deliberately deferred (single stateful replica). Base images pinned to tags (rust:1.90-bookworm, debian:bookworm-slim) — acceptable for the OSS template; pin to digests at managed-cloud release. IAC-464 namespace findings are informational. Revisit these at managed-cloud GA.",
+      "created_at": "2026-07-18T07:23:04.439704Z"
+    },
+    {
+      "fingerprint": "0c6f6dabd0dbb2ccf8f6756a684e7be8fb9fbe3f08a45b8afc93c5352c226f30",
+      "rule_id": "DATA-005",
+      "file_path": "deploy/Dockerfile",
+      "severity": "medium",
+      "reason": "False positive: deploy/Dockerfile sets PROCTOR_SYNC_ADDR=0.0.0.0:8787 — 0.0.0.0 is the intended bind-all address for a containerized server (behind the k8s ingress), not a hardcoded public IP or PII.",
+      "created_at": "2026-07-18T07:23:20.694309Z"
+    },
+    {
+      "fingerprint": "ae34cd2f0046360bd5d6d37b50fc30897aeda21f85dbdd1930351cca54405332",
+      "rule_id": "SEC-080",
+      "file_path": "app/src/components/FamilyDetail.vue",
+      "severity": "medium",
+      "reason": "False positive: FamilyDetail.vue renders the selected shared login's password in the vault UI (masked, with a Show toggle) — this is displaying a user's own vault field, not a hardcoded credential/secret.",
+      "created_at": "2026-07-18T07:23:39.997898Z"
     }
   ]
 }
