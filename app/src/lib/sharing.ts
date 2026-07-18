@@ -19,6 +19,8 @@ import {
   share_vault_key,
   unwrap_vault_key,
   grant_group_access,
+  seal_recovery,
+  open_recovery,
 } from '../wasm/pkg/passbook_wasm.js';
 import { ensureReady } from './passbook';
 import { syncConfig } from './sync';
@@ -89,6 +91,8 @@ export interface FamilyVault {
   removed: boolean;
   /** Fingerprint of the member directory, for out-of-band comparison. */
   safety: string;
+  /** Names of members this load just granted access to (auto-reconcile). */
+  justGranted: string[];
   keysVersion: string | null;
   contentVersion: string | null;
 }
@@ -291,6 +295,106 @@ export async function createFamilyVault(memberName: string, vaultName: string): 
   return groupId;
 }
 
+// ----- Recovery contacts ----------------------------------------------------
+//
+// Losing the Emergency Kit (the device Secret Key) otherwise means losing the
+// vault forever. A member can seal their Secret Key to a family member, who can
+// hand it back later. The contact still cannot open the vault: the Secret Key is
+// only one of the two 2SKD factors and the master password is never shared.
+//
+// The sealed blob rides inside the shared vault's content as a reserved entry, so
+// it syncs with the family and needs no new server endpoint. Every member can see
+// the ciphertext; only the addressed contact can open it.
+
+/** Reserved entry title marking a recovery blob (hidden from the item list). */
+const RECOVERY_TITLE = '__recovery__';
+
+/** What a recovery entry carries (stored as the entry's SecureNote body). */
+interface RecoveryPayload {
+  /** member_id of the person being recovered (the sealer). */
+  for: string;
+  forName: string;
+  /** member_id of the contact who can open it. */
+  to: string;
+  toName: string;
+  /** The `SealedBox` JSON. */
+  sealed: string;
+}
+
+/** True if this entry is a reserved recovery blob rather than a real item. */
+export function isRecoveryEntry(e: Entry): boolean {
+  return e.title === RECOVERY_TITLE;
+}
+
+/** Real, user-visible shared items (recovery blobs filtered out). */
+export function visibleEntries(entries: Entry[]): Entry[] {
+  return entries.filter((e) => !isRecoveryEntry(e));
+}
+
+function payloadOf(e: Entry): RecoveryPayload | null {
+  if (!isRecoveryEntry(e) || !('SecureNote' in e.content)) return null;
+  try {
+    return JSON.parse(e.content.SecureNote) as RecoveryPayload;
+  } catch {
+    return null;
+  }
+}
+
+/** Recovery blobs addressed to me — the ones I can open for a family member. */
+export function recoveryHeldBy(entries: Entry[], myMemberId: string): RecoveryPayload[] {
+  return entries
+    .map(payloadOf)
+    .filter((p): p is RecoveryPayload => p !== null && p.to === myMemberId);
+}
+
+/** My own recovery contact, if I've set one. */
+export function myRecoveryContact(entries: Entry[], myMemberId: string): RecoveryPayload | null {
+  return entries.map(payloadOf).find((p) => p !== null && p.for === myMemberId) ?? null;
+}
+
+/**
+ * Seal `secretKey` to `contact` and return the entries with the recovery blob
+ * added (replacing any previous one for me). The caller persists them.
+ */
+export async function withRecoveryContact(
+  entries: Entry[],
+  me: MemberIdentity,
+  contact: GroupMemberView,
+  secretKey: string,
+): Promise<Entry[]> {
+  await ensureReady();
+  const sealed = seal_recovery(
+    JSON.stringify({ id: contact.member_id, name: contact.name, public_key: contact.public_key }),
+    secretKey,
+  );
+  const payload: RecoveryPayload = {
+    for: me.id,
+    forName: me.name,
+    to: contact.member_id,
+    toName: contact.name,
+    sealed,
+  };
+  const entry: Entry = {
+    id: `rec-${me.id}`,
+    title: RECOVERY_TITLE,
+    tags: [],
+    favorite: false,
+    updated_epoch: Math.floor(Date.now() / 1000),
+    content: { SecureNote: JSON.stringify(payload) },
+  };
+  // Replace any previous recovery blob for me.
+  const others = entries.filter((e) => payloadOf(e)?.for !== me.id);
+  return [...others, entry];
+}
+
+/** Open a recovery blob addressed to me, returning the family member's Secret Key. */
+export async function revealRecovery(payload: RecoveryPayload, mySecret: string): Promise<string> {
+  await ensureReady();
+  return open_recovery(payload.sealed, mySecret);
+}
+
+export type { RecoveryPayload };
+
 /** Compose the shareable invite string: the group id + the single-use code. */
 export function formatInvite(groupId: string, code: string): string {
   return `${groupId}.${code}`;
@@ -376,6 +480,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
       hasAccess: false,
       removed: true,
       safety: '',
+      justGranted: [],
       keysVersion: null,
       contentVersion: null,
     };
@@ -388,6 +493,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     entries: [],
     hasAccess: false,
     removed: false,
+    justGranted: [],
     // Computed from the directory the relay just served us — comparing it
     // out of band is what catches a substituted key.
     safety: await safetyNumber(group.members),
@@ -404,9 +510,13 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     return base; // joined but not yet granted access
   }
 
-  // Auto-reconcile: grant any member in the directory who lacks a wrap.
+  // Auto-reconcile: grant any member in the directory who lacks a wrap. This is
+  // the zero-knowledge step that can only happen on a device that already holds
+  // the key — we report how many we just let in so the UI can say so out loud,
+  // instead of the joiner waiting invisibly.
   const wrappedIds = wrappedMemberIds(keys.json);
   const missing = group.members.filter((m) => !wrappedIds.has(m.member_id));
+  const grantedNames: string[] = [];
   if (missing.length > 0) {
     let updated = keys.json;
     for (const m of missing) {
@@ -416,6 +526,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
         member.id,
         JSON.stringify({ id: m.member_id, name: m.name, public_key: m.public_key }),
       );
+      grantedNames.push(m.name || m.member_id);
     }
     const newVersion = await putKeys(groupId, updated, keys.version);
     keys = { json: updated, version: newVersion };
@@ -426,7 +537,13 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
   const entries: Entry[] = content
     ? (JSON.parse(open_group_content(content.json, vaultKey)) as Entry[])
     : [];
-  return { ...base, entries, hasAccess: true, contentVersion: content?.version ?? null };
+  return {
+    ...base,
+    entries,
+    hasAccess: true,
+    justGranted: grantedNames,
+    contentVersion: content?.version ?? null,
+  };
 }
 
 /** The set of member ids currently wrapped in a SharedVault JSON. */

@@ -37,6 +37,12 @@
 //!   GET    /healthz           -> 200 {status:"ok"}   (liveness)
 //!   GET    /readyz            -> 200 {status:"ok"}   (readiness)
 //!   GET    /metrics           -> 200 Prometheus exposition (aggregate counters only)
+//!                               Includes the family-sharing funnel — registrations,
+//!                               groups created, invites minted/redeemed/rejected (by
+//!                               reason), key + content writes, members removed, and
+//!                               paywall (402) denials — so we can see where real
+//!                               families drop out. Counts only: no account, group,
+//!                               member, or network identifiers are ever exposed.
 //!
 //! API (every response, including errors, carries permissive CORS headers):
 //!   POST   /v1/register       -> 200 {account_id, device_token, device_id}    (no auth; rate-limited)
@@ -209,10 +215,108 @@ struct Metrics {
     requests_total: AtomicU64,
     start_epoch: u64,
     backend: &'static str,
+    /// The family-sharing funnel (see [`Funnel`]).
+    funnel: Funnel,
+}
+
+/// The family-sharing funnel. A request counter tells us the server is *busy*; it
+/// says nothing about whether a family actually ends up sharing anything. These
+/// count each step of the real journey — register → create a group → mint an invite
+/// → redeem it → grant keys → store a shared item — plus the two places people fall
+/// out (invite rejections and paywall denials), so a drop-off is visible instead of
+/// inferred.
+///
+/// Deliberately aggregate: every counter is a plain total with no account, group,
+/// member, device, or IP dimension. Metrics must never reconstruct the family graph
+/// that the zero-knowledge design exists to hide.
+#[derive(Default)]
+struct Funnel {
+    /// Funnel entry: an account exists at all.
+    accounts_registered: AtomicU64,
+    /// A family vault was created (the owner cleared the Family-plan gate).
+    groups_created: AtomicU64,
+    /// An invite was minted — intent to share, not yet a shared family.
+    invites_minted: AtomicU64,
+    /// An invite was actually redeemed: a second person is in the vault. The
+    /// minted→redeemed gap is the core conversion of the whole feature.
+    invites_redeemed: AtomicU64,
+    /// Redemption failures, split by reason so we can tell a UX problem (codes
+    /// mistyped/reused) from a latency problem (24h TTL ran out) from a plain bug.
+    invites_rejected_invalid_or_used: AtomicU64,
+    invites_rejected_expired: AtomicU64,
+    invites_rejected_no_such_group: AtomicU64,
+    /// A wrapped-keys push succeeded — a member was actually granted crypto access,
+    /// or a key rotation landed. Joining without this is a half-finished share.
+    group_keys_writes: AtomicU64,
+    /// A shared-content push succeeded — someone actually put an item in the family
+    /// vault. This is the "the feature delivered value" signal.
+    group_content_writes: AtomicU64,
+    /// A member was removed (offboarding works, and how often it happens).
+    members_removed: AtomicU64,
+    /// Paywall hits (402), split by which gate fired — how much demand the free
+    /// tier is actually leaving on the table.
+    entitlement_denied_device_limit: AtomicU64,
+    entitlement_denied_family_plan: AtomicU64,
+}
+
+impl Funnel {
+    /// Read every counter once, for rendering. Relaxed loads: each counter is
+    /// independent and a scrape needs no cross-counter consistency.
+    fn snapshot(&self) -> FunnelSnapshot {
+        let load = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        FunnelSnapshot {
+            accounts_registered: load(&self.accounts_registered),
+            groups_created: load(&self.groups_created),
+            invites_minted: load(&self.invites_minted),
+            invites_redeemed: load(&self.invites_redeemed),
+            invites_rejected_invalid_or_used: load(&self.invites_rejected_invalid_or_used),
+            invites_rejected_expired: load(&self.invites_rejected_expired),
+            invites_rejected_no_such_group: load(&self.invites_rejected_no_such_group),
+            group_keys_writes: load(&self.group_keys_writes),
+            group_content_writes: load(&self.group_content_writes),
+            members_removed: load(&self.members_removed),
+            entitlement_denied_device_limit: load(&self.entitlement_denied_device_limit),
+            entitlement_denied_family_plan: load(&self.entitlement_denied_family_plan),
+        }
+    }
+}
+
+/// A point-in-time copy of [`Funnel`], so rendering stays a pure function of plain
+/// values (and so the render signature stays a named type rather than a 12-tuple).
+#[derive(Default, Clone, Copy)]
+struct FunnelSnapshot {
+    accounts_registered: u64,
+    groups_created: u64,
+    invites_minted: u64,
+    invites_redeemed: u64,
+    invites_rejected_invalid_or_used: u64,
+    invites_rejected_expired: u64,
+    invites_rejected_no_such_group: u64,
+    group_keys_writes: u64,
+    group_content_writes: u64,
+    members_removed: u64,
+    entitlement_denied_device_limit: u64,
+    entitlement_denied_family_plan: u64,
+}
+
+/// Everything a scrape renders, as plain values.
+struct MetricsSnapshot<'a> {
+    requests_total: u64,
+    uptime_secs: u64,
+    backend: &'a str,
+    version: &'a str,
+    funnel: FunnelSnapshot,
 }
 
 /// Render the Prometheus exposition text. Pure, so it can be unit-tested.
-fn render_metrics(requests_total: u64, uptime_secs: u64, backend: &str, version: &str) -> String {
+fn render_metrics(m: &MetricsSnapshot) -> String {
+    let MetricsSnapshot {
+        requests_total,
+        uptime_secs,
+        backend,
+        version,
+        funnel: f,
+    } = m;
     format!(
         "# HELP proctor_requests_total Total HTTP requests handled.\n\
          # TYPE proctor_requests_total counter\n\
@@ -222,18 +326,61 @@ fn render_metrics(requests_total: u64, uptime_secs: u64, backend: &str, version:
          proctor_uptime_seconds {uptime_secs}\n\
          # HELP proctor_build_info Static build/runtime info (always 1).\n\
          # TYPE proctor_build_info gauge\n\
-         proctor_build_info{{backend=\"{backend}\",version=\"{version}\"}} 1\n"
+         proctor_build_info{{backend=\"{backend}\",version=\"{version}\"}} 1\n\
+         # HELP proctor_accounts_registered_total Accounts successfully registered.\n\
+         # TYPE proctor_accounts_registered_total counter\n\
+         proctor_accounts_registered_total {accounts_registered}\n\
+         # HELP proctor_groups_created_total Family vaults successfully created.\n\
+         # TYPE proctor_groups_created_total counter\n\
+         proctor_groups_created_total {groups_created}\n\
+         # HELP proctor_invites_minted_total Share invites successfully minted.\n\
+         # TYPE proctor_invites_minted_total counter\n\
+         proctor_invites_minted_total {invites_minted}\n\
+         # HELP proctor_invites_redeemed_total Share invites successfully redeemed (a member joined).\n\
+         # TYPE proctor_invites_redeemed_total counter\n\
+         proctor_invites_redeemed_total {invites_redeemed}\n\
+         # HELP proctor_invites_rejected_total Invite redemptions rejected, by reason.\n\
+         # TYPE proctor_invites_rejected_total counter\n\
+         proctor_invites_rejected_total{{reason=\"invalid_or_used\"}} {invalid_or_used}\n\
+         proctor_invites_rejected_total{{reason=\"expired\"}} {expired}\n\
+         proctor_invites_rejected_total{{reason=\"no_such_group\"}} {no_such_group}\n\
+         # HELP proctor_group_keys_writes_total Wrapped-key blobs successfully written (access granted or rotated).\n\
+         # TYPE proctor_group_keys_writes_total counter\n\
+         proctor_group_keys_writes_total {group_keys_writes}\n\
+         # HELP proctor_group_content_writes_total Shared-content blobs successfully written (an item was shared).\n\
+         # TYPE proctor_group_content_writes_total counter\n\
+         proctor_group_content_writes_total {group_content_writes}\n\
+         # HELP proctor_members_removed_total Group members successfully removed.\n\
+         # TYPE proctor_members_removed_total counter\n\
+         proctor_members_removed_total {members_removed}\n\
+         # HELP proctor_entitlement_denied_total Requests refused with 402 by an entitlement gate, by reason.\n\
+         # TYPE proctor_entitlement_denied_total counter\n\
+         proctor_entitlement_denied_total{{reason=\"device_limit\"}} {device_limit}\n\
+         proctor_entitlement_denied_total{{reason=\"family_plan\"}} {family_plan}\n",
+        accounts_registered = f.accounts_registered,
+        groups_created = f.groups_created,
+        invites_minted = f.invites_minted,
+        invites_redeemed = f.invites_redeemed,
+        invalid_or_used = f.invites_rejected_invalid_or_used,
+        expired = f.invites_rejected_expired,
+        no_such_group = f.invites_rejected_no_such_group,
+        group_keys_writes = f.group_keys_writes,
+        group_content_writes = f.group_content_writes,
+        members_removed = f.members_removed,
+        device_limit = f.entitlement_denied_device_limit,
+        family_plan = f.entitlement_denied_family_plan,
     )
 }
 
 /// GET /metrics — Prometheus exposition (no auth; keep it cluster-internal).
 fn handle_metrics(request: Request, app: &App) {
-    let body = render_metrics(
-        app.metrics.requests_total.load(Ordering::Relaxed),
-        now_unix().saturating_sub(app.metrics.start_epoch),
-        app.metrics.backend,
-        env!("CARGO_PKG_VERSION"),
-    );
+    let body = render_metrics(&MetricsSnapshot {
+        requests_total: app.metrics.requests_total.load(Ordering::Relaxed),
+        uptime_secs: now_unix().saturating_sub(app.metrics.start_epoch),
+        backend: app.metrics.backend,
+        version: env!("CARGO_PKG_VERSION"),
+        funnel: app.metrics.funnel.snapshot(),
+    });
     respond(request, text(&body, 200));
 }
 
@@ -340,6 +487,7 @@ fn main() {
             requests_total: AtomicU64::new(0),
             start_epoch: now_unix(),
             backend,
+            funnel: Funnel::default(),
         },
     };
 
@@ -555,6 +703,11 @@ fn handle_register(mut request: Request, app: &App) {
         .register(email.as_deref(), &label, now_unix(), app.token_ttl)
     {
         Ok(account) => {
+            // Funnel entry point: everything downstream is measured against this.
+            app.metrics
+                .funnel
+                .accounts_registered
+                .fetch_add(1, Ordering::Relaxed);
             eprintln!("POST /v1/register -> 200 account={}", account.account_id);
             let body = serde_json::json!({
                 "account_id": account.account_id,
@@ -591,6 +744,11 @@ fn handle_add_device(mut request: Request, app: &App) {
                     .map(|d| d.len())
                     .unwrap_or(0);
                 if count >= limit {
+                    // Paywall hit: measures how much real demand the free device cap blocks.
+                    app.metrics
+                        .funnel
+                        .entitlement_denied_device_limit
+                        .fetch_add(1, Ordering::Relaxed);
                     respond(
                         request,
                         text(
@@ -847,6 +1005,12 @@ fn handle_group_create(mut request: Request, app: &App, account: &str) {
         .map(|p| p.can_share())
         .unwrap_or(false)
     {
+        // Paywall hit: someone wanted to share and could not. The strongest
+        // upgrade-intent signal we have.
+        app.metrics
+            .funnel
+            .entitlement_denied_family_plan
+            .fetch_add(1, Ordering::Relaxed);
         respond(
             request,
             text(
@@ -876,6 +1040,10 @@ fn handle_group_create(mut request: Request, app: &App, account: &str) {
     let group_id = groups::new_id();
     match app.groups.create(&group_id, owner) {
         Ok(_) => {
+            app.metrics
+                .funnel
+                .groups_created
+                .fetch_add(1, Ordering::Relaxed);
             eprintln!("POST /v1/groups -> 200 group={group_id} owner_account={account}");
             respond(
                 request,
@@ -953,6 +1121,11 @@ fn handle_group_invite(mut request: Request, app: &App, account: &str, id: &str)
     };
     match app.groups.add_invite(id, invite) {
         Ok(true) => {
+            // Intent to share. The gap to `invites_redeemed` is the conversion we care about.
+            app.metrics
+                .funnel
+                .invites_minted
+                .fetch_add(1, Ordering::Relaxed);
             eprintln!("POST /v1/groups/{id}/invites -> 200 (minted, ttl {ttl}s)");
             let body = serde_json::json!({
                 "invite_code": code,
@@ -994,14 +1167,38 @@ fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
         .redeem_invite(id, &groups::hash_code(&code), new_member, now_unix())
     {
         Ok(RedeemOutcome::Added) => {
+            // The moment a family actually becomes more than one person.
+            app.metrics
+                .funnel
+                .invites_redeemed
+                .fetch_add(1, Ordering::Relaxed);
             eprintln!("POST /v1/groups/{id}/members -> 200 (account={account} joined)");
             respond(request, json(r#"{"joined":true}"#.to_string(), 200));
         }
-        Ok(RedeemOutcome::Expired) => respond(request, text("invite expired", 403)),
+        // Rejections are split by reason: expired points at our 24h TTL being too
+        // short for how families really coordinate, invalid_or_used at the code
+        // hand-off UX, no_such_group at a broken link or a deleted vault.
+        Ok(RedeemOutcome::Expired) => {
+            app.metrics
+                .funnel
+                .invites_rejected_expired
+                .fetch_add(1, Ordering::Relaxed);
+            respond(request, text("invite expired", 403))
+        }
         Ok(RedeemOutcome::InvalidOrUsed) => {
+            app.metrics
+                .funnel
+                .invites_rejected_invalid_or_used
+                .fetch_add(1, Ordering::Relaxed);
             respond(request, text("invalid or already-used invite", 403))
         }
-        Ok(RedeemOutcome::NoSuchGroup) => respond(request, text("no such group", 404)),
+        Ok(RedeemOutcome::NoSuchGroup) => {
+            app.metrics
+                .funnel
+                .invites_rejected_no_such_group
+                .fetch_add(1, Ordering::Relaxed);
+            respond(request, text("no such group", 404))
+        }
         Err(e) => respond_500(request, &e),
     }
 }
@@ -1042,6 +1239,11 @@ fn handle_group_remove(request: Request, app: &App, account: &str, id: &str, mem
     }
     match app.groups.remove_member(id, member_id) {
         Ok(true) => {
+            // Offboarding actually happening (and how often families need it).
+            app.metrics
+                .funnel
+                .members_removed
+                .fetch_add(1, Ordering::Relaxed);
             eprintln!("DELETE /v1/groups/{id}/members/{member_id} -> 200 (removed)");
             respond(request, json(r#"{"removed":true}"#.to_string(), 200));
         }
@@ -1167,6 +1369,14 @@ fn handle_group_blob(
             };
             match result {
                 Ok(version) => {
+                    // A keys write means a member was really granted access (or a
+                    // rotation landed); a content write means a shared item exists.
+                    // Joining without either is a share that never delivered value.
+                    match which {
+                        Blob::Keys => &app.metrics.funnel.group_keys_writes,
+                        Blob::Content => &app.metrics.funnel.group_content_writes,
+                    }
+                    .fetch_add(1, Ordering::Relaxed);
                     let resp = Response::from_string(version.to_string())
                         .with_status_code(200)
                         .with_header(version_header(version));
@@ -1454,14 +1664,136 @@ mod tests {
         assert!(!verify_stripe_signature(payload, "t=1", secret, now, 0));
     }
 
+    /// A snapshot with distinct values per counter, so a mis-wired format argument
+    /// (rendering the wrong field into the wrong metric) shows up as a wrong number.
+    fn sample_snapshot() -> MetricsSnapshot<'static> {
+        MetricsSnapshot {
+            requests_total: 42,
+            uptime_secs: 100,
+            backend: "postgres",
+            version: "1.33.0",
+            funnel: FunnelSnapshot {
+                accounts_registered: 1,
+                groups_created: 2,
+                invites_minted: 3,
+                invites_redeemed: 4,
+                invites_rejected_invalid_or_used: 5,
+                invites_rejected_expired: 6,
+                invites_rejected_no_such_group: 7,
+                group_keys_writes: 8,
+                group_content_writes: 9,
+                members_removed: 10,
+                entitlement_denied_device_limit: 11,
+                entitlement_denied_family_plan: 12,
+            },
+        }
+    }
+
     #[test]
     fn metrics_render_is_valid_prometheus() {
-        let out = render_metrics(42, 100, "postgres", "1.33.0");
+        let out = render_metrics(&sample_snapshot());
         assert!(out.contains("proctor_requests_total 42\n"));
         assert!(out.contains("proctor_uptime_seconds 100\n"));
         assert!(out.contains("proctor_build_info{backend=\"postgres\",version=\"1.33.0\"} 1\n"));
-        // Every metric is preceded by its HELP/TYPE lines.
-        assert_eq!(out.matches("# TYPE").count(), 3);
+        // Every metric is preceded by its HELP/TYPE lines: 3 base + 9 funnel metrics
+        // (the two labelled families each declare TYPE once, as Prometheus requires).
+        assert_eq!(out.matches("# TYPE").count(), 12);
+        assert_eq!(out.matches("# HELP").count(), 12);
+    }
+
+    #[test]
+    fn funnel_counters_render_with_help_and_type() {
+        let out = render_metrics(&sample_snapshot());
+        for (name, value) in [
+            ("proctor_accounts_registered_total", 1),
+            ("proctor_groups_created_total", 2),
+            ("proctor_invites_minted_total", 3),
+            ("proctor_invites_redeemed_total", 4),
+            ("proctor_group_keys_writes_total", 8),
+            ("proctor_group_content_writes_total", 9),
+            ("proctor_members_removed_total", 10),
+        ] {
+            assert!(
+                out.contains(&format!("# HELP {name} ")),
+                "missing HELP for {name}"
+            );
+            assert!(
+                out.contains(&format!("# TYPE {name} counter\n")),
+                "missing TYPE for {name}"
+            );
+            assert!(
+                out.contains(&format!("{name} {value}\n")),
+                "missing sample for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn labelled_counters_render_every_reason() {
+        let out = render_metrics(&sample_snapshot());
+        // One HELP/TYPE per metric family, then one sample line per label value.
+        assert_eq!(
+            out.matches("# TYPE proctor_invites_rejected_total").count(),
+            1
+        );
+        assert_eq!(
+            out.matches("# TYPE proctor_entitlement_denied_total")
+                .count(),
+            1
+        );
+        assert!(out.contains("proctor_invites_rejected_total{reason=\"invalid_or_used\"} 5\n"));
+        assert!(out.contains("proctor_invites_rejected_total{reason=\"expired\"} 6\n"));
+        assert!(out.contains("proctor_invites_rejected_total{reason=\"no_such_group\"} 7\n"));
+        assert!(out.contains("proctor_entitlement_denied_total{reason=\"device_limit\"} 11\n"));
+        assert!(out.contains("proctor_entitlement_denied_total{reason=\"family_plan\"} 12\n"));
+    }
+
+    #[test]
+    fn exposition_lines_are_well_formed_and_carry_no_identifiers() {
+        let out = render_metrics(&sample_snapshot());
+        for line in out.lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            // Every sample is `name[{labels}] <number>` — no free-form text.
+            let (series, value) = line.rsplit_once(' ').expect("sample line has a value");
+            assert!(
+                value.parse::<u64>().is_ok(),
+                "non-numeric sample value in {line:?}"
+            );
+            assert!(
+                series.starts_with("proctor_"),
+                "unexpected series {series:?}"
+            );
+            // Only these label keys exist anywhere in the exposition. `backend` and
+            // `version` describe the deployment; `reason` is a fixed enum. Nothing is
+            // derived from an account, group, member, device, or IP — a scrape can
+            // never reconstruct the family graph.
+            if let Some((_, labels)) = series.split_once('{') {
+                for pair in labels.trim_end_matches('}').split(',') {
+                    let key = pair.split_once('=').expect("key=value label").0;
+                    assert!(
+                        matches!(key, "backend" | "version" | "reason"),
+                        "unexpected label key {key:?} — metrics must stay identifier-free"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn funnel_snapshot_reflects_increments() {
+        let funnel = Funnel::default();
+        assert_eq!(funnel.snapshot().invites_redeemed, 0);
+        funnel.invites_redeemed.fetch_add(1, Ordering::Relaxed);
+        funnel.invites_redeemed.fetch_add(1, Ordering::Relaxed);
+        funnel.groups_created.fetch_add(1, Ordering::Relaxed);
+        let snap = funnel.snapshot();
+        assert_eq!(snap.invites_redeemed, 2);
+        assert_eq!(snap.groups_created, 1);
+        // Untouched counters stay at zero (no cross-wiring in `snapshot`).
+        assert_eq!(snap.invites_minted, 0);
+        assert_eq!(snap.entitlement_denied_family_plan, 0);
     }
 
     #[test]

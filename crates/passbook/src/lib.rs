@@ -35,8 +35,8 @@ pub use generate::{generate_passphrase, generate_password, sha1_hex, PasswordOpt
 pub use ports::{Clock, VaultRepository};
 pub use sealing::{open, seal, SealedVault};
 pub use sharing::{
-    new_vault_key, open_content, safety_number, seal_content, ContentBlob, Member, MemberPublic,
-    SharedVault, SharingError,
+    new_vault_key, open_content, open_sealed, safety_number, seal_content, seal_to, ContentBlob,
+    Member, MemberPublic, SealedBox, SharedVault, SharingError,
 };
 pub use watchtower::{strength_bits, watchtower, Issue};
 

@@ -3,6 +3,48 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.39.0] — 2026-07-18
+
+**Recovery contacts, the invite blind spot, and a sharing funnel.**
+
+Three of the gaps standing between "family sharing is built" and "real families can
+use it."
+
+### Added — recovery contacts (you can now survive losing the Emergency Kit)
+- Losing the device Secret Key previously meant losing the vault, permanently. A
+  member can now seal their Secret Key to a **recovery contact** — a family member
+  who can read it back to them later.
+- New primitive `sharing::seal_to` / `open_sealed` — a sealed box for arbitrary
+  bytes using the same construction as the per-recipient vault-key wrap (ephemeral
+  X25519 → HKDF-SHA256 → XChaCha20-Poly1305), plus WASM bindings.
+- **The contact still cannot open your vault.** The Secret Key is only one of the
+  two 2SKD factors; the master password is never shared — and there's a test that
+  asserts exactly that.
+- The sealed blob rides inside the shared vault's content, so it syncs with the
+  family and needs no new server endpoint. Every member sees ciphertext; only the
+  addressed contact can open it. Recovery blobs are filtered out of the item lists.
+
+### Fixed — the invite blind spot
+- Completing an invite requires a device that already holds the key (inherent to
+  zero-knowledge), so a joiner used to wait invisibly. Opening the vault now
+  **reports who it just let in** ("Mum can now open this vault"), and the joiner's
+  message explains *why* they're waiting instead of just telling them to reload.
+
+### Added — sharing funnel metrics
+- Nine new counters on `/metrics` measuring whether people actually succeed:
+  accounts registered, groups created, invites minted/redeemed/rejected (by
+  reason), key + content writes, members removed, and entitlement denials (by
+  reason). Aggregate-only — a test **enforces** that no account/group/member id,
+  name, email, or IP can appear in any metric or label, so a scrape can never
+  reconstruct the family graph.
+
+### Verified
+- Recovery: unit tests prove only the addressed contact can open the box, tampering
+  is rejected, the payload doesn't leak into the ciphertext, and holding the Secret
+  Key is still not enough to open the vault. Funnel counters driven live against a
+  running server. Recovery + safety-number UI verified in the browser against the
+  Postgres-backed stack, zero console errors. Full tests + clippy clean.
+
 ## [1.38.0] — 2026-07-18
 
 **Safety numbers — closing the key-substitution hole before the crypto review.**

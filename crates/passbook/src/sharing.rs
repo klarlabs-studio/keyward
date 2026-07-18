@@ -114,6 +114,60 @@ pub fn safety_number(members: &[MemberPublic]) -> String {
         .join(" ")
 }
 
+/// Arbitrary bytes sealed to exactly ONE recipient's X25519 public key.
+///
+/// Same sealed-box construction as the per-recipient vault-key wrap (ephemeral
+/// X25519 → HKDF-SHA256 → XChaCha20-Poly1305), but for a payload of any length.
+/// Used for **recovery contacts**: a member seals their device Secret Key to a
+/// family member, so if they lose their Emergency Kit that person can hand it
+/// back. The contact still cannot open the vault — the Secret Key is only one of
+/// the two 2SKD factors; the master password is never shared.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SealedBox {
+    ephemeral_public: [u8; 32],
+    nonce: [u8; 24],
+    ciphertext: Vec<u8>,
+}
+
+/// Seal `plaintext` to a single recipient's public key.
+pub fn seal_to(recipient: &MemberPublic, plaintext: &[u8]) -> Result<SealedBox> {
+    let ephemeral_secret = StaticSecret::random_from_rng(OsRng);
+    let ephemeral_public = PublicKey::from(&ephemeral_secret);
+    let shared = ephemeral_secret.diffie_hellman(&PublicKey::from(recipient.public_key));
+    let wrapping_key = derive_wrapping_key(shared.as_bytes())?;
+
+    let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
+        .map_err(|_| SharingError::KeyDerivation)?;
+    let mut nonce = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(XNonce::from_slice(&nonce), plaintext)
+        .map_err(|_| SharingError::Unwrap)?;
+
+    Ok(SealedBox {
+        ephemeral_public: ephemeral_public.to_bytes(),
+        nonce,
+        ciphertext,
+    })
+}
+
+/// Open a [`SealedBox`] addressed to `member`. Fails for any other member, or on
+/// tampering.
+pub fn open_sealed(sealed: &SealedBox, member: &Member) -> Result<Vec<u8>> {
+    let shared = member
+        .secret
+        .diffie_hellman(&PublicKey::from(sealed.ephemeral_public));
+    let wrapping_key = derive_wrapping_key(shared.as_bytes())?;
+    let cipher = XChaCha20Poly1305::new_from_slice(wrapping_key.as_ref())
+        .map_err(|_| SharingError::KeyDerivation)?;
+    cipher
+        .decrypt(
+            XNonce::from_slice(&sealed.nonce),
+            sealed.ciphertext.as_ref(),
+        )
+        .map_err(|_| SharingError::Unwrap)
+}
+
 /// Generate a fresh random 32-byte vault key (the key a [`SharedVault`] wraps).
 pub fn new_vault_key() -> [u8; VAULT_KEY_LEN] {
     random_array::<VAULT_KEY_LEN>()
@@ -380,6 +434,43 @@ mod tests {
         // The rebuilt member has the same public key and can still unwrap.
         assert_eq!(restored.public().public_key, alice.public().public_key);
         assert_eq!(shared.unwrap_for(&restored).unwrap(), vault_key);
+    }
+
+    #[test]
+    fn recovery_contact_can_return_a_secret_key_but_not_open_the_vault() {
+        // Alice seals her device Secret Key to Bob as her recovery contact.
+        let alice = Member::generate("alice", "Alice");
+        let bob = Member::generate("bob", "Bob");
+        let eve = Member::generate("eve", "Eve");
+        let alice_secret_key = b"A1B2-C3D4-E5F6-7890"; // Emergency-Kit format
+
+        let sealed = seal_to(&bob.public(), alice_secret_key).unwrap();
+
+        // Only Bob can open it — not Eve, and not Alice's own member key.
+        assert_eq!(open_sealed(&sealed, &bob).unwrap(), alice_secret_key);
+        assert!(open_sealed(&sealed, &eve).is_err());
+        assert!(open_sealed(&sealed, &alice).is_err());
+
+        // Tampering is detected (AEAD).
+        let mut tampered = sealed.clone();
+        tampered.ciphertext[0] ^= 0xff;
+        assert!(open_sealed(&tampered, &bob).is_err());
+
+        // The ciphertext does not leak the payload.
+        assert!(!sealed
+            .ciphertext
+            .windows(alice_secret_key.len())
+            .any(|w| w == alice_secret_key));
+
+        // CRITICAL PROPERTY: holding the Secret Key is NOT enough to open Alice's
+        // vault — the master password is the other 2SKD factor and is never shared.
+        let recovered = open_sealed(&sealed, &bob).unwrap();
+        let sk = crate::domain::SecretKey::generate();
+        let entries = vec![crate::domain::Entry::login("e1", "Bank", "alice", "s3cret")];
+        let vault = crate::sealing::seal(&entries, b"alice-master", Some(&sk)).unwrap();
+        // Bob has a Secret Key but not Alice's master password.
+        assert!(crate::sealing::open(&vault, b"bob-guesses", Some(&sk)).is_err());
+        assert!(!recovered.is_empty());
     }
 
     #[test]

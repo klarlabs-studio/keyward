@@ -14,7 +14,7 @@ const emit = defineEmits<{ (e: 'manage'): void }>();
   <div class="list">
     <div class="list-head">
       <h2>{{ s.mainVault?.name ?? 'Family vault' }}</h2>
-      <span v-if="s.mainVault?.hasAccess">{{ s.mainVault.entries.length }}</span>
+      <span v-if="s.mainVault?.hasAccess">{{ s.sharedItems.length }}</span>
     </div>
 
     <div class="fam-bar">
@@ -34,11 +34,11 @@ const emit = defineEmits<{ (e: 'manage'): void }>();
     </p>
 
     <template v-else>
-      <p v-if="s.mainVault.entries.length === 0" class="empty">
+      <p v-if="s.sharedItems.length === 0" class="empty">
         No shared items yet — add one from “Manage &amp; invite”.
       </p>
       <button
-        v-for="entry in s.mainVault.entries"
+        v-for="entry in s.sharedItems"
         :key="entry.id"
         class="row"
         :class="{ active: entry.id === s.selectedSharedId }"

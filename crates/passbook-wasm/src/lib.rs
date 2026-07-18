@@ -12,9 +12,10 @@
 //! [`seal_vault`].
 
 use proctor_passbook::{
-    generate_passphrase, generate_password, new_vault_key, open, open_content, safety_number, seal,
-    seal_content, sha1_hex, strength_bits, totp, watchtower, ContentBlob, Entry, Issue, Member,
-    MemberPublic, PasswordOptions, SealedVault, SecretKey, SharedVault,
+    generate_passphrase, generate_password, new_vault_key, open, open_content, open_sealed,
+    safety_number, seal, seal_content, seal_to, sha1_hex, strength_bits, totp, watchtower,
+    ContentBlob, Entry, Issue, Member, MemberPublic, PasswordOptions, SealedBox, SealedVault,
+    SecretKey, SharedVault,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -317,6 +318,29 @@ pub fn grant_group_access(
         .grant_access(&existing, &new_member.into_domain()?)
         .map_err(js_err)?;
     serde_json::to_string(&shared).map_err(js_err)
+}
+
+/// Seal a **recovery payload** (this device's Secret Key) to one family member,
+/// so they can hand it back if the Emergency Kit is lost. Returns a `SealedBox` as
+/// JSON. The contact still cannot open the vault — the master password is the
+/// other 2SKD factor and is never shared. `recipient_json` is
+/// `{id, name, public_key}` (public_key in hex).
+#[wasm_bindgen]
+pub fn seal_recovery(recipient_json: &str, plaintext: &str) -> Result<String, JsValue> {
+    let recipient: MemberPublicJson = serde_json::from_str(recipient_json).map_err(js_err)?;
+    let sealed = seal_to(&recipient.into_domain()?, plaintext.as_bytes()).map_err(js_err)?;
+    serde_json::to_string(&sealed).map_err(js_err)
+}
+
+/// Open a recovery payload addressed to this member, returning the plaintext.
+/// Fails for anyone else, or on tampering.
+#[wasm_bindgen]
+pub fn open_recovery(sealed_json: &str, member_secret_hex: &str) -> Result<String, JsValue> {
+    let sealed: SealedBox = serde_json::from_str(sealed_json).map_err(js_err)?;
+    let secret = from_hex_32(member_secret_hex)?;
+    let member = Member::from_secret("", "", secret);
+    let bytes = open_sealed(&sealed, &member).map_err(js_err)?;
+    String::from_utf8(bytes).map_err(js_err)
 }
 
 /// The group's **safety number** — a short fingerprint of the members' public

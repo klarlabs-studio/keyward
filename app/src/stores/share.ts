@@ -5,7 +5,7 @@
 
 import { defineStore } from 'pinia';
 import type { Entry, Login } from '../lib/passbook-types';
-import { nowUnix } from '../lib/passbook';
+import { getSecretKey, nowUnix } from '../lib/passbook';
 import * as share from '../lib/sharing';
 import type { FamilyVault, GroupRef, MemberIdentity } from '../lib/sharing';
 import { fetchAccount, planLabel, startCheckout, type AccountInfo } from '../lib/account';
@@ -26,6 +26,8 @@ interface ShareState {
   selectedSharedId: string | null;
   // The account's entitlements (plan + device usage), or null if unknown.
   account: AccountInfo | null;
+  // A Secret Key just revealed from a recovery blob, shown until dismissed.
+  revealedRecovery: { forName: string; secret: string } | null;
 }
 
 export const useShareStore = defineStore('share', {
@@ -39,6 +41,7 @@ export const useShareStore = defineStore('share', {
     mainGroupId: null,
     selectedSharedId: null,
     account: null,
+    revealedRecovery: null,
   }),
 
   getters: {
@@ -59,6 +62,20 @@ export const useShareStore = defineStore('share', {
     /** Human label for the current plan (defaults to Free when unknown). */
     planName(s): string {
       return planLabel(s.account?.plan ?? 'free');
+    },
+    /** Real shared items (recovery blobs are infrastructure, not items). */
+    sharedItems(s) {
+      return s.active ? share.visibleEntries(s.active.entries) : [];
+    },
+    /** Recovery blobs family members entrusted to me. */
+    recoveryHeld(s) {
+      const id = s.identity?.id;
+      return s.active && id ? share.recoveryHeldBy(s.active.entries, id) : [];
+    },
+    /** My own recovery contact, if set. */
+    myRecovery(s) {
+      const id = s.identity?.id;
+      return s.active && id ? share.myRecoveryContact(s.active.entries, id) : null;
     },
     /** The family vault shown in the main view (loaded and matching), or null. */
     mainVault(s): FamilyVault | null {
@@ -150,6 +167,16 @@ export const useShareStore = defineStore('share', {
       this.invite = null;
       try {
         this.active = await share.loadFamily(groupId, name);
+        // Opening is what completes a pending invite (only a device holding the
+        // key can grant access). Say so, so the owner knows it happened.
+        const granted = this.active.justGranted;
+        if (granted.length > 0) {
+          toast(
+            granted.length === 1
+              ? `${granted[0]} can now open this vault`
+              : `${granted.length} members can now open this vault`,
+          );
+        }
       } catch (e) {
         toast(e instanceof Error ? e.message : 'Could not open the family vault');
       } finally {
@@ -252,6 +279,63 @@ export const useShareStore = defineStore('share', {
       } finally {
         this.busy = false;
       }
+    },
+
+    /**
+     * Name a family member as my recovery contact: seal this device's Secret Key
+     * to them and store it in the shared vault. If I ever lose my Emergency Kit,
+     * they can read it back to me — they still can't open my vault without my
+     * master password.
+     */
+    async setRecoveryContact(contact: share.GroupMemberView): Promise<void> {
+      if (!this.active?.hasAccess || !this.identity) return;
+      const secretKey = getSecretKey();
+      if (!secretKey) {
+        toast('No Secret Key on this device to protect.');
+        return;
+      }
+      this.busy = true;
+      try {
+        const next = await share.withRecoveryContact(
+          this.active.entries,
+          this.identity,
+          contact,
+          secretKey,
+        );
+        const version = await share.saveFamilyEntries(
+          this.active.groupId,
+          next,
+          this.active.contentVersion,
+        );
+        this.active.entries = next;
+        this.active.contentVersion = version;
+        toast(`${contact.name || 'They'} can now help you recover your Secret Key`);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Could not set the recovery contact');
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    /** Open a recovery blob a family member entrusted to me. */
+    async revealRecovery(payload: share.RecoveryPayload): Promise<void> {
+      if (!this.identity) return;
+      this.busy = true;
+      try {
+        this.revealedRecovery = {
+          forName: payload.forName,
+          secret: await share.revealRecovery(payload, this.identity.secret),
+        };
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Could not open that recovery key');
+      } finally {
+        this.busy = false;
+      }
+    },
+
+    /** Clear a revealed Secret Key from memory/screen. */
+    hideRecovery() {
+      this.revealedRecovery = null;
     },
 
     /** Promote/demote a member (Owner only), then reload the directory. */

@@ -224,9 +224,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           </div>
 
           <p v-else-if="!s.active.hasAccess" class="note warn">
-            You've joined, but a member hasn't granted your device access yet. Ask
-            them to open this family vault, then
-            <a href="#" @click.prevent="s.reloadActive()">reload</a>.
+            <b>You're in — waiting for the key.</b> Your family's secrets can only be
+            unlocked by someone who already has them, so nothing here is readable
+            until one of them opens this vault once. Ask any member to open Proctor,
+            then <a href="#" @click.prevent="s.reloadActive()">check again</a>.
           </p>
 
           <div v-if="!s.active.removed" class="section">
@@ -284,10 +285,61 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           </div>
 
           <template v-if="s.active.hasAccess">
+            <!-- Recovery: the answer to "I lost my Emergency Kit". -->
             <div class="section">
-              <div class="lbl">Shared items ({{ s.active.entries.length }})</div>
-              <p v-if="!s.active.entries.length" class="empty">No shared items yet.</p>
-              <div v-for="e in s.active.entries" :key="e.id" class="item">
+              <div class="lbl">Recovery</div>
+              <p v-if="s.myRecovery" class="note ok">
+                <b>{{ s.myRecovery.toName || 'A family member' }}</b> holds a sealed copy
+                of your Secret Key. If you lose your Emergency Kit, ask them to read it
+                back — they still can't open your vault without your master password.
+              </p>
+              <template v-else>
+                <p class="hint">
+                  Lose your Emergency Kit and your vault is gone. Pick a family member to
+                  hold a sealed copy of your Secret Key — only they can open it, and it
+                  still isn't enough to unlock your vault without your master password.
+                </p>
+                <button
+                  v-for="m in s.active.members.filter((x) => x.member_id !== s.identity?.id)"
+                  :key="m.member_id"
+                  class="btn-ghost full"
+                  :disabled="s.busy"
+                  @click="s.setRecoveryContact(m)"
+                >
+                  Make {{ m.name || m.member_id }} my recovery contact
+                </button>
+                <p v-if="s.active.members.length < 2" class="empty">
+                  Invite someone first — you need a family member to hold it.
+                </p>
+              </template>
+
+              <template v-if="s.recoveryHeld.length">
+                <div class="lbl" style="margin-top: 0.6rem">Recovery keys you hold</div>
+                <div v-for="r in s.recoveryHeld" :key="r.for" class="member">
+                  <span class="dot"></span>
+                  <span class="m-name">{{ r.forName || r.for }}</span>
+                  <button class="mini" :disabled="s.busy" @click="s.revealRecovery(r)">
+                    Reveal
+                  </button>
+                </div>
+                <div v-if="s.revealedRecovery" class="invite">
+                  <code>{{ s.revealedRecovery.secret }}</code>
+                  <button class="mini" title="Copy" @click="copyText(s.revealedRecovery.secret)">
+                    Copy
+                  </button>
+                  <button class="mini" @click="s.hideRecovery()">Hide</button>
+                  <p class="hint">
+                    {{ s.revealedRecovery.forName }}'s Secret Key — read it back to them
+                    over a channel you trust. They also need their master password.
+                  </p>
+                </div>
+              </template>
+            </div>
+
+            <div class="section">
+              <div class="lbl">Shared items ({{ s.sharedItems.length }})</div>
+              <p v-if="!s.sharedItems.length" class="empty">No shared items yet.</p>
+              <div v-for="e in s.sharedItems" :key="e.id" class="item">
                 <div class="i-body">
                   <b>{{ e.title }}</b>
                   <span v-if="'Login' in e.content">{{ e.content.Login.username }}</span>
@@ -585,6 +637,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 .note.upgrade {
   background: var(--accent-soft);
   color: var(--accent-ink);
+}
+.note.ok {
+  background: var(--surface-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.section > .hint {
+  margin: 0;
+  font-size: 0.79rem;
+  color: var(--muted);
+  line-height: 1.55;
 }
 .note.upgrade b {
   color: var(--accent-ink);
