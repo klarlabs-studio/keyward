@@ -91,10 +91,31 @@ export interface FamilyVault {
   removed: boolean;
   /** Fingerprint of the member directory, for out-of-band comparison. */
   safety: string;
-  /** Names of members this load just granted access to (auto-reconcile). */
+  /** Names of members this load just granted access to (all pre-approved keys). */
   justGranted: string[];
+  /**
+   * Members awaiting an explicit human decision before the vault key is wrapped
+   * to them. Nothing has been sent for these; they are waiting on the user.
+   */
+  pendingApproval: PendingMember[];
   keysVersion: string | null;
   contentVersion: string | null;
+}
+
+/** A member whose key we have not accepted, and so have not wrapped the vault key to. */
+export interface PendingMember {
+  memberId: string;
+  name: string;
+  publicKey: string;
+  /**
+   * `'unknown'` — first time we have seen this member; normal for a new joiner.
+   * `'changed'` — we previously accepted a DIFFERENT key under this member id.
+   *   That is either a genuine re-enrolment (new device, lost key) or a relay
+   *   substituting its own key to read the vault. The two are indistinguishable
+   *   from here, which is exactly why it must be a human decision, confirmed
+   *   out of band rather than in the app.
+   */
+  state: TrustState;
 }
 
 // ----- Member identity ------------------------------------------------------
@@ -159,6 +180,79 @@ function rememberGroup(ref: GroupRef): void {
 export function forgetGroup(groupId: string): void {
   const groups = joinedGroups().filter((g) => g.groupId !== groupId);
   localStorage.setItem(GROUPS_STORAGE, JSON.stringify(groups));
+  const pins = allPins();
+  delete pins[groupId];
+  localStorage.setItem(PINS_STORAGE, JSON.stringify(pins));
+}
+
+// ----- Trust-on-first-use key pinning ---------------------------------------
+//
+// THE PROBLEM THIS SOLVES. The relay is untrusted by design, but the client
+// used to wrap the shared vault key to whatever public key the relay listed for
+// a member, with no verification and no user involvement. A malicious or
+// compromised relay could append one fabricated member row holding a key it
+// controls; the next time any member opened the vault, their client would wrap
+// K_vault to that key and upload it. The relay then unwraps and reads every
+// shared credential. ADR-0004 claimed a grant was "a human decision" — it was
+// an unattended background action on every load.
+//
+// The fix is to remember which key we have already accepted for each member,
+// and to refuse to wrap to anything else without the user explicitly saying so.
+// A relay can still LIST whatever it likes; it just cannot get a key wrapped to
+// it. Trust is established once, on first sight, and any later change is a
+// blocking event rather than a silent one.
+//
+// This is TOFU, not verification: the very first key we see for a member is
+// taken on faith, so a relay hostile from the outset can still substitute at
+// that moment. The safety number is what closes that, by letting members
+// compare fingerprints out of band. Member-signed directory entries would
+// remove the residual entirely — see docs/security/known-limitations.md.
+
+const PINS_STORAGE = 'proctor.passbook.keypins.v1';
+
+/** groupId -> memberId -> the public key we have accepted for that member. */
+type PinMap = Record<string, Record<string, string>>;
+
+function allPins(): PinMap {
+  const raw = localStorage.getItem(PINS_STORAGE);
+  if (raw === null) return {};
+  try {
+    const v = JSON.parse(raw) as PinMap;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The keys pinned for `groupId` (memberId -> public key). */
+export function pinnedKeys(groupId: string): Record<string, string> {
+  return allPins()[groupId] ?? {};
+}
+
+/** Pin `publicKey` as the accepted key for `memberId` in `groupId`. */
+function pinKey(groupId: string, memberId: string, publicKey: string): void {
+  const pins = allPins();
+  pins[groupId] = { ...(pins[groupId] ?? {}), [memberId]: publicKey };
+  localStorage.setItem(PINS_STORAGE, JSON.stringify(pins));
+}
+
+/** How a relay-served member compares against what we have pinned. */
+export type TrustState =
+  /** Key matches what we already accepted — safe to wrap to. */
+  | 'pinned'
+  /** Never seen before. Needs the user to accept it before we wrap anything. */
+  | 'unknown'
+  /** Pinned before under a DIFFERENT key. Either a real re-enrolment or an
+   *  attempted substitution — never resolved automatically. */
+  | 'changed';
+
+export function trustStateOf(
+  groupId: string,
+  member: { member_id: string; public_key: string },
+): TrustState {
+  const pinned = pinnedKeys(groupId)[member.member_id];
+  if (pinned === undefined) return 'unknown';
+  return pinned === member.public_key ? 'pinned' : 'changed';
 }
 
 // ----- Group relay HTTP -----------------------------------------------------
@@ -361,8 +455,36 @@ export async function withRecoveryContact(
   me: MemberIdentity,
   contact: GroupMemberView,
   secretKey: string,
+  groupId: string,
 ): Promise<Entry[]> {
   await ensureReady();
+
+  // HARDEST GATE IN THE CLIENT, because this is the only path where a
+  // shared-vault compromise becomes a PERSONAL-vault compromise.
+  //
+  // This seals the device Secret Key — one of the two 2SKD factors — to the
+  // contact's public key. If that key is one the relay controls, the relay ends
+  // up holding the Secret Key AND the personal SealedVault it already stores,
+  // collapsing 2SKD to a single offline guess of the master password.
+  //
+  // Unlike a normal grant, an unpinned key here is refused outright rather than
+  // queued for approval: there is no safe "accept and continue" for handing
+  // over an authentication factor, and the recovery flow is rare and
+  // deliberate, so requiring the contact to be an already-trusted member costs
+  // nothing real.
+  const state = trustStateOf(groupId, contact);
+  if (state !== 'pinned') {
+    throw new Error(
+      state === 'changed'
+        ? `${contact.name || 'That member'}’s key has changed since you last trusted it. ` +
+          'Nothing was shared. Confirm the new safety number with them in person or by phone, ' +
+          're-approve them as a member, and only then set them as a recovery contact.'
+        : `${contact.name || 'That member'} is not a trusted member on this device yet. ` +
+          'Approve them and confirm the safety number with them out of band before making ' +
+          'them a recovery contact — this step hands them a factor of your own vault.',
+    );
+  }
+
   const sealed = seal_recovery(
     JSON.stringify({ id: contact.member_id, name: contact.name, public_key: contact.public_key }),
     secretKey,
@@ -481,6 +603,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
       removed: true,
       safety: '',
       justGranted: [],
+      pendingApproval: [],
       keysVersion: null,
       contentVersion: null,
     };
@@ -494,6 +617,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     hasAccess: false,
     removed: false,
     justGranted: [],
+    pendingApproval: [],
     // Computed from the directory the relay just served us — comparing it
     // out of band is what catches a substituted key.
     safety: await safetyNumber(group.members),
@@ -510,16 +634,46 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     return base; // joined but not yet granted access
   }
 
-  // Auto-reconcile: grant any member in the directory who lacks a wrap. This is
-  // the zero-knowledge step that can only happen on a device that already holds
-  // the key — we report how many we just let in so the UI can say so out loud,
-  // instead of the joiner waiting invisibly.
+  // Reconcile members who lack a wrap — but ONLY to keys we have already
+  // accepted. This loop used to wrap K_vault to every relay-listed key with no
+  // check at all, which is precisely how a hostile relay reads a shared vault:
+  // list one fabricated member, and the next honest load hands over the key.
+  //
+  // Now:
+  //   'pinned'  -> we have accepted this exact key before; grant automatically.
+  //   'unknown' -> first sight; surfaced for explicit approval, nothing sent.
+  //   'changed' -> the key moved under an id we already trusted; surfaced as a
+  //                warning and NEVER auto-approved.
+  //
+  // Note the ordering: nothing is uploaded until the decision is made. The old
+  // flow computed a safety number for display *after* it had already granted,
+  // so a user following the instruction ("if it differs, stop") stopped after
+  // the key had left.
   const wrappedIds = wrappedMemberIds(keys.json);
-  const missing = group.members.filter((m) => !wrappedIds.has(m.member_id));
+  const missing = group.members.filter(
+    (m) => !wrappedIds.has(m.member_id) && m.member_id !== member.id,
+  );
   const grantedNames: string[] = [];
-  if (missing.length > 0) {
+  const pendingApproval: PendingMember[] = [];
+  const toGrant: GroupMemberView[] = [];
+
+  for (const m of missing) {
+    const state = trustStateOf(groupId, m);
+    if (state === 'pinned') {
+      toGrant.push(m);
+    } else {
+      pendingApproval.push({
+        memberId: m.member_id,
+        name: m.name || m.member_id,
+        publicKey: m.public_key,
+        state,
+      });
+    }
+  }
+
+  if (toGrant.length > 0) {
     let updated = keys.json;
-    for (const m of missing) {
+    for (const m of toGrant) {
       updated = grant_group_access(
         updated,
         member.secret,
@@ -533,6 +687,15 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     base.keysVersion = newVersion;
   }
 
+  // Pin everyone already holding a wrap. They were granted under an earlier
+  // policy (or by another device), so recording their current key now is what
+  // makes a LATER substitution detectable. Existing wraps are not re-issued.
+  for (const m of group.members) {
+    if (wrappedIds.has(m.member_id) && trustStateOf(groupId, m) === 'unknown') {
+      pinKey(groupId, m.member_id, m.public_key);
+    }
+  }
+
   const content = await getContent(groupId);
   const entries: Entry[] = content
     ? (JSON.parse(open_group_content(content.json, vaultKey)) as Entry[])
@@ -542,6 +705,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     entries,
     hasAccess: true,
     justGranted: grantedNames,
+    pendingApproval,
     contentVersion: content?.version ?? null,
   };
 }
@@ -557,6 +721,58 @@ function wrappedMemberIds(sharedJson: string): Set<string> {
 }
 
 /** Re-seal `entries` for the family vault and push the content blob. */
+/**
+ * Accept `memberId`'s current public key and wrap the vault key to them.
+ *
+ * This is the human decision ADR-0004 always described and the code never
+ * actually required. It must be called from an explicit user action — never
+ * from a load, a watcher, or a retry — because approving is exactly the
+ * irreversible step: once the key is wrapped and uploaded, whoever holds the
+ * matching secret can read every shared credential, and un-approving cannot
+ * take that back (it requires rotating the vault key and re-sealing).
+ *
+ * `expectedPublicKey` is what the user was shown when they decided. If the
+ * relay has served something different since, this refuses rather than
+ * approving a key nobody looked at — closing the window between display and
+ * confirmation.
+ */
+export async function approveMember(
+  groupId: string,
+  memberId: string,
+  expectedPublicKey: string,
+): Promise<void> {
+  await ensureReady();
+  const member = memberIdentity();
+  if (member === null) throw new Error('No member identity on this device.');
+
+  // Re-fetch rather than trusting whatever the UI is holding: the decision must
+  // be made against the directory as it is NOW.
+  const group = await getGroup(groupId);
+  const target = group?.members.find((m) => m.member_id === memberId);
+  if (target === undefined) {
+    throw new Error('That member is no longer in the group.');
+  }
+  if (target.public_key !== expectedPublicKey) {
+    throw new Error(
+      'This member’s key changed while you were deciding. Nothing was shared. Re-check the safety number before approving.',
+    );
+  }
+
+  const keys = await getKeys(groupId);
+  if (keys === null) throw new Error('This vault has no keys to share yet.');
+
+  const updated = grant_group_access(
+    keys.json,
+    member.secret,
+    member.id,
+    JSON.stringify({ id: target.member_id, name: target.name, public_key: target.public_key }),
+  );
+  await putKeys(groupId, updated, keys.version);
+  // Pin only AFTER the grant lands, so a failed upload does not leave us
+  // trusting a key we never actually shared to.
+  pinKey(groupId, memberId, target.public_key);
+}
+
 export async function saveFamilyEntries(
   groupId: string,
   entries: Entry[],

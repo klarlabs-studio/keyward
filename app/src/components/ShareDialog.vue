@@ -230,6 +230,45 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
             then <a href="#" @click.prevent="s.reloadActive()">check again</a>.
           </p>
 
+          <!--
+            Pending approvals. Nothing has been shared with these people yet.
+
+            This exists because granting used to happen silently on every load,
+            against whatever key the server reported — which meant the server
+            could add a member and be handed the vault key. Approval is now an
+            explicit act, and it is irreversible in practice: undoing it means
+            rotating the vault key and re-sealing every item.
+          -->
+          <div
+            v-if="!s.active.removed && s.active.pendingApproval.length > 0"
+            class="section pending"
+          >
+            <div class="lbl">Waiting for your approval ({{ s.active.pendingApproval.length }})</div>
+            <p class="pending-why">
+              Nothing has been shared with them yet. Check the safety number below with them
+              directly — in person or by phone, not through this app — before approving.
+            </p>
+            <div v-for="p in s.active.pendingApproval" :key="p.memberId" class="member pending-row">
+              <span class="dot" :class="{ warn: p.state === 'changed' }"></span>
+              <span class="m-name">{{ p.name }}</span>
+              <span v-if="p.state === 'changed'" class="tag danger">Key changed</span>
+              <span v-else class="tag">New</span>
+              <button
+                class="approve"
+                :class="{ danger: p.state === 'changed' }"
+                :disabled="s.busy"
+                @click="s.approveMember(p.memberId, p.publicKey)"
+              >
+                Approve
+              </button>
+            </div>
+            <p v-if="s.active.pendingApproval.some((p) => p.state === 'changed')" class="danger-note">
+              A member’s key changed. That happens legitimately when someone reinstalls or
+              switches device — but it is also exactly what a compromised server would do to
+              read your shared items. Confirm with them out of band before approving.
+            </p>
+          </div>
+
           <div v-if="!s.active.removed" class="section">
             <div class="lbl">Members ({{ s.active.members.length }})</div>
             <div v-for="m in s.active.members" :key="m.member_id" class="member">
@@ -716,5 +755,49 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
   color: inherit;
   font-weight: 700;
   text-decoration: underline;
+}
+
+/* Pending approvals — deliberately visually distinct from the member list:
+   these people have NOT been given access, and the difference must be obvious
+   at a glance rather than inferred from a label. */
+.pending {
+  border: 1px solid var(--warn-border, #d9a441);
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--warn-border, #d9a441) 8%, transparent);
+}
+.pending-why {
+  margin: 0.25rem 0 0.6rem;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+.pending-row {
+  gap: 0.5rem;
+}
+.dot.warn {
+  background: var(--danger, #d64545);
+}
+.tag.danger {
+  background: var(--danger, #d64545);
+  color: #fff;
+}
+.approve {
+  margin-left: auto;
+  padding: 0.25rem 0.7rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.approve.danger {
+  border-color: var(--danger, #d64545);
+  color: var(--danger, #d64545);
+}
+.approve:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.danger-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  color: var(--danger, #d64545);
 }
 </style>

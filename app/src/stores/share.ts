@@ -301,6 +301,7 @@ export const useShareStore = defineStore('share', {
           this.identity,
           contact,
           secretKey,
+          this.active.groupId,
         );
         const version = await share.saveFamilyEntries(
           this.active.groupId,
@@ -339,6 +340,31 @@ export const useShareStore = defineStore('share', {
     },
 
     /** Promote/demote a member (Owner only), then reload the directory. */
+    /**
+     * Approve a pending member and wrap the vault key to them.
+     *
+     * Only ever called from an explicit click. This is the irreversible step:
+     * once their key is wrapped and uploaded, whoever holds the matching secret
+     * can read every shared credential, and revoking afterwards means rotating
+     * the vault key and re-sealing everything.
+     */
+    async approveMember(memberId: string, publicKey: string): Promise<void> {
+      if (!this.active) return;
+      this.busy = true;
+      try {
+        await share.approveMember(this.active.groupId, memberId, publicKey);
+        toast('Member approved — they can now open the shared vault');
+        await this.reloadActive();
+      } catch (e) {
+        // Surfaced verbatim: these messages explain WHY nothing was shared
+        // (key changed mid-decision, member gone), which the user needs in
+        // order to act, and quietly swallowing them would look like success.
+        toast(e instanceof Error ? e.message : 'Could not approve that member');
+      } finally {
+        this.busy = false;
+      }
+    },
+
     async setRole(memberId: string, role: share.Role): Promise<void> {
       if (!this.active) return;
       this.busy = true;
