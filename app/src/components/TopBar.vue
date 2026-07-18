@@ -12,6 +12,7 @@ const emit = defineEmits<{
   (e: 'import'): void;
   (e: 'export'): void;
   (e: 'sync'): void;
+  (e: 'share'): void;
   (e: 'toggle-nav'): void;
 }>();
 
@@ -90,6 +91,13 @@ function toggleTheme(): void {
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M17.5 19a5 5 0 0 0 .5-9.9A6 6 0 0 0 6.5 8 4.5 4.5 0 0 0 7 17h10.5Z" />
+      </svg>
+    </button>
+    <button class="icon-btn" title="Family sharing" aria-label="Family sharing" @click="emit('share')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="9" cy="8" r="3" />
+        <path d="M3 20a6 6 0 0 1 12 0" />
+        <path d="M16 5.5a3 3 0 0 1 0 5.5M17 20a6 6 0 0 0-3-5.2" />
       </svg>
     </button>
     <button class="icon-btn" title="Lock vault" aria-label="Lock vault" @click="vault.lock()">

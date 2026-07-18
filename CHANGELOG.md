@@ -3,6 +3,53 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.30.0] — 2026-07-18
+
+**Family sharing, slice 3: the app UX — a person can now actually share a vault.**
+
+The [1.28.0] relay and [1.29.0] client crypto are now wired into a real UI. Family
+sharing rides on cloud sync (each member authenticates as their own account on the
+shared server), so a **new people icon** in the top bar opens a **Family sharing**
+dialog that gates on cloud sync being enabled.
+
+### Added — the sharing surface
+- **`app/src/lib/sharing.ts`** — the family-sharing client: this device's member
+  identity (an X25519 keypair kept in localStorage next to the device Secret Key),
+  a local registry of joined vaults, and the group-relay HTTP client (create,
+  invite, join, get/put keys, get/put content, revoke) composed with the WASM
+  sharing crypto. Invites are shared as a single `groupId.code` string.
+- **`app/src/stores/share.ts`** — a Pinia store for the sharing session: create or
+  join a family vault, open it (decrypting its content), add/remove shared logins,
+  mint invites, and remove members.
+- **`ShareDialog.vue`** — create a family vault, invite members (single-use code +
+  an out-of-band-sharing caution), see the member directory, add and read shared
+  logins, and remove members. Distinguishes *pending* (joined, not yet granted) and
+  *removed* (revoked) states.
+
+### How access works (zero-knowledge)
+- Redeeming an invite only publishes the joiner's public key; an existing member's
+  device then wraps the vault key to them. `loadFamily` **auto-reconciles** on open:
+  any joined member without a wrapped key is granted access and the keys are
+  re-uploaded — so "open the vault" completes pending invites.
+- Removing a member **rotates** the vault key (fresh key, re-wrapped to the
+  remaining members, content re-sealed) for true revocation; a removed member is
+  also dropped from the directory (403 thereafter).
+
+### Verified
+- **Full two-member protocol against a live server through real WASM** (Node):
+  create → invite → join → *pending* → owner-opens auto-grant → cross-member read →
+  add item → **revoke + rotate** → lockout → owner still reads. All pass.
+- **UI smoke test (visible browser, live server):** enable cloud sync → open Family
+  sharing → create "Our Family" → owner shown → add a shared "Home Wi-Fi" login
+  (round-trips through the relay) → mint a `groupId.code` invite. Zero console errors.
+
+### Scope + gate
+- This slice keeps the personal 3-pane untouched; sharing is a self-contained
+  surface. Deeper integration (family items in the main list, multi-vault switching)
+  and the managed **cloud** (a paid, Kubernetes-hosted instance) are follow-ups. A
+  formal external review of the sharing crypto remains a hard gate before GA — the
+  UI should flag "prototype" prominently until then.
+
 ## [1.29.0] — 2026-07-17
 
 **Family sharing, slice 2: the client crypto surface — sharing runs in the browser.**

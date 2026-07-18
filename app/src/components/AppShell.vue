@@ -15,6 +15,7 @@ import EmergencyKitDialog from './EmergencyKitDialog.vue';
 import ImportDialog from './ImportDialog.vue';
 import ExportDialog from './ExportDialog.vue';
 import SyncDialog from './SyncDialog.vue';
+import ShareDialog from './ShareDialog.vue';
 
 const vault = useVaultStore();
 const showAdd = ref(false);
@@ -22,6 +23,7 @@ const showKit = ref(false);
 const showImport = ref(false);
 const showExport = ref(false);
 const showSync = ref(false);
+const showShare = ref(false);
 // Mobile drawer for the category rail (hidden by the responsive layout otherwise).
 const navOpen = ref(false);
 </script>
@@ -35,6 +37,7 @@ const navOpen = ref(false);
       @import="showImport = true"
       @export="showExport = true"
       @sync="showSync = true"
+      @share="showShare = true"
       @toggle-nav="navOpen = !navOpen"
     />
     <div v-if="navOpen" class="nav-backdrop" @click="navOpen = false"></div>
@@ -47,6 +50,7 @@ const navOpen = ref(false);
   <ImportDialog v-if="showImport" @close="showImport = false" />
   <ExportDialog v-if="showExport" @close="showExport = false" />
   <SyncDialog v-if="showSync" @close="showSync = false" />
+  <ShareDialog v-if="showShare" @close="showShare = false" />
   <EmergencyKitDialog
     v-if="showKit && vault.secretKey"
     :secret-key="vault.secretKey"
