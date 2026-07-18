@@ -66,13 +66,32 @@ spec:
       app.kubernetes.io/name: proctor-sync-server
   policyTypes:
     - Ingress
+  # TWO SEPARATE RULES, not one rule with two `from` entries.
+  #
+  # Semantically these are equivalent — entries within a single `from` are OR'd,
+  # and separate ingress rules are also OR'd. In practice they are not treated
+  # identically by every CNI: on k3s (kube-router) a rule whose first `from`
+  # entry combines namespaceSelector AND podSelector was observed to admit that
+  # first entry while the sibling namespace entry did not take effect, so
+  # Prometheus was refused (fast REJECT, not a timeout) even though the manifest
+  # plainly allowed it. Splitting them keeps each rule to one shape and is
+  # portable.
+  #
+  # Worth knowing how this hid: the earlier live validation proved that an
+  # unauthorized pod was BLOCKED and that the ingress controller was ALLOWED. It
+  # never positively tested the monitoring path, so a silently ineffective allow
+  # looked exactly like success. A deny-only test cannot tell you an allow works.
   ingress:
+    # (a) ingress controller namespace. ADJUST to your cluster.
     - from:
-        # (a) ingress-nginx controller namespace. ADJUST to your cluster.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
-        # (b) Prometheus / monitoring namespace. ADJUST to your cluster.
+      ports:
+        - protocol: TCP
+          port: 8787
+    # (b) Prometheus / monitoring namespace. ADJUST to your cluster.
+    - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
