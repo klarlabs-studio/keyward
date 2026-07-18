@@ -696,6 +696,14 @@
       "severity": "medium",
       "reason": "False positive: the scanner is matching a snippet inside its own .nox/baseline.json (a previously-recorded finding's context), not live code or config.",
       "created_at": "2026-07-18T08:18:39.772474Z"
+    },
+    {
+      "fingerprint": "ea91c51975a56b06409898475c8eafdf93ffddb90aa64ae9efca66fd18d2bf26",
+      "rule_id": "DATA-001",
+      "file_path": ".nox/baseline.json",
+      "severity": "medium",
+      "reason": "False positive: the scanner is matching the example email inside its own .nox/baseline.json (a prior baselined finding's recorded snippet), not live code.",
+      "created_at": "2026-07-18T08:40:28.019679Z"
     }
   ]
 }

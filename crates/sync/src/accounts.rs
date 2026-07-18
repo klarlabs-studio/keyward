@@ -65,6 +65,55 @@ pub struct DeviceInfo {
     pub expires_epoch: Option<u64>,
 }
 
+/// An account's subscription plan — the entitlements plane. `Free` is the default
+/// (self-host and the free managed tier); `Individual` and `Family` are the paid
+/// managed tiers. The billing system (Stripe webhook) is the source of truth and
+/// updates this via [`AccountStore::set_plan`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Plan {
+    /// Self-host, or the free managed tier: capped devices, no family sharing.
+    #[default]
+    Free,
+    /// Paid: unlimited devices + the AI credential broker.
+    Individual,
+    /// Paid: everything, plus family sharing.
+    Family,
+}
+
+impl Plan {
+    /// The canonical lowercase name (stored in Postgres / `accounts.json`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Plan::Free => "free",
+            Plan::Individual => "individual",
+            Plan::Family => "family",
+        }
+    }
+
+    /// Parse a stored plan name; anything unrecognized falls back to `Free`.
+    pub fn parse(s: &str) -> Plan {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "individual" => Plan::Individual,
+            "family" => Plan::Family,
+            _ => Plan::Free,
+        }
+    }
+
+    /// Whether this plan may use family sharing (paid Family only).
+    pub fn can_share(&self) -> bool {
+        matches!(self, Plan::Family)
+    }
+
+    /// Max devices allowed, or `None` for unlimited. Free is capped; paid is not.
+    pub fn device_limit(&self) -> Option<usize> {
+        match self {
+            Plan::Free => Some(2),
+            Plan::Individual | Plan::Family => None,
+        }
+    }
+}
+
 /// The driven port for accounts, per-device tokens, and device management.
 pub trait AccountStore {
     /// Register a new account (optional contact email) with its first device
@@ -108,6 +157,14 @@ pub trait AccountStore {
     /// Revoke a device (cut off a lost/stolen device's token). Returns whether a
     /// matching device existed.
     fn revoke_device(&self, account_id: &str, device_id: &str) -> Result<bool, SyncError>;
+
+    /// The account's current plan (defaults to [`Plan::Free`] for an unknown
+    /// account). Read by the server to enforce entitlements.
+    fn get_plan(&self, account_id: &str) -> Result<Plan, SyncError>;
+
+    /// Set the account's plan (called by the billing webhook). Returns `false` if
+    /// the account does not exist.
+    fn set_plan(&self, account_id: &str, plan: Plan) -> Result<bool, SyncError>;
 }
 
 /// Generate a random 128-bit identifier as lowercase hex (32 chars).
@@ -157,6 +214,10 @@ impl DeviceRecord {
 struct AccountRecord {
     email: Option<String>,
     devices: Vec<DeviceRecord>,
+    /// Subscription plan (entitlements). `#[serde(default)]` keeps pre-plan
+    /// `accounts.json` files loadable (they default to `Free`).
+    #[serde(default)]
+    plan: Plan,
 }
 
 /// The registry state: accounts, each holding its devices (by token hash). No
@@ -208,6 +269,7 @@ impl Registry {
             AccountRecord {
                 email: email.map(str::to_string),
                 devices: Vec::new(),
+                plan: Plan::Free,
             },
         );
         self.new_device(&account_id, label, now, ttl_seconds)
@@ -279,6 +341,23 @@ impl Registry {
         }
         false
     }
+
+    fn get_plan(&self, account_id: &str) -> Plan {
+        self.accounts
+            .get(account_id)
+            .map(|a| a.plan)
+            .unwrap_or_default()
+    }
+
+    fn set_plan(&mut self, account_id: &str, plan: Plan) -> bool {
+        match self.accounts.get_mut(account_id) {
+            Some(account) => {
+                account.plan = plan;
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// In-memory account registry (tests, and a stateless dev server).
@@ -340,6 +419,14 @@ impl AccountStore for MemoryAccountStore {
             .lock()
             .unwrap()
             .revoke_device(account_id, device_id))
+    }
+
+    fn get_plan(&self, account_id: &str) -> Result<Plan, SyncError> {
+        Ok(self.inner.lock().unwrap().get_plan(account_id))
+    }
+
+    fn set_plan(&self, account_id: &str, plan: Plan) -> Result<bool, SyncError> {
+        Ok(self.inner.lock().unwrap().set_plan(account_id, plan))
     }
 }
 
@@ -440,6 +527,21 @@ impl AccountStore for FileAccountStore {
             self.write(&registry)?;
         }
         Ok(revoked)
+    }
+
+    fn get_plan(&self, account_id: &str) -> Result<Plan, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        Ok(self.read()?.get_plan(account_id))
+    }
+
+    fn set_plan(&self, account_id: &str, plan: Plan) -> Result<bool, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        let mut registry = self.read()?;
+        let ok = registry.set_plan(account_id, plan);
+        if ok {
+            self.write(&registry)?;
+        }
+        Ok(ok)
     }
 }
 

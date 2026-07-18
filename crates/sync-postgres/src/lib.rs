@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::io;
 
-use proctor_sync::accounts::{Account, AccountStore, DeviceInfo, TokenIdentity};
+use proctor_sync::accounts::{Account, AccountStore, DeviceInfo, Plan, TokenIdentity};
 use proctor_sync::groups::{GroupInvite, GroupMember, RedeemOutcome, ShareGroup, ShareGroupStore};
 use proctor_sync::{SyncEnvelope, SyncError, SyncStore};
 
@@ -364,6 +364,29 @@ impl AccountStore for PostgresAccountStore {
             .execute(
                 "DELETE FROM devices WHERE account_id = $1 AND device_id = $2",
                 &[&account_id, &device_id],
+            )
+            .map_err(db_err)?;
+        Ok(n > 0)
+    }
+
+    fn get_plan(&self, account_id: &str) -> Result<Plan, SyncError> {
+        let mut c = self.pool.get().map_err(db_err)?;
+        let plan: Option<String> = c
+            .query_opt(
+                "SELECT plan FROM accounts WHERE account_id = $1",
+                &[&account_id],
+            )
+            .map_err(db_err)?
+            .map(|r| r.get(0));
+        Ok(plan.map(|p| Plan::parse(&p)).unwrap_or_default())
+    }
+
+    fn set_plan(&self, account_id: &str, plan: Plan) -> Result<bool, SyncError> {
+        let mut c = self.pool.get().map_err(db_err)?;
+        let n = c
+            .execute(
+                "UPDATE accounts SET plan = $1 WHERE account_id = $2",
+                &[&plan.as_str(), &account_id],
             )
             .map_err(db_err)?;
         Ok(n > 0)

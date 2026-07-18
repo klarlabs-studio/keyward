@@ -3,6 +3,48 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.33.0] — 2026-07-18
+
+**Managed cloud, phase 2: entitlements + Stripe billing webhook.**
+
+The plan (`accounts.plan`) is now enforced, and Stripe drives plan changes — the
+paid tiers become real. (Email verification, needing an SMTP provider, is deferred.)
+
+### Added — the entitlements plane (`proctor-sync`)
+- A `Plan` type — `Free` / `Individual` / `Family` — with `can_share()` (Family
+  only) and `device_limit()` (Free = 2, paid = unlimited). Stored on the account
+  (`accounts.plan` in Postgres; a `#[serde(default)]` field in `accounts.json`, so
+  existing files still load). New `AccountStore::get_plan` / `set_plan`, implemented
+  by **all three** adapters (memory, file, Postgres) and covered by the shared
+  account contract.
+
+### Added — server enforcement + billing
+- **`GET /v1/account`** → the caller's plan + device usage
+  (`{plan, can_share, devices, device_limit}`), so the client can reflect the tier.
+- **Free-plan device cap**: `POST /v1/devices` returns **402** past the limit.
+- **Sharing gated to Family**: `POST /v1/groups` (creating/owning a family vault)
+  returns **402** unless the account is on Family. Joining a vault stays open —
+  members are covered by the owner's plan (the 1Password family model).
+- **`POST /v1/billing/webhook`** — a Stripe webhook that **verifies the
+  `Stripe-Signature` HMAC** (SHA-256 over `"{t}.{payload}"`, constant-time compared,
+  with replay-window checking), then maps a subscription event's
+  `metadata.{account_id,plan}` to `set_plan` (a cancelled subscription drops to
+  Free). `PROCTOR_STRIPE_WEBHOOK_SECRET` gates it (unset → 503). Metadata plane only
+  — **zero-knowledge is untouched**.
+
+### Verified
+- Unit tests for the signature verifier (valid/tampered/wrong-secret/stale/garbage)
+  and constant-time compare; the plan get/set contract runs against memory, file,
+  **and Postgres**. End-to-end smoke: a Free account is capped at 2 devices (402 on
+  the 3rd) and blocked from creating a family vault (402); a **real Stripe-signed
+  webhook** upgrades it to Family (`applied:true`); the cap lifts and vault creation
+  succeeds; a bad signature → 400. Full workspace tests + clippy clean; nox 0 active.
+
+### Next
+- Phase 3 ops (backups/PITR, monitoring, status page) + email verification (SMTP);
+  a checkout flow in the app that stamps `metadata.account_id`. The **formal crypto
+  review** remains the gate before onboarding paying users.
+
 ## [1.32.0] — 2026-07-18
 
 **Managed cloud, phase 1: the scalable Postgres backend + the cloud plan.**

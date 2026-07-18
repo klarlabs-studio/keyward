@@ -24,7 +24,7 @@ pub mod groups;
 pub mod contract;
 
 pub use accounts::{
-    Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, TokenIdentity,
+    Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, Plan, TokenIdentity,
 };
 pub use groups::{
     FileShareGroupStore, GroupInvite, GroupMember, MemoryShareGroupStore, RedeemOutcome,

@@ -1341,9 +1341,11 @@ dependencies = [
 name = "proctor-sync-server"
 version = "1.32.0"
 dependencies = [
+ "hmac 0.12.1",
  "proctor-sync",
  "proctor-sync-postgres",
  "serde_json",
+ "sha2 0.10.9",
  "tiny_http",
 ]
 

@@ -6,7 +6,7 @@
 //! Enabled by the `testkit` feature so the assertions don't ship in normal builds.
 
 use crate::groups::{GroupInvite, GroupMember, RedeemOutcome, ShareGroupStore};
-use crate::{AccountStore, SyncError, SyncStore};
+use crate::{AccountStore, Plan, SyncError, SyncStore};
 
 /// Contract for a [`SyncStore`]: versioned blob get/put/delete with optimistic
 /// concurrency. `key_prefix` lets a shared backend avoid key collisions between
@@ -125,6 +125,13 @@ pub fn account_store_contract(store: &dyn AccountStore) {
         .resolve_token(&ttl.device_token, 10_061)
         .unwrap()
         .is_none());
+
+    // Entitlements: a new account is Free; set_plan updates it; unknown → false.
+    assert_eq!(store.get_plan(&acct.account_id).unwrap(), Plan::Free);
+    assert!(store.set_plan(&acct.account_id, Plan::Family).unwrap());
+    assert_eq!(store.get_plan(&acct.account_id).unwrap(), Plan::Family);
+    assert!(!store.set_plan("no-such-account", Plan::Individual).unwrap());
+    assert_eq!(store.get_plan("no-such-account").unwrap(), Plan::Free);
 }
 
 /// Contract for a [`ShareGroupStore`]: membership directory, single-use TTL'd

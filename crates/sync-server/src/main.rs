@@ -12,6 +12,7 @@
 //!   PROCTOR_SYNC_PG              PostgreSQL URL → the scalable managed-cloud backend
 //!                               (takes precedence over PROCTOR_SYNC_DIR)
 //!   PROCTOR_SYNC_PG_POOL        Postgres pool size per replica (default 8)
+//!   PROCTOR_STRIPE_WEBHOOK_SECRET  Stripe webhook signing secret; unset → webhook 503
 //!   PROCTOR_SYNC_DIR              storage dir (FileStore + FileAccountStore); unset → in-memory
 //!   PROCTOR_SYNC_TOKENS           optional pre-seed "token1:account1,token2:account2"
 //!                                 (the registry is the source of truth; this is a fallback
@@ -41,6 +42,8 @@
 //!   GET    /v1/vault          -> 200 + blob (+ X-Vault-Version) | 404 | 401
 //!   PUT    /v1/vault          -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
 //!   DELETE /v1/vault          -> 204 | 401  (erase this account's vault, idempotent)
+//!   GET    /v1/account        -> 200 {account_id,plan,can_share,devices,device_limit} | 401
+//!   POST   /v1/billing/webhook-> 200 (Stripe-signed; updates the account's plan) | 400 | 503
 //!   OPTIONS *                 -> 204 (CORS preflight)
 //!   (If-Match: <version> on PUT; omit for the first upload.)
 //!
@@ -57,12 +60,14 @@
 //!   The server sees only public keys, opaque wrapped keys, opaque blobs, and
 //!   hashed invite codes — never a vault key, master password, or Secret Key.
 
+use hmac::{Hmac, Mac};
 use proctor_sync::groups::{self, GroupInvite, GroupMember};
 use proctor_sync::{
     AccountStore, FileAccountStore, FileShareGroupStore, FileStore, MemoryAccountStore,
-    MemoryShareGroupStore, MemoryStore, RedeemOutcome, ShareGroupStore, SyncError, SyncStore,
+    MemoryShareGroupStore, MemoryStore, Plan, RedeemOutcome, ShareGroupStore, SyncError, SyncStore,
     TokenIdentity,
 };
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::sync::Mutex;
@@ -167,6 +172,9 @@ struct App {
     token_ttl: Option<u64>,
     /// Per-client-IP rate limiter for the abuse-prone endpoints (register + invite mint).
     limiter: RateLimiter,
+    /// Stripe webhook signing secret (`PROCTOR_STRIPE_WEBHOOK_SECRET`). `None`
+    /// disables the billing webhook (returns 503).
+    stripe_secret: Option<String>,
 }
 
 /// Read `PROCTOR_SYNC_TOKEN_TTL` as an optional lifetime in seconds. Unset,
@@ -238,6 +246,10 @@ fn main() {
 
     let limiter = RateLimiter::from_env();
 
+    let stripe_secret = std::env::var("PROCTOR_STRIPE_WEBHOOK_SECRET")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+
     let app = App {
         store,
         accounts,
@@ -245,6 +257,7 @@ fn main() {
         seed_tokens,
         token_ttl,
         limiter,
+        stripe_secret,
     };
 
     let server = Server::http(&addr).unwrap_or_else(|e| {
@@ -417,6 +430,8 @@ fn handle(request: Request, app: &App) {
         }
         (Method::Delete, "/v1/vault") => handle_delete_vault(request, app),
         (_, "/v1/vault") => handle_vault(request, app, method, &url),
+        (Method::Get, "/v1/account") => handle_account(request, app),
+        (Method::Post, "/v1/billing/webhook") => handle_billing_webhook(request, app),
         (_, path) if path == "/v1/groups" || path.starts_with("/v1/groups/") => {
             handle_groups(request, app, method, &url);
         }
@@ -471,6 +486,31 @@ fn handle_add_device(mut request: Request, app: &App) {
     };
     let label = str_field(&read_body_json(&mut request), "label")
         .unwrap_or_else(|| "New device".to_string());
+
+    // Entitlement: the free plan caps the device count. Resolve the caller's
+    // account and refuse (402) if adding would exceed the plan's limit.
+    if let Ok(Some(identity)) = app.accounts.resolve_token(&token, now_unix()) {
+        if let Ok(plan) = app.accounts.get_plan(&identity.account_id) {
+            if let Some(limit) = plan.device_limit() {
+                let count = app
+                    .accounts
+                    .list_devices(&identity.account_id)
+                    .map(|d| d.len())
+                    .unwrap_or(0);
+                if count >= limit {
+                    respond(
+                        request,
+                        text(
+                            "device limit reached on the free plan — upgrade to add more devices",
+                            402,
+                        ),
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
     match app
         .accounts
         .add_device(&token, &label, now_unix(), app.token_ttl)
@@ -703,6 +743,24 @@ fn handle_groups(request: Request, app: &App, method: Method, url: &str) {
 /// POST /v1/groups — create a group; the caller becomes its owner. Body:
 /// `{member_id, name, public_key}` (the owner's public member identity).
 fn handle_group_create(mut request: Request, app: &App, account: &str) {
+    // Entitlement: creating (owning) a family vault requires the Family plan. Members
+    // who *join* a vault do not need their own paid plan — the owner's plan covers them.
+    if !app
+        .accounts
+        .get_plan(account)
+        .map(|p| p.can_share())
+        .unwrap_or(false)
+    {
+        respond(
+            request,
+            text(
+                "family sharing requires the Family plan — upgrade to create a family vault",
+                402,
+            ),
+        );
+        return;
+    }
+
     let body = read_body_json(&mut request);
     let (Some(member_id), Some(public_key)) = (
         str_field(&body, "member_id"),
@@ -949,6 +1007,157 @@ fn handle_group_blob(
     }
 }
 
+/// GET /v1/account — auth. The caller's plan + device usage (the entitlements
+/// view the client uses to reflect the tier and gate paid features in the UI).
+fn handle_account(request: Request, app: &App) {
+    let account = match identity_for(&request, app) {
+        Some(i) => i.account_id,
+        None => {
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+    let plan = app.accounts.get_plan(&account).unwrap_or(Plan::Free);
+    let devices = app
+        .accounts
+        .list_devices(&account)
+        .map(|d| d.len())
+        .unwrap_or(0);
+    let body = serde_json::json!({
+        "account_id": account,
+        "plan": plan.as_str(),
+        "can_share": plan.can_share(),
+        "devices": devices,
+        "device_limit": plan.device_limit(),
+    })
+    .to_string();
+    respond(request, json(body, 200));
+}
+
+/// POST /v1/billing/webhook — Stripe webhook. Verifies the `Stripe-Signature`
+/// HMAC over the raw body, then maps a subscription event to a plan and updates the
+/// account (metadata plane only — zero-knowledge is untouched). 503 if no signing
+/// secret is configured, 400 on a bad signature.
+fn handle_billing_webhook(mut request: Request, app: &App) {
+    let Some(secret) = app.stripe_secret.clone() else {
+        respond(request, text("billing webhook not configured", 503));
+        return;
+    };
+    let sig = request
+        .headers()
+        .iter()
+        .find(|h| {
+            h.field
+                .as_str()
+                .as_str()
+                .eq_ignore_ascii_case("stripe-signature")
+        })
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
+    let mut body = String::new();
+    if request.as_reader().read_to_string(&mut body).is_err() {
+        respond(request, text("bad body", 400));
+        return;
+    }
+    if !verify_stripe_signature(&body, &sig, &secret, now_unix(), 300) {
+        respond(request, text("invalid signature", 400));
+        return;
+    }
+
+    let event: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let kind = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let obj = event
+        .get("data")
+        .and_then(|d| d.get("object"))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let metadata = obj.get("metadata");
+    let account_id = metadata
+        .and_then(|m| m.get("account_id"))
+        .and_then(|v| v.as_str());
+    let Some(account_id) = account_id else {
+        // No account to map — acknowledge so Stripe stops retrying.
+        respond(
+            request,
+            json(r#"{"received":true,"applied":false}"#.to_string(), 200),
+        );
+        return;
+    };
+    // A cancelled subscription drops to Free; otherwise the plan is carried in the
+    // checkout/subscription metadata (set by the client at checkout).
+    let plan = if kind == "customer.subscription.deleted" {
+        Plan::Free
+    } else {
+        Plan::parse(
+            metadata
+                .and_then(|m| m.get("plan"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("free"),
+        )
+    };
+    let applied = app.accounts.set_plan(account_id, plan).unwrap_or(false);
+    eprintln!(
+        "POST /v1/billing/webhook -> 200 (event={kind} account={account_id} plan={} applied={applied})",
+        plan.as_str()
+    );
+    respond(
+        request,
+        json(format!(r#"{{"received":true,"applied":{applied}}}"#), 200),
+    );
+}
+
+/// Verify a Stripe `Stripe-Signature` header over the raw payload. Header format is
+/// `t=<unix>,v1=<hex-hmac>[,v1=...]`; the signed content is `"{t}.{payload}"`,
+/// HMAC-SHA256'd with the signing secret and constant-time compared. Timestamps
+/// outside `tolerance` seconds of `now` are rejected (replay protection) when
+/// `tolerance > 0`.
+fn verify_stripe_signature(
+    payload: &str,
+    sig_header: &str,
+    secret: &str,
+    now: u64,
+    tolerance: u64,
+) -> bool {
+    let mut timestamp: Option<u64> = None;
+    let mut signatures: Vec<&str> = Vec::new();
+    for part in sig_header.split(',') {
+        let part = part.trim();
+        if let Some(t) = part.strip_prefix("t=") {
+            timestamp = t.parse().ok();
+        } else if let Some(v) = part.strip_prefix("v1=") {
+            signatures.push(v);
+        }
+    }
+    let Some(t) = timestamp else { return false };
+    if signatures.is_empty() {
+        return false;
+    }
+    if tolerance > 0 && now.abs_diff(t) > tolerance {
+        return false;
+    }
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(format!("{t}.{payload}").as_bytes());
+    let tag = mac.finalize().into_bytes();
+    let expected: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+    signatures
+        .iter()
+        .any(|s| constant_time_eq(s.as_bytes(), expected.as_bytes()))
+}
+
+/// Length-checked constant-time byte comparison (avoids leaking match position).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn respond_500(request: Request, err: &SyncError) {
     eprintln!("error: {err}");
     respond(request, text("server error", 500));
@@ -957,6 +1166,63 @@ fn respond_500(request: Request, err: &SyncError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Produce a valid `Stripe-Signature` header for `payload` at time `t`.
+    fn sign(payload: &str, secret: &str, t: u64) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(format!("{t}.{payload}").as_bytes());
+        let hex: String = mac
+            .finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        format!("t={t},v1={hex}")
+    }
+
+    #[test]
+    fn stripe_signature_roundtrip_and_rejections() {
+        let secret = "whsec_test";
+        let payload = r#"{"type":"customer.subscription.updated"}"#;
+        let now = 1_000_000;
+        let header = sign(payload, secret, now);
+
+        // A correctly signed, fresh payload verifies.
+        assert!(verify_stripe_signature(payload, &header, secret, now, 300));
+        // Within tolerance is fine.
+        assert!(verify_stripe_signature(
+            payload,
+            &header,
+            secret,
+            now + 200,
+            300
+        ));
+
+        // Tampered payload, wrong secret, stale timestamp, and a missing/garbage
+        // header all fail.
+        assert!(!verify_stripe_signature("{}", &header, secret, now, 300));
+        assert!(!verify_stripe_signature(
+            payload, &header, "wrong", now, 300
+        ));
+        assert!(!verify_stripe_signature(
+            payload,
+            &header,
+            secret,
+            now + 10_000,
+            300
+        ));
+        assert!(!verify_stripe_signature(
+            payload, "garbage", secret, now, 300
+        ));
+        assert!(!verify_stripe_signature(payload, "t=1", secret, now, 0));
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_equal_slices() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+    }
 
     #[test]
     fn allows_up_to_the_limit_then_blocks_within_a_window() {
