@@ -8,6 +8,7 @@ import type { Entry, Login } from '../lib/passbook-types';
 import { nowUnix } from '../lib/passbook';
 import * as share from '../lib/sharing';
 import type { FamilyVault, GroupRef, MemberIdentity } from '../lib/sharing';
+import { fetchAccount, planLabel, type AccountInfo } from '../lib/account';
 import { toast } from '../composables/useToast';
 
 interface ShareState {
@@ -23,6 +24,8 @@ interface ShareState {
   mainGroupId: string | null;
   // The selected shared entry in the main view.
   selectedSharedId: string | null;
+  // The account's entitlements (plan + device usage), or null if unknown.
+  account: AccountInfo | null;
 }
 
 export const useShareStore = defineStore('share', {
@@ -35,12 +38,21 @@ export const useShareStore = defineStore('share', {
     invite: null,
     mainGroupId: null,
     selectedSharedId: null,
+    account: null,
   }),
 
   getters: {
     isOwner(s): boolean {
       const id = s.identity?.id;
       return !!s.active?.members.some((m) => m.is_owner && m.member_id === id);
+    },
+    /** Whether this account may create/own a family vault (Family plan). */
+    canShare(s): boolean {
+      return s.account?.can_share ?? false;
+    },
+    /** Human label for the current plan (defaults to Free when unknown). */
+    planName(s): string {
+      return planLabel(s.account?.plan ?? 'free');
     },
     /** The family vault shown in the main view (loaded and matching), or null. */
     mainVault(s): FamilyVault | null {
@@ -59,6 +71,11 @@ export const useShareStore = defineStore('share', {
       this.available = share.sharingAvailable();
       this.identity = share.memberIdentity();
       this.groups = share.joinedGroups();
+    },
+
+    /** Load the account's entitlements from the server (best-effort). */
+    async loadAccount() {
+      this.account = await fetchAccount();
     },
 
     /** Create a new family vault owned by this device, and open it. */

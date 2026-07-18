@@ -7,7 +7,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useShareStore } from '@/stores/share';
 import { generatePassword } from '@/lib/passbook';
-import { copyText } from '@/composables/useToast';
+import { copyText, toast } from '@/composables/useToast';
 
 const s = useShareStore();
 const emit = defineEmits<{ (e: 'close'): void }>();
@@ -21,11 +21,22 @@ const addTitle = ref('');
 const addUser = ref('');
 const addPass = ref('');
 
-onMounted(() => s.refresh());
+onMounted(() => {
+  s.refresh();
+  s.loadAccount();
+});
 
 async function create(): Promise<void> {
   if (!yourName.value.trim()) return;
   await s.createVault(yourName.value, vaultName.value);
+}
+
+async function upgrade(): Promise<void> {
+  // Checkout is completed in the managed-cloud billing portal (a Stripe Checkout
+  // session); once the subscription webhook lands, re-checking the account here
+  // reflects the new plan and unlocks the create flow.
+  toast('Upgrade to Family in your billing portal, then tap Upgrade again to refresh.');
+  await s.loadAccount();
 }
 
 async function join(): Promise<void> {
@@ -98,6 +109,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           until it has.
         </p>
 
+        <!-- Current plan (once cloud sync is on). -->
+        <div v-if="s.available" class="planline">
+          <span class="dot"></span>Plan: <b>{{ s.planName }}</b>
+          <span v-if="s.account" class="pmuted">
+            · {{ s.account.devices }}<template v-if="s.account.device_limit"> / {{ s.account.device_limit }}</template>
+            device{{ s.account.devices === 1 ? '' : 's' }}
+          </span>
+        </div>
+
         <!-- Sharing needs cloud sync. -->
         <p v-if="!s.available" class="note warn">
           Family sharing runs over cloud sync. Turn on <b>Cloud sync</b> first, then
@@ -124,7 +144,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
             <input v-model="yourName" class="in" placeholder="e.g. Alex" />
           </div>
 
-          <div class="section">
+          <div v-if="s.canShare" class="section">
             <div class="lbl">Create a family vault</div>
             <div class="inline">
               <input v-model="vaultName" class="in" placeholder="Family vault" />
@@ -132,6 +152,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                 Create
               </button>
             </div>
+          </div>
+
+          <!-- Free / Individual: creating a family vault needs the Family plan. -->
+          <div v-else class="section">
+            <div class="lbl">Create a family vault</div>
+            <p class="note upgrade">
+              Creating a family vault is a <b>Family plan</b> feature. Upgrade to share
+              vaults with your family — you can still <b>join</b> a vault someone invites
+              you to on any plan.
+            </p>
+            <button class="btn-add full" :disabled="s.busy" @click="upgrade">
+              Upgrade to Family
+            </button>
           </div>
 
           <div class="section">
@@ -496,6 +529,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 }
 .note.proto b {
   color: var(--accent-ink);
+}
+.note.upgrade {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+.note.upgrade b {
+  color: var(--accent-ink);
+}
+.planline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.83rem;
+  color: var(--ink);
+}
+.planline b {
+  font-weight: 700;
+}
+.pmuted {
+  color: var(--muted);
 }
 .note a {
   color: inherit;

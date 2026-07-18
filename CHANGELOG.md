@@ -3,6 +3,36 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.35.0] — 2026-07-18
+
+**Entitlements in the app: the plan is surfaced and family sharing is gated in the UI.**
+
+Closes the loop on the cloud's phase-2/3 work — the server already enforced plans
+(402s); now the app reflects the tier and shows an upgrade path instead of an error.
+
+### Added — the entitlements UI
+- **`app/src/lib/account.ts`** — reads `GET /v1/account` (plan, `can_share`, device
+  count/limit) via the sync config; falls back to a conservative "unknown" on any
+  failure.
+- The **share store** now holds the account entitlements (`loadAccount`, `canShare`,
+  `planName`).
+- **`ShareDialog`** shows the current **plan + device usage** ("Plan: Free · 1 / 2
+  devices"), and gates *creating* a family vault on the **Family** plan: Free /
+  Individual accounts see an **Upgrade to Family** panel (with the honest note that
+  joining a vault stays open on any plan) instead of the create form — matching the
+  server's 402 with a friendly path rather than an error toast.
+
+### Verified (visible browser, live server)
+- A Free account shows the upgrade gate (no create form) and "Plan: Free · 1 / 2
+  devices". A **real Stripe-signed webhook** upgrades the account to Family; tapping
+  **Upgrade** re-fetches `/v1/account` and the UI flips to "Plan: Family · 1 device"
+  with the **Create** form unlocked. Zero console errors; app builds; nox 0 active.
+
+### Note
+- The upgrade CTA re-checks the plan after checkout; wiring a real **Stripe Checkout
+  session** endpoint (so "Upgrade" opens hosted checkout directly) is the remaining
+  billing piece. Email verification and the crypto-review gate still stand.
+
 ## [1.34.0] — 2026-07-18
 
 **Managed cloud, phase 3: observability + the k8s deploy wired to Postgres.**
