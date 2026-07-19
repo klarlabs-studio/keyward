@@ -63,7 +63,7 @@
 //!   POST   /v1/groups                     -> 200 {group_id} (owner from body member)
 //!   GET    /v1/groups/{id}                -> 200 {group_id,members,keys_version,content_version} | 403/404
 //!   POST   /v1/groups/{id}/invites        -> 200 {invite_code,expires_epoch} (member; body {ttl_seconds}; rate-limited)
-//!   POST   /v1/groups/{id}/members        -> 200 {joined:true} | 403 (invitee; body {code,member_id,name,public_key})
+//!   POST   /v1/groups/{id}/members        -> 200 {joined:true} | 403 (invitee; body {code,member_id,name,public_key,signing_key})
 //!   GET    /v1/groups/{id}/keys           -> 200 + wrapped-keys blob (+ X-Vault-Version) | 404
 //!   PUT    /v1/groups/{id}/keys           -> 200 + version | 409 (member; If-Match)
 //!   GET    /v1/groups/{id}/vault          -> 200 + shared blob (+ X-Vault-Version) | 404
@@ -1085,7 +1085,9 @@ fn handle_groups(request: Request, app: &App, method: Method, url: &str) {
 }
 
 /// POST /v1/groups — create a group; the caller becomes its owner. Body:
-/// `{member_id, name, public_key}` (the owner's public member identity).
+/// `{member_id, name, public_key, signing_key}` (the owner's public member
+/// identity). `signing_key` is optional so a pre-signing client can still create
+/// a group; omitting it means no member can verify what this one writes.
 fn handle_group_create(mut request: Request, app: &App, account: &str) {
     // Entitlement: creating (owning) a family vault requires the Family plan. Members
     // who *join* a vault do not need their own paid plan — the owner's plan covers them.
@@ -1124,6 +1126,7 @@ fn handle_group_create(mut request: Request, app: &App, account: &str) {
         account_id: account.to_string(),
         name: str_field(&body, "name").unwrap_or_default(),
         public_key,
+        signing_key: str_field(&body, "signing_key").unwrap_or_default(),
         role: Role::Owner,
         added_epoch: now_unix(),
     };
@@ -1242,7 +1245,8 @@ fn handle_group_invite(mut request: Request, app: &App, account: &str, id: &str)
 }
 
 /// POST /v1/groups/{id}/members — redeem an invite and join. Body:
-/// `{code, member_id, name, public_key}`. The caller joins as their own account.
+/// `{code, member_id, name, public_key, signing_key}`. The caller joins as their
+/// own account. `signing_key` is optional (see `handle_group_create`).
 fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
     let body = read_body_json(&mut request);
     let (Some(code), Some(member_id), Some(public_key)) = (
@@ -1261,6 +1265,7 @@ fn handle_group_join(mut request: Request, app: &App, account: &str, id: &str) {
         account_id: account.to_string(),
         name: str_field(&body, "name").unwrap_or_default(),
         public_key,
+        signing_key: str_field(&body, "signing_key").unwrap_or_default(),
         role: Role::Member,
         added_epoch: now_unix(),
     };

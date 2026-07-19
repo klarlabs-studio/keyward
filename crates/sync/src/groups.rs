@@ -104,6 +104,19 @@ pub struct GroupMember {
     pub name: String,
     /// The member's X25519 public key, opaque to the server (base64/hex client-side).
     pub public_key: String,
+    /// The member's Ed25519 verifying key, opaque to the server, used by other
+    /// members to authenticate wrapped-key sets this member writes.
+    ///
+    /// Published here only so members can DISCOVER it on first contact. It is
+    /// not authoritative: a client pins the key locally on first sight and
+    /// verifies against the pin thereafter. Trusting this field on every read
+    /// would defeat the point, since the server serving it also serves the
+    /// wrapped keys it is supposed to authenticate.
+    ///
+    /// `#[serde(default)]` (empty) keeps groups written before signing loadable;
+    /// an empty key verifies nothing and fails closed.
+    #[serde(default)]
+    pub signing_key: String,
     /// This member's role. `#[serde(default)]` keeps pre-role group JSON loadable
     /// (those members load as `Member`; Postgres backfills Owner from the legacy
     /// `is_owner` column on migration).
@@ -703,6 +716,7 @@ mod tests {
             account_id: "acct-owner".into(),
             name: "Alice".into(),
             public_key: "alice-pub".into(),
+            signing_key: String::new(),
             role: Role::Owner,
             added_epoch: 100,
         }
@@ -714,6 +728,7 @@ mod tests {
             account_id: "acct-bob".into(),
             name: "Bob".into(),
             public_key: "bob-pub".into(),
+            signing_key: String::new(),
             role: Role::Member,
             added_epoch: 200,
         }

@@ -231,6 +231,58 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           </p>
 
           <!--
+            The wrapped-key set could not be authenticated. Distinct from a
+            changed vault key: that asks "is this key the one I accepted?", this
+            asks "did a member actually write this at all?" — the question a
+            relay minting its own key and wrapping it to everyone would otherwise
+            pass unchallenged.
+          -->
+          <div
+            v-if="s.active.keysTrust === 'bad-signature' || s.active.keysTrust === 'unknown-signer'"
+            class="section keychanged"
+          >
+            <div class="lbl">These shared keys can't be trusted</div>
+            <p class="kc-body" v-if="s.active.keysTrust === 'bad-signature'">
+              The keys for this vault carry a signature that <b>doesn't check out</b>. That is
+              not something that happens by accident — it means the keys were changed by
+              someone who isn't a member you've trusted.
+            </p>
+            <p class="kc-body" v-else>
+              These keys were signed by <b>someone this device doesn't recognise</b>. It could
+              be a family member you haven't trusted yet — or it could be the server.
+              There's no way to tell from here.
+            </p>
+            <p class="kc-check">
+              Nothing has been read and nothing has been shared. Contact your family out of
+              band — a call or in person, not through this app — before using this vault
+              again.
+            </p>
+          </div>
+
+          <!--
+            Pre-signing vault: readable, but nobody has proven authorship. Offered
+            as an upgrade rather than a block, because blocking every vault that
+            predates signing would strand real families — and the vault-key pin
+            still catches a substitution in the meantime.
+          -->
+          <div v-if="s.active.keysTrust === 'unsigned'" class="section pending">
+            <div class="lbl">These shared keys aren't signed yet</div>
+            <p class="pending-why">
+              This vault was set up before Proctor signed shared keys, so there's no way to
+              prove who wrote them. Signing them now means your family can verify every
+              change from here on.
+            </p>
+            <p class="pending-why">
+              Only do this if the items below look right and the safety number matches what
+              your family sees. You're vouching for these keys — this device can't check
+              them for you.
+            </p>
+            <button class="approve" :disabled="s.busy" @click="s.adoptUnsignedKeys()">
+              These are my family's keys — sign them
+            </button>
+          </div>
+
+          <!--
             The shared vault key changed. Entries are deliberately not shown and
             nothing is re-sealed until the user decides: re-sealing under a key
             we have not accepted is exactly what hands a substituting relay the
@@ -331,6 +383,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                 <b>Safety number.</b> Compare this with your family in person or on a
                 call. If everyone sees the same number, no one has been secretly added
                 — if it differs, stop and don't share anything.
+              </p>
+              <p class="hint">
+                This number <b>changed in this version</b> — it now also covers the keys
+                that prove who changed your shared items. If it doesn't match one you
+                wrote down before, that's expected. Compare a fresh one with your family:
+                what matters is that you all see the same number today.
               </p>
             </div>
           </div>

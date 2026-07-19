@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Proctor Passbook — web vault (Vue 3 + Vite), backed by the passbook-wasm crypto core.",
   "scripts": {
-    "build:wasm": "wasm-pack build --release --target web --out-dir app/src/wasm/pkg ../crates/passbook-wasm || wasm-pack build --release --target web --out-dir src/wasm/pkg ../crates/passbook-wasm",
+    "build:wasm": "wasm-pack build --release --target web --out-dir \"$PWD/src/wasm/pkg\" ../crates/passbook-wasm",
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",

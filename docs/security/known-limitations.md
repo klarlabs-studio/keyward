@@ -163,11 +163,48 @@ benign explanation and asks the user to confirm out of band that someone was
 removed. A user conditioned to click through will hand over the vault. Rotation
 being an ordinary event is what makes this weaker than a cryptographic control.
 
-**The actual fix remains member-signed directory entries plus key epochs** —
-wraps verifiable as having come from a member, and a group-state digest the
-client pins. That is a protocol design decision, deliberately left for external
-review: it is `review-scope.md` **Q2a**, and remains the question most worth an
-auditor's time in this codebase.
+### The signature half is now implemented (F2)
+
+Wrapped-key sets are **signed**. A member holds an Ed25519 key alongside their
+X25519 one, signs the set on every write (share, grant, revoke), and a reader
+verifies against a signing key it has **pinned locally** — never one taken from
+the same relay that served the blob, which would prove nothing.
+
+That closes the forgery. A relay can no longer mint a vault key and wrap it to
+everyone, because it cannot produce a signature any member's pin accepts.
+
+**Three things are still open, and none of them are small:**
+
+1. **Rollback.** A relay can serve an OLDER, genuinely signed set. Signatures
+   say who wrote a set, not which is current. This needs key epochs and a
+   monotonic floor the client pins — the second half of Q2a, still unbuilt.
+
+2. **First contact — partly closed.** The signing key is pinned
+   trust-on-first-use, same as the X25519 key, so a relay hostile from the very
+   first sight of a member can substitute both at once. The safety number now
+   covers signing keys as well (context label bumped to v2), so a family
+   comparing it out of band WILL see a fabricated signing key — previously that
+   was invisible, because the number digested only the X25519 halves and so
+   matched everyone else's exactly.
+
+   What remains is that this depends on humans actually comparing the number.
+   It is detection contingent on a manual step, not prevention. Note also that
+   the number changed for every existing group; the UI says so, because a family
+   comparing against one they wrote down earlier would otherwise read a benign
+   version bump as an attack.
+
+3. **The legacy path.** Vaults created before signing have unsigned sets. They
+   stay readable, flagged, with an explicit "sign these" action, because
+   bricking existing families would be worse. To stop that being a downgrade
+   channel, a client that has ever seen a signed set for a group records it and
+   refuses an unsigned one for that group thereafter (HSTS-style). A device that
+   has never seen the group signed has no such protection.
+
+**Still Q2a, still unreviewed.** Implementing a signature is not the same as
+having the construction validated. The canonical encoding, the decision to use a
+separate Ed25519 key rather than deriving from X25519, and the pinning
+lifecycle are all exactly the kind of thing an external cryptographer should
+disagree with before this is relied upon.
 
 ## 4. `member_id` uniqueness — CLOSED (was: unenforced)
 
