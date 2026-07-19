@@ -57,11 +57,11 @@ labels:
 # or set here:
 images:
   - name: ghcr.io/klarlabs-studio/keyward-sync-server
-    newTag: "1.42.0"
+    newTag: "2.1.0"
   # The web image is versioned from the SAME git tag as the server (both are
   # built by .github/workflows/release.yml on a v* tag, which refuses to publish
   # unless the tag, Cargo.toml and app/package.json all agree). Keep these two
   # newTag values in step: a web bundle and a relay from different releases are
   # not a combination anything tests.
   - name: ghcr.io/klarlabs-studio/keyward-web
-    newTag: "2.0.0"
+    newTag: "2.1.0"
