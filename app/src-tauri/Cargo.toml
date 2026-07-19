@@ -5,7 +5,7 @@
 
 [package]
 name = "keyward-passbook-desktop"
-version = "1.19.0"
+version = "2.1.0"
 description = "Native desktop shell for the Keyward Passbook web vault"
 authors = ["Klar Labs"]
 license = "AGPL-3.0-or-later"
