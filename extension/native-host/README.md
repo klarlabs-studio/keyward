@@ -37,7 +37,7 @@ The extension requests `list` when the popup opens (titles/usernames only) and
 
 | File | Role |
 |------|------|
-| `com.klarlabs.proctor.passbook.json` | Native-host manifest **template**. Copy it into the browser's `NativeMessagingHosts` directory and fill in the two placeholders. |
+| `com.klarlabs.keyward.passbook.json` | Native-host manifest **template**. Copy it into the browser's `NativeMessagingHosts` directory and fill in the two placeholders. |
 | `keyward-passbook-bridge.sh` | Wrapper Chrome executes. Sets the vault env, then `exec`s `passbook bridge`. Already `chmod +x`. |
 
 ## Install
@@ -68,7 +68,7 @@ vault environment variables match your setup:
 
 ### 3. Fill in the host manifest
 
-Edit `com.klarlabs.proctor.passbook.json`:
+Edit `com.klarlabs.keyward.passbook.json`:
 
 - **`path`** → the **absolute** path to `keyward-passbook-bridge.sh`, e.g.
   `/Users/you/dev/keyward/extension/native-host/keyward-passbook-bridge.sh`.
@@ -80,9 +80,9 @@ Edit `com.klarlabs.proctor.passbook.json`:
 
 ### 4. Install the manifest for your browser + OS
 
-Copy (or symlink) the filled-in `com.klarlabs.proctor.passbook.json` into the
+Copy (or symlink) the filled-in `com.klarlabs.keyward.passbook.json` into the
 browser's `NativeMessagingHosts` directory. The file's **name must match the host
-name** (`com.klarlabs.proctor.passbook.json`).
+name** (`com.klarlabs.keyward.passbook.json`).
 
 **macOS**
 
@@ -92,7 +92,7 @@ name** (`com.klarlabs.proctor.passbook.json`).
 
 ```bash
 mkdir -p "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
-cp com.klarlabs.proctor.passbook.json \
+cp com.klarlabs.keyward.passbook.json \
   "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/"
 ```
 
@@ -103,7 +103,7 @@ cp com.klarlabs.proctor.passbook.json \
 
 ```bash
 mkdir -p "$HOME/.config/google-chrome/NativeMessagingHosts"
-cp com.klarlabs.proctor.passbook.json \
+cp com.klarlabs.keyward.passbook.json \
   "$HOME/.config/google-chrome/NativeMessagingHosts/"
 ```
 

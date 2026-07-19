@@ -21,10 +21,10 @@ Ordered by what an attacker most wants.
 |---|---|---|---|
 | A1 | **Vault plaintext** — passwords, TOTP seeds, cards, identities | Decrypted only in client memory (WASM linear memory / Rust process) | Total loss for that user or family |
 | A2 | **Master password** | User's head; transiently in a client call stack | Offline attack on A1, gated by the Secret Key (A3) |
-| A3 | **Device Secret Key** (128-bit, 2SKD factor) | `localStorage` key `proctor.passbook.secretkey.v1`; printed Emergency Kit | With A2, opens A1 from ciphertext alone |
+| A3 | **Device Secret Key** (128-bit, 2SKD factor) | `localStorage` key `keyward.passbook.secretkey.v1`; printed Emergency Kit | With A2, opens A1 from ciphertext alone |
 | A4 | **`K_vault`** — the shared family vault key (256-bit) | Client memory; wrapped per-member at the relay | Reads all shared content, past and present-until-rotation |
-| A5 | **Member X25519 secret** | `localStorage` key `proctor.passbook.member.v1` | Unwraps every current and future wrap to that member |
-| A6 | **Device bearer token** (128-bit) | `localStorage` key `proctor.passbook.sync.v1`; SHA-256 hash at relay | Full API access as that account: read/overwrite blobs, join groups, mint invites |
+| A5 | **Member X25519 secret** | `localStorage` key `keyward.passbook.member.v1` | Unwraps every current and future wrap to that member |
+| A6 | **Device bearer token** (128-bit) | `localStorage` key `keyward.passbook.sync.v1`; SHA-256 hash at relay | Full API access as that account: read/overwrite blobs, join groups, mint invites |
 | A7 | **Invite code** (128-bit, single-use, 24 h) | Out-of-band message; SHA-256 hash at relay | Entry into the member directory → candidate for an automatic grant |
 | A8 | **Relationship metadata** — who is in which family, device counts, sync timing, blob sizes | Relay, in the clear | Social graph disclosure; targeting |
 | A9 | **Stripe webhook signing secret** | Server environment | Arbitrary plan escalation for any account |

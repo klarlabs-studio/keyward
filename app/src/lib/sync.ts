@@ -3,14 +3,14 @@
 // string), never plaintext. This module owns the sync configuration and the
 // HTTP contract with the sync server; the store decides *when* to push/pull.
 //
-// Config lives in localStorage under `proctor.passbook.sync.v1`:
+// Config lives in localStorage under `keyward.passbook.sync.v1`:
 //   { serverUrl, accountId, deviceToken, lastVersion }
 // The device token is a bearer credential for this device; `lastVersion` is the
 // server vault version this device last saw, used for optimistic concurrency
 // (If-Match) so two devices editing at once produce a 409 rather than a silent
 // clobber.
 
-const SYNC_STORAGE = 'proctor.passbook.sync.v1';
+const SYNC_STORAGE = 'keyward.passbook.sync.v1';
 const VERSION_HEADER = 'X-Vault-Version';
 
 export interface SyncConfig {

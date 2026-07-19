@@ -145,8 +145,8 @@ drop", and `Login`/`Card` do implement `Drop` with `zeroize()` (`domain.rs:36-43
 
 **Where it lives, and for how long.** In the browser app the Secret Key is
 persisted as a plain string in `localStorage` under
-`proctor.passbook.secretkey.v1` (`app/src/lib/passbook.ts:29, 80-95`), alongside
-the sealed vault at `proctor.passbook.vault.v1` (`passbook.ts:25`). It persists
+`keyward.passbook.secretkey.v1` (`app/src/lib/passbook.ts:29, 80-95`), alongside
+the sealed vault at `keyward.passbook.vault.v1` (`passbook.ts:25`). It persists
 until the vault is reset (`passbook.ts:74-75`). This is a deliberate, documented
 choice — the client treats a device compromise as already fatal
 (`app/src/lib/sharing.ts:8-10`) — but it means the "second secret" of 2SKD sits
@@ -194,7 +194,7 @@ ct          = XChaCha20-Poly1305(K_wrap, nonce, K_vault)         # sharing.rs:32
 **Domain-separation label** (`sharing.rs:39`):
 
 ```
-HKDF_INFO = b"proctor-passbook family-share v1"
+HKDF_INFO = b"keyward-passbook family-share v1"
 ```
 
 **HKDF salt is `None`** (`sharing.rs:407`), i.e. HKDF-Extract runs with an
@@ -346,7 +346,7 @@ Note it carries **no `member_id`**, unlike `WrappedKey` (§3.3). `open_sealed`
 (`sharing.rs:156-165`) simply attempts decryption with the member's secret.
 
 **This reuses `derive_wrapping_key` verbatim** — the same HKDF-SHA256 with the
-same constant `HKDF_INFO` (`b"proctor-passbook family-share v1"`) as the
+same constant `HKDF_INFO` (`b"keyward-passbook family-share v1"`) as the
 vault-key wrap. Two distinct protocols, carrying different plaintext types, now
 share one derivation with **no separating label** and no type tag or AAD on
 either ciphertext. See [`known-limitations.md`](known-limitations.md) §2a and
@@ -536,7 +536,7 @@ token is returned exactly once, at register or add-device
   `0` means tokens never expire (`main.rs:246-253`).
 
 **Where the token lives on the client.** `localStorage`, under
-`proctor.passbook.sync.v1` (`app/src/lib/sync.ts:13, 48, 77`). It is the bearer
+`keyward.passbook.sync.v1` (`app/src/lib/sync.ts:13, 48, 77`). It is the bearer
 credential for both the personal vault and every group endpoint
 (`app/src/lib/sharing.ts:167-182`).
 
@@ -635,7 +635,7 @@ Notation: **A** = owner Alice, **B** = joiner Bob, **R** = relay.
 ### Create (`app/src/lib/sharing.ts:280-296`)
 
 1. A ensures a member identity: fresh X25519 keypair, stored in `localStorage`
-   under `proctor.passbook.member.v1` (`sharing.ts:29, 112-128`).
+   under `keyward.passbook.member.v1` (`sharing.ts:29, 112-128`).
 2. A → R `POST /v1/groups {member_id, name, public_key}`. R checks A's plan is
    Family (402 otherwise), mints a group id, records A as `Role::Owner`
    (`main.rs:999-1045`).
@@ -712,7 +712,7 @@ the UI must state it plainly.*
 | `KEY_LEN` | 32 | `crates/crypto/src/lib.rs:29` |
 | `VAULT_KEY_LEN` | 32 | `crates/passbook/src/sharing.rs:42` |
 | Secret Key length | 16 (128 bits) | `crates/passbook/src/domain.rs:131` |
-| `HKDF_INFO` | `b"proctor-passbook family-share v1"` | `crates/passbook/src/sharing.rs:39` |
+| `HKDF_INFO` | `b"keyward-passbook family-share v1"` | `crates/passbook/src/sharing.rs:39` |
 | `SAFETY_NUMBER_INFO` | `b"keyward-passbook group-safety-number v1"` | `crates/passbook/src/sharing.rs:77` |
 | HKDF salt | `None` (zero-filled) | `crates/passbook/src/sharing.rs:407` |
 | Argon2 params | crate default: Argon2id v19, m=19456 KiB, t=2, p=1 | `crates/crypto/src/lib.rs:60` |

@@ -22,11 +22,11 @@ import init, {
 } from '../wasm/pkg/passbook_wasm.js';
 import type { Entry, Issue } from './passbook-types';
 
-const STORAGE_KEY = 'proctor.passbook.vault.v1';
+const STORAGE_KEY = 'keyward.passbook.vault.v1';
 // The device Secret Key (2SKD factor). It is not secret *from this device* — it
 // lives here so the vault can be unlocked with just the typed master — but it
 // never leaves the device, so a stolen sealed vault is uncrackable without it.
-const SECRET_KEY_STORAGE = 'proctor.passbook.secretkey.v1';
+const SECRET_KEY_STORAGE = 'keyward.passbook.secretkey.v1';
 
 let ready: Promise<void> | null = null;
 
