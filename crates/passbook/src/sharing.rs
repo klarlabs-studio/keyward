@@ -27,6 +27,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     XChaCha20Poly1305, XNonce,
 };
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use proctor_crypto::{aead_open, aead_seal, random_array, NONCE_LEN};
 use rand::{rngs::OsRng, RngCore};
@@ -63,6 +64,16 @@ pub enum SharingError {
     /// this must be rejected rather than silently producing a guessable key.
     #[error("rejected a weak (low-order) public key")]
     WeakKey,
+    /// The wrapped-key set carries no signature, so its author cannot be
+    /// established. Distinct from [`SharingError::BadSignature`]: this is a
+    /// legacy or stripped blob rather than evidence of tampering.
+    #[error("wrapped-key set is unsigned — cannot establish who produced it")]
+    Unsigned,
+    /// The wrapped-key set is signed, but the signature does not verify against
+    /// the expected member's key: it was produced or altered by someone other
+    /// than that member.
+    #[error("wrapped-key set signature does not verify — produced by someone other than the expected member")]
+    BadSignature,
 }
 
 type Result<T> = std::result::Result<T, SharingError>;
@@ -84,6 +95,11 @@ pub struct ContentBlob {
 }
 
 /// Domain-separation label for the group safety number.
+/// Domain label for the wrapped-key-set signature. Distinct from every other
+/// label here so a signature over this structure can never be replayed as a
+/// signature over something else.
+const WRAP_SIGNATURE_CONTEXT: &[u8] = b"proctor-passbook shared-vault-wraps v1";
+
 const SAFETY_NUMBER_INFO: &[u8] = b"proctor-passbook group-safety-number v1";
 
 /// A short, human-comparable fingerprint of a group's **public** membership —
@@ -201,12 +217,33 @@ pub fn open_content(blob: &ContentBlob, vault_key: &[u8; VAULT_KEY_LEN]) -> Resu
 /// the member's device. Share [`Member::public`] with others; never the `Member`
 /// itself. The wrapped secret is zeroized on drop (via `x25519-dalek`'s `zeroize`
 /// feature), so `id`/`name` are the only fields that outlive a drop.
+/// A fresh Ed25519 signing key from the shared CSPRNG.
+///
+/// Not `SigningKey::generate`: ed25519-dalek and x25519-dalek depend on
+/// different `rand_core` versions, so the `OsRng` used for X25519 does not
+/// satisfy the trait ed25519-dalek expects. Drawing 32 bytes from
+/// `proctor_crypto::fill_random` keeps one entropy source across the crate
+/// rather than introducing a second RNG stack to reason about.
+fn random_signing_key() -> SigningKey {
+    let mut seed = [0u8; 32];
+    proctor_crypto::fill_random(&mut seed);
+    SigningKey::from_bytes(&seed)
+}
+
 pub struct Member {
     /// Stable identifier for the member (e.g. a UUID or email).
     pub id: String,
     /// Human-readable display name.
     pub name: String,
     secret: StaticSecret,
+    /// Ed25519 signing key, used to authenticate wrapped-key sets this member
+    /// produces.
+    ///
+    /// Separate from the X25519 `secret` on purpose. The two could be derived
+    /// from one seed — both are Curve25519 — but using a single key for both
+    /// key agreement and signatures invites cross-protocol interactions, and
+    /// the cost of a second 32-byte key is nil.
+    signing: SigningKey,
 }
 
 impl Member {
@@ -216,6 +253,7 @@ impl Member {
             id: id.to_owned(),
             name: name.to_owned(),
             secret: StaticSecret::random_from_rng(OsRng),
+            signing: random_signing_key(),
         }
     }
 
@@ -224,11 +262,41 @@ impl Member {
     /// member's *own* vault, so their sharing identity is stable across devices
     /// and master-password changes.
     pub fn from_secret(id: &str, name: &str, secret: [u8; 32]) -> Self {
+        Self::from_secrets(id, name, secret, None)
+    }
+
+    /// Reconstruct a member from stored secrets, including the Ed25519 signing
+    /// key when one exists.
+    ///
+    /// `signing` is optional because members created before wrapped-key sets
+    /// were signed have no signing key stored. Such a member is generated a
+    /// FRESH signing key here rather than being rejected: they can still read
+    /// vaults shared to them (which needs only the X25519 secret), and the new
+    /// public half is published on their next write. The consequence is that
+    /// other devices see a new signing key for them and must accept it, which
+    /// is the same trust decision as any re-enrolment.
+    pub fn from_secrets(id: &str, name: &str, secret: [u8; 32], signing: Option<[u8; 32]>) -> Self {
         Member {
             id: id.to_owned(),
             name: name.to_owned(),
             secret: StaticSecret::from(secret),
+            signing: match signing {
+                Some(bytes) => SigningKey::from_bytes(&bytes),
+                None => random_signing_key(),
+            },
         }
+    }
+
+    /// Export the raw Ed25519 signing secret for encrypted-at-rest storage
+    /// alongside [`Member::secret_bytes`]. Secret material.
+    pub fn signing_bytes(&self) -> [u8; 32] {
+        self.signing.to_bytes()
+    }
+
+    /// This member's Ed25519 verifying key, published in the directory so other
+    /// members can authenticate wrapped-key sets this member writes.
+    pub fn signing_public(&self) -> [u8; 32] {
+        self.signing.verifying_key().to_bytes()
     }
 
     /// Export the raw X25519 secret for encrypted-at-rest storage in the member's
@@ -244,6 +312,7 @@ impl Member {
             id: self.id.clone(),
             name: self.name.clone(),
             public_key: PublicKey::from(&self.secret).to_bytes(),
+            signing_key: self.signing.verifying_key().to_bytes(),
         }
     }
 }
@@ -270,6 +339,14 @@ pub struct MemberPublic {
     pub name: String,
     /// The member's X25519 public key.
     pub public_key: [u8; 32],
+    /// The member's Ed25519 verifying key, used to authenticate wrapped-key
+    /// sets they write.
+    ///
+    /// `#[serde(default)]` so a directory entry published before signing
+    /// existed still deserializes; an all-zero key is treated as "no signing
+    /// key" and cannot verify anything.
+    #[serde(default)]
+    pub signing_key: [u8; 32],
 }
 
 /// One recipient's wrapped copy of the vault key.
@@ -292,9 +369,95 @@ struct WrappedKey {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SharedVault {
     wrapped: Vec<WrappedKey>,
+    /// The member id that produced this wrapped-key set, if it is signed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signer_id: Option<String>,
+    /// Ed25519 signature over the canonical encoding of `wrapped`.
+    ///
+    /// THIS IS WHAT CLOSES THE SUBSTITUTION ATTACK. Producing a wrap requires
+    /// only a recipient's PUBLIC key, so anyone — including the relay — can
+    /// mint a vault key, wrap it correctly to every genuine member, and
+    /// overwrite the blob. Every member then decrypts successfully, and the
+    /// safety number is unchanged because it digests only member ids and public
+    /// keys. A signature makes the set unforgeable by anyone who is not a
+    /// member holding a signing key the reader has pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<Vec<u8>>,
 }
 
 impl SharedVault {
+    /// The bytes a signature covers: a canonical, unambiguous encoding of every
+    /// wrap in the set.
+    ///
+    /// Entries are sorted by member id and every variable-length field is
+    /// length-prefixed, so two different sets can never produce the same
+    /// message — without that, an attacker could shuffle fields between wraps
+    /// and keep a signature valid. The context label is included so this
+    /// signature cannot be replayed as a signature over anything else.
+    fn signing_payload(wrapped: &[WrappedKey]) -> Vec<u8> {
+        let mut sorted: Vec<&WrappedKey> = wrapped.iter().collect();
+        sorted.sort_by(|a, b| a.member_id.cmp(&b.member_id));
+
+        let mut msg = Vec::with_capacity(WRAP_SIGNATURE_CONTEXT.len() + sorted.len() * 128);
+        msg.extend_from_slice(WRAP_SIGNATURE_CONTEXT);
+        msg.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
+        for w in sorted {
+            msg.extend_from_slice(&(w.member_id.len() as u32).to_be_bytes());
+            msg.extend_from_slice(w.member_id.as_bytes());
+            msg.extend_from_slice(&w.ephemeral_public);
+            msg.extend_from_slice(&w.nonce);
+            msg.extend_from_slice(&(w.ciphertext.len() as u32).to_be_bytes());
+            msg.extend_from_slice(&w.ciphertext);
+        }
+        msg
+    }
+
+    /// Sign this wrapped-key set as `member`.
+    ///
+    /// Called after any mutation. A set is only trustworthy if the reader can
+    /// tell WHO produced it: wraps require nothing but public keys, so an
+    /// unsigned set proves only that somebody could read a directory.
+    pub fn sign_as(&mut self, member: &Member) {
+        let sig = member.signing.sign(&Self::signing_payload(&self.wrapped));
+        self.signer_id = Some(member.id.clone());
+        self.signature = Some(sig.to_bytes().to_vec());
+    }
+
+    /// The member id that signed this set, if any.
+    pub fn signer(&self) -> Option<&str> {
+        self.signer_id.as_deref()
+    }
+
+    /// Verify this set was signed by `signer`.
+    ///
+    /// The caller must pass a verifying key it TRUSTS — in practice one pinned
+    /// locally for that member. Verifying against a key taken from the same
+    /// relay that served the blob would prove nothing: an attacker able to
+    /// replace the wraps can replace the key beside them.
+    ///
+    /// Returns [`SharingError::Unsigned`] when there is no signature at all,
+    /// and [`SharingError::BadSignature`] when one is present but does not
+    /// verify. The distinction matters to callers: the first is a legacy or
+    /// stripped blob, the second is active tampering.
+    pub fn verify_signed_by(&self, signer: &MemberPublic) -> Result<()> {
+        let (Some(id), Some(sig_bytes)) = (self.signer_id.as_ref(), self.signature.as_ref()) else {
+            return Err(SharingError::Unsigned);
+        };
+        if id != &signer.id {
+            return Err(SharingError::BadSignature);
+        }
+        // An absent signing key is all-zero, which is not a valid Ed25519 point;
+        // reject explicitly rather than relying on that.
+        if signer.signing_key == [0u8; 32] {
+            return Err(SharingError::Unsigned);
+        }
+        let vk = VerifyingKey::from_bytes(&signer.signing_key)
+            .map_err(|_| SharingError::BadSignature)?;
+        let sig = Signature::from_slice(sig_bytes).map_err(|_| SharingError::BadSignature)?;
+        vk.verify(&Self::signing_payload(&self.wrapped), &sig)
+            .map_err(|_| SharingError::BadSignature)
+    }
+
     /// Wrap `vault_key` to each of `members`, producing a shareable [`SharedVault`].
     pub fn share_to(vault_key: &[u8; VAULT_KEY_LEN], members: &[MemberPublic]) -> Result<Self> {
         let mut sv = SharedVault::default();
@@ -491,6 +654,7 @@ mod tests {
                 id: "injected".into(),
                 name: "Mom".into(),
                 public_key: point,
+                signing_key: [0u8; 32],
             };
             // Wrapping the vault key to a low-order "member" must fail, not
             // silently produce a guessable wrap.
@@ -598,6 +762,7 @@ mod tests {
             id: id.to_string(),
             name: String::new(),
             public_key: m.public().public_key,
+            signing_key: m.public().signing_key,
         };
         assert_ne!(
             safety_number(&[make("ab", &alice), make("c", &bob)]),
@@ -722,5 +887,138 @@ mod tests {
         shared.wrap_to(&vault_key, &alice.public()).unwrap();
         assert_eq!(shared.recipient_count(), 1);
         assert_eq!(shared.unwrap_for(&alice).unwrap(), vault_key);
+    }
+
+    // ---- F2: sender authentication -------------------------------------
+    //
+    // The attack these cover: producing a wrap needs only a recipient's PUBLIC
+    // key, so a relay can mint its own vault key, wrap it correctly to every
+    // genuine member, and overwrite the blob. Every member decrypts
+    // successfully and the safety number is unchanged, because it digests only
+    // member ids and public keys. Signing is what makes the set unforgeable.
+
+    #[test]
+    fn a_signed_wrap_set_verifies_against_its_author() {
+        let alice = Member::generate("m-alice", "Alice");
+        let bob = Member::generate("m-bob", "Bob");
+        let key = new_vault_key();
+
+        let mut sv = SharedVault::share_to(&key, &[alice.public(), bob.public()]).unwrap();
+        sv.sign_as(&alice);
+
+        assert_eq!(sv.signer(), Some("m-alice"));
+        sv.verify_signed_by(&alice.public())
+            .expect("author's signature must verify");
+    }
+
+    #[test]
+    fn a_relay_substituted_wrap_set_is_rejected() {
+        let alice = Member::generate("m-alice", "Alice");
+        let bob = Member::generate("m-bob", "Bob");
+
+        // The real set, signed by Alice.
+        let real_key = new_vault_key();
+        let mut real = SharedVault::share_to(&real_key, &[alice.public(), bob.public()]).unwrap();
+        real.sign_as(&alice);
+
+        // The relay mints its OWN key and wraps it correctly to both genuine
+        // members. This is entirely possible — it needs only public keys — and
+        // both members would decrypt it happily.
+        let evil_key = new_vault_key();
+        let evil = SharedVault::share_to(&evil_key, &[alice.public(), bob.public()]).unwrap();
+        assert!(
+            evil.unwrap_for(&bob).is_ok(),
+            "the forged set does decrypt — that is the danger"
+        );
+        assert_ne!(
+            evil.unwrap_for(&bob).unwrap(),
+            real.unwrap_for(&bob).unwrap(),
+            "and it yields a DIFFERENT vault key"
+        );
+
+        // But it cannot be signed as Alice, so Bob rejects it.
+        assert!(matches!(
+            evil.verify_signed_by(&alice.public()),
+            Err(SharingError::Unsigned)
+        ));
+    }
+
+    #[test]
+    fn a_signature_from_the_wrong_member_is_rejected() {
+        let alice = Member::generate("m-alice", "Alice");
+        let mallory = Member::generate("m-mallory", "Mallory");
+        let key = new_vault_key();
+
+        // Mallory signs a set and claims nothing about Alice — verifying it
+        // AGAINST Alice must fail, or a relay could pass off any member's
+        // signature as any other's.
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        sv.sign_as(&mallory);
+
+        assert!(matches!(
+            sv.verify_signed_by(&alice.public()),
+            Err(SharingError::BadSignature)
+        ));
+        sv.verify_signed_by(&mallory.public())
+            .expect("verifies against its real author");
+    }
+
+    #[test]
+    fn tampering_with_a_signed_set_invalidates_it() {
+        let alice = Member::generate("m-alice", "Alice");
+        let bob = Member::generate("m-bob", "Bob");
+        let key = new_vault_key();
+
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        sv.sign_as(&alice);
+        sv.verify_signed_by(&alice.public()).unwrap();
+
+        // Appending a recipient after signing — the shape of "relay adds a
+        // member it controls" — must break the signature.
+        sv.wrap_to(&key, &bob.public()).unwrap();
+        assert!(matches!(
+            sv.verify_signed_by(&alice.public()),
+            Err(SharingError::BadSignature)
+        ));
+    }
+
+    #[test]
+    fn a_member_without_a_signing_key_cannot_verify_anything() {
+        let alice = Member::generate("m-alice", "Alice");
+        let key = new_vault_key();
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        sv.sign_as(&alice);
+
+        // A directory entry published before signing existed carries an
+        // all-zero key. That must fail closed rather than being treated as a
+        // valid point.
+        let legacy = MemberPublic {
+            id: alice.public().id,
+            name: alice.public().name,
+            public_key: alice.public().public_key,
+            signing_key: [0u8; 32],
+        };
+        assert!(matches!(
+            sv.verify_signed_by(&legacy),
+            Err(SharingError::Unsigned)
+        ));
+    }
+
+    #[test]
+    fn signing_identity_survives_a_round_trip() {
+        let alice = Member::generate("m-alice", "Alice");
+        let restored = Member::from_secrets(
+            "m-alice",
+            "Alice",
+            alice.secret_bytes(),
+            Some(alice.signing_bytes()),
+        );
+        assert_eq!(restored.signing_public(), alice.signing_public());
+
+        let key = new_vault_key();
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        sv.sign_as(&restored);
+        sv.verify_signed_by(&alice.public())
+            .expect("a restored member signs as the same identity");
     }
 }

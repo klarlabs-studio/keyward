@@ -213,6 +213,14 @@ struct MemberPublicJson {
     id: String,
     name: String,
     public_key: String,
+    /// Ed25519 verifying key (hex), used to authenticate wrapped-key sets this
+    /// member writes.
+    ///
+    /// Optional so a directory entry published before signing existed still
+    /// parses. Absent becomes an all-zero key, which verifies nothing — the
+    /// caller gets `Unsigned` rather than a silent pass.
+    #[serde(default)]
+    signing_key: Option<String>,
 }
 
 impl MemberPublicJson {
@@ -221,6 +229,10 @@ impl MemberPublicJson {
             id: self.id,
             name: self.name,
             public_key: from_hex_32(&self.public_key)?,
+            signing_key: match self.signing_key.as_deref() {
+                Some(hex) if !hex.is_empty() => from_hex_32(hex)?,
+                _ => [0u8; 32],
+            },
         })
     }
 }
