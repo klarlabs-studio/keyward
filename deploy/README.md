@@ -218,9 +218,12 @@ If you don't scrape from inside the `proctor` namespace, drop the same-namespace
   > useful for matching known CVEs to a target — plus account, family and invite
   > totals.
   >
-  > `overlays/klarlabs/metrics-block.yaml` blocks it for Traefik via a dedicated
-  > `/metrics` Ingress with a deny middleware (verified: 403 from the internet,
-  > API endpoints unaffected). On ingress-nginx the equivalent is:
+  > **The base manifests do not block it.** You have to, and you should verify
+  > it from off-cluster rather than assume — that is how the original claim went
+  > unchallenged. `k8s/examples/metrics-block-traefik.yaml` is a working Traefik
+  > implementation: a dedicated `/metrics` Ingress with a deny middleware
+  > (verified in production: 403 from the internet, API endpoints unaffected).
+  > On ingress-nginx the equivalent is:
   >
   > ```yaml
   > nginx.ingress.kubernetes.io/server-snippet: |

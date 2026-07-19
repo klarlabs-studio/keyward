@@ -1,0 +1,70 @@
+# EXAMPLE overlay — copy into your own kustomize overlay and set the host.
+# Not applied by the base kustomization; it exists so blocking /metrics is
+# a documented, copyable step rather than folklore.
+#
+# Block /metrics at the edge.
+#
+# THE BUG THIS FIXES (found by probing the live deployment): deployment.yaml
+# asserts "/metrics is not exposed via the ingress" — but the Ingress routes
+# path `/` with pathType: Prefix, which matches EVERY path including /metrics.
+# `curl https://<your-host>/metrics` returned 200 to the open internet.
+#
+# What was readable: no credentials and no PII (the counters are deliberately
+# free of identifying data, and a unit test enforces that), but it did publish
+# the exact version and backend — a gift for anyone matching known CVEs against
+# a target — plus account/family/invite totals, i.e. live business intelligence
+# for a paid product.
+#
+# Nothing legitimate is lost by blocking it: Prometheus scrapes the pods
+# DIRECTLY via the prometheus.io/* annotations on the pod template, and the
+# allow-ingress-to-app NetworkPolicy already permits the `observability`
+# namespace to reach port 8787. That path does not traverse this Ingress.
+#
+# Mechanism: a second Ingress for the more specific /metrics path. Traefik
+# prioritises longer path rules, so this router wins over the catch-all `/`
+# router in the base Ingress. A middleware is needed rather than "just don't
+# route it", because leaving /metrics unrouted would fall through to `/` and be
+# served anyway. Middleware and Ingress are separate because the Kubernetes
+# Ingress API attaches annotations per-Ingress, not per-path.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: block-metrics
+  namespace: proctor
+spec:
+  # Only loopback is allowed — i.e. nothing reaching Traefik from outside the
+  # node can pass. This is a deny-all in practice; it is expressed as an
+  # allow-list because that is the primitive Traefik provides.
+  ipAllowList:
+    sourceRange:
+      - 127.0.0.1/32
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: proctor-sync-server-metrics
+  namespace: proctor
+  annotations:
+    # <namespace>-<name>@kubernetescrd is the required reference form.
+    traefik.ingress.kubernetes.io/router.middlewares: proctor-block-metrics@kubernetescrd
+  # NOTE: deliberately NO cert-manager.io/cluster-issuer annotation here. This
+  # Ingress reuses the certificate the primary Ingress already obtained; adding
+  # the annotation would make cert-manager open a SECOND order for the same
+  # hostname and needlessly consume Let's Encrypt rate limit.
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - proctor.example.com
+      secretName: proctor-sync-tls
+  rules:
+    - host: proctor.example.com
+      http:
+        paths:
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: proctor-sync-server
+                port:
+                  name: http

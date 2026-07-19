@@ -42,9 +42,10 @@ spec:
         # PII, but it does publish the exact version + backend (useful for
         # CVE-matching a target) and account/family/invite totals.
         #
-        # Block it at the edge. See deploy/overlays/klarlabs/metrics-block.yaml
-        # for a Traefik implementation; on ingress-nginx the equivalent is a
-        # location deny on the Ingress:
+        # BLOCKING IT IS YOUR JOB — nothing in this base manifest does it for
+        # you. See k8s/examples/metrics-block-traefik.yaml for a working Traefik
+        # implementation; on ingress-nginx the equivalent is a location deny on
+        # the Ingress:
         #   nginx.ingress.kubernetes.io/server-snippet: |
         #     location /metrics { deny all; return 403; }
         prometheus.io/scrape: "true"
