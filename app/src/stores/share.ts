@@ -438,8 +438,8 @@ export const useShareStore = defineStore('share', {
     },
 
     /** Stop tracking a vault on this device (does not touch the server). */
-    leave(groupId: string) {
-      share.forgetGroup(groupId);
+    async leave(groupId: string) {
+      await share.forgetGroup(groupId);
       if (this.active?.groupId === groupId) this.close();
       if (this.mainGroupId === groupId) this.showPersonal();
       this.refresh();

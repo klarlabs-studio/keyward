@@ -25,6 +25,7 @@ import {
   watchtower,
 } from '../lib/passbook';
 import * as sync from '../lib/sync';
+import * as trust from '../lib/trust';
 import { SyncConflict, type SyncConfig } from '../lib/sync';
 import { toast } from '../composables/useToast';
 
@@ -133,19 +134,24 @@ export const useVaultStore = defineStore('vault', {
 
     counts(s): Record<string, number> {
       const by: Record<string, number> = {
-        all: s.entries.length,
-        fav: s.entries.filter((e) => e.favorite).length,
+        all: s.entries.filter((e) => !trust.isTrustEntry(e)).length,
+        fav: s.entries.filter((e) => e.favorite && !trust.isTrustEntry(e)).length,
         Login: 0,
         SecureNote: 0,
         Card: 0,
         Identity: 0,
       };
-      for (const e of s.entries) by[categoryOf(e)] += 1;
+      for (const e of s.entries) {
+        if (!trust.isTrustEntry(e)) by[categoryOf(e)] += 1;
+      }
       return by;
     },
 
     filtered(s): Entry[] {
-      let list = s.entries;
+      // The reserved trust-state entry is machinery, not an item the user owns.
+      // Filtered here rather than kept in a parallel field so it rides the
+      // existing seal, sync, and conflict paths with no special-casing.
+      let list = s.entries.filter((e) => !trust.isTrustEntry(e));
       if (s.filter === 'fav') list = list.filter((e) => e.favorite);
       else if (s.filter !== 'all' && s.filter !== 'watchtower') {
         list = list.filter((e) => categoryOf(e) === s.filter);
@@ -209,6 +215,7 @@ export const useVaultStore = defineStore('vault', {
         }
         this.entries = await openVault(master, getSecretKey());
         this.master = master;
+        this.adoptTrustState();
         this.selectFirst();
         await this.refreshSecurity();
         // A brand-new vault created while sync is on must be uploaded once.
@@ -239,6 +246,7 @@ export const useVaultStore = defineStore('vault', {
         this.entries = await openVault(master, secretKey);
         this.master = master;
         this.needsSecretKey = false;
+        this.adoptTrustState();
         this.selectFirst();
         await this.refreshSecurity();
       } catch {
@@ -257,6 +265,9 @@ export const useVaultStore = defineStore('vault', {
     },
 
     lock() {
+      // Stop accepting writes; the cache survives so the UI can still render
+      // what this device knows before the next unlock.
+      trust.clearPersister();
       this.master = null;
       this.entries = [];
       this.issues = [];
@@ -268,6 +279,10 @@ export const useVaultStore = defineStore('vault', {
     /** Wipe the local vault AND the device Secret Key entirely (irreversible). */
     reset() {
       destroyVault();
+      // The vault is gone, so the trust state it carried is meaningless — and
+      // leaving the cache behind would let a NEW vault inherit trust decisions
+      // made by the old one.
+      trust.reset();
       this.storageTick += 1;
       this.needsSecretKey = false;
       this.lock();
@@ -285,6 +300,23 @@ export const useVaultStore = defineStore('vault', {
 
     select(id: string) {
       this.selectedId = id;
+    },
+
+    /**
+     * Adopt the trust state carried in the freshly-opened vault, and give
+     * `trust` a way to write back.
+     *
+     * Registered only once the vault is open, so a trust decision can never be
+     * written while locked — it would have nowhere durable to go, and the
+     * in-memory copy would then disagree with what is at rest.
+     */
+    adoptTrustState() {
+      trust.hydrate(this.entries);
+      trust.setPersister(async (entry: Entry) => {
+        const others = this.entries.filter((e) => !trust.isTrustEntry(e));
+        this.entries = [...others, entry];
+        await this.persist();
+      });
     },
 
     selectFirst() {
@@ -307,7 +339,9 @@ export const useVaultStore = defineStore('vault', {
     },
 
     async refreshSecurity() {
-      this.issues = await watchtower(this.entries);
+      // Watchtower reports on the user's items; the reserved trust entry is not
+      // one, and a SecureNote full of key fingerprints would only produce noise.
+      this.issues = await watchtower(this.entries.filter((e) => !trust.isTrustEntry(e)));
       const strengths: Record<string, number> = {};
       for (const e of this.entries) {
         if ('Login' in e.content) {
@@ -572,6 +606,8 @@ export const useVaultStore = defineStore('vault', {
       setRawVault(blob);
       this.storageTick += 1;
       this.entries = await openVault(this.master, getSecretKey());
+      // A sync may have brought another device's trust decisions with it.
+      this.adoptTrustState();
       this.lastSyncedVersion = version;
       this.selectFirst();
       await this.refreshSecurity();

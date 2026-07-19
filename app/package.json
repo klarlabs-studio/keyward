@@ -3,13 +3,13 @@
   "private": true,
   "version": "1.43.0",
   "type": "module",
-  "description": "Proctor Passbook — web vault (Vue 3 + Vite), backed by the passbook-wasm crypto core.",
+  "description": "Proctor Passbook \u2014 web vault (Vue 3 + Vite), backed by the passbook-wasm crypto core.",
   "scripts": {
     "build:wasm": "wasm-pack build --release --target web --out-dir \"$PWD/src/wasm/pkg\" ../crates/passbook-wasm",
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "tsx scripts/roundtrip.test.ts",
+    "test": "tsx scripts/roundtrip.test.ts && tsx scripts/trust.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

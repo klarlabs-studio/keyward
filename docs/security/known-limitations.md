@@ -192,22 +192,35 @@ everyone, because it cannot produce a signature any member's pin accepts.
    Residual: a fork is *detected*, not resolved. The user is told to reload and
    to compare the safety number if it persists.
 
-2. **Trust-state durability — detected, not fixed.** Every protection here
-   (member pins, vault-key pin, epoch floor, the "this group is signed" flag)
-   lives in `localStorage`. Clearing site data wipes all of it while the account
-   and group membership survive on the relay, so the device comes back looking
-   new, silently trusts on first use again, and every warning is disarmed.
+2. **Trust-state durability — CLOSED.** Member pins, the vault-key pin, the
+   epoch floor, and the "this group is signed" flag now live in the **synced,
+   encrypted vault** (`app/src/lib/trust.ts`), as a reserved entry beside the
+   user's items. They are therefore covered by the vault's AEAD and 2SKD: the
+   relay stores them as opaque ciphertext and cannot read or edit them, they
+   survive a browser wipe, and they reach every device the account unlocks on.
 
-   This is not an attack — an attacker who can write `localStorage` already
-   holds the member secret and the device Secret Key stored beside it. It is
-   worse in a duller way: it happens by accident and shows nothing. The client
-   now reports a group it belongs to for which it holds no trust state at all,
-   and asks the user to re-check the safety number instead of re-TOFU'ing
-   silently.
+   That last part fixed a second problem that was never written down: a new
+   device started from nothing, so the user was asked to approve people they had
+   already approved elsewhere. Trust decisions that must be repeated get made
+   carelessly, which turns the approval gate into a formality.
 
-   **The durable fix is to keep trust state in the synced, encrypted vault**
-   rather than `localStorage`, so it survives a wipe and propagates to new
-   devices. That is a vault-format change and was deliberately not bolted on.
+   `localStorage` remains as a cache so the UI can read synchronously and an
+   unsynced device still knows what it knew. The vault is authoritative.
+
+   **Merge rules**, since two devices can disagree. Every automatic resolution
+   moves toward MORE suspicion; genuine ambiguity goes to the human path that
+   already exists:
+   - *epochs* — highest wins (monotonic, so safe).
+   - *signed* — union; "this group uses signatures" is one-way and must never
+     be un-learned, or signature-stripping stops being detectable.
+   - *pins* — union, but a conflict keeps the **local** pin. Not because local
+     is more trustworthy: keeping it makes the relay-served key read as
+     `changed` and routes to explicit approval. Preferring the remote value
+     would silently adopt a key this device never agreed to.
+   - *vault keys* — same conflict rule, surfacing as "this vault's key changed".
+
+   Residual: a device that has *never* synced still starts empty, and the
+   wiped-state warning is what covers that.
 
 3. **First contact — partly closed.** The signing key is pinned
    trust-on-first-use, same as the X25519 key, so a relay hostile from the very

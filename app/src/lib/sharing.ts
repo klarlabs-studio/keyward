@@ -30,6 +30,7 @@ import {
   open_recovery,
 } from '../wasm/pkg/passbook_wasm.js';
 import { ensureReady } from './passbook';
+import * as trust from './trust';
 import { syncConfig } from './sync';
 import type { Entry } from './passbook-types';
 
@@ -120,10 +121,7 @@ export async function safetyNumber(members: GroupMemberView[]): Promise<string> 
 
 /** True if we are joined to this group but hold no trust state for it at all. */
 function trustStateWiped(groupId: string, members: GroupMemberView[]): boolean {
-  const pins = pinnedKeys(groupId);
-  if (Object.keys(pins).length > 0) return false;
-  if (epochFloor(groupId) > 0) return false;
-  if (requiresSignature(groupId)) return false;
+  if (!trust.knowsNothingAbout(groupId)) return false;
   // A single-member group is genuinely new — there is nothing to have forgotten.
   return members.length > 1;
 }
@@ -281,12 +279,10 @@ function rememberGroup(ref: GroupRef): void {
   localStorage.setItem(GROUPS_STORAGE, JSON.stringify(groups));
 }
 
-export function forgetGroup(groupId: string): void {
+export async function forgetGroup(groupId: string): Promise<void> {
   const groups = joinedGroups().filter((g) => g.groupId !== groupId);
   localStorage.setItem(GROUPS_STORAGE, JSON.stringify(groups));
-  const pins = allPins();
-  delete pins[groupId];
-  localStorage.setItem(PINS_STORAGE, JSON.stringify(pins));
+  await trust.forgetGroup(groupId);
 }
 
 // ----- Trust-on-first-use key pinning ---------------------------------------
@@ -312,218 +308,32 @@ export function forgetGroup(groupId: string): void {
 // compare fingerprints out of band. Member-signed directory entries would
 // remove the residual entirely — see docs/security/known-limitations.md.
 
-const PINS_STORAGE = 'proctor.passbook.keypins.v1';
+// Storage now lives in `trust.ts`, inside the SYNCED, ENCRYPTED vault rather
+// than localStorage. See that file for why. What remains here is the policy:
+// what a pin MEANS, and what to do when one does not match.
 
-/** What we have accepted for one member: their X25519 and Ed25519 public keys. */
-export interface PinnedKeys {
-  public_key: string;
-  /** Empty when pinned before signing existed, or when the member has not
-   *  published one yet. An empty pin verifies nothing and fails closed. */
-  signing_key: string;
-}
-
-/** groupId -> memberId -> the keys we have accepted for that member. */
-type PinMap = Record<string, Record<string, PinnedKeys>>;
-
-/** Read a pin written in either the current or the pre-signing (bare string) form. */
-function normalizePin(v: PinnedKeys | string): PinnedKeys {
-  return typeof v === 'string' ? { public_key: v, signing_key: '' } : v;
-}
-
-function allPins(): PinMap {
-  const raw = localStorage.getItem(PINS_STORAGE);
-  if (raw === null) return {};
-  try {
-    const v = JSON.parse(raw) as Record<string, Record<string, PinnedKeys | string>>;
-    if (!v || typeof v !== 'object') return {};
-    const out: PinMap = {};
-    for (const [groupId, members] of Object.entries(v)) {
-      out[groupId] = Object.fromEntries(
-        Object.entries(members).map(([id, pin]) => [id, normalizePin(pin)]),
-      );
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
+/** What we have accepted for a member. Re-exported so callers need one import. */
+export type { PinnedKeys } from './trust';
 
 /** The keys pinned for `groupId` (memberId -> accepted keys). */
-export function pinnedKeys(groupId: string): Record<string, PinnedKeys> {
-  return allPins()[groupId] ?? {};
+export function pinnedKeys(groupId: string): Record<string, trust.PinnedKeys> {
+  return trust.pinnedKeys(groupId);
 }
 
-/** Pin a member's current keys as the accepted ones for `groupId`. */
-function pinKey(groupId: string, memberId: string, publicKey: string, signingKey: string): void {
-  const pins = allPins();
-  pins[groupId] = {
-    ...(pins[groupId] ?? {}),
-    [memberId]: { public_key: publicKey, signing_key: signingKey },
-  };
-  localStorage.setItem(PINS_STORAGE, JSON.stringify(pins));
-}
-
-// ----- Signature enforcement, once seen ------------------------------------
-//
-// A signature only helps if it cannot be stripped. `unwrap_vault_key_unsigned`
-// exists so vaults created before signing keep working, but that path is exactly
-// what an attacker would aim for: delete the signature, and an unsigned set is
-// accepted again.
-//
-// So the first time this device sees a SIGNED set for a group, it records that
-// fact permanently. From then on an unsigned set for that group is refused
-// outright — a downgrade, not a legacy blob. Same reasoning as HSTS: the
-// insecure path stays open only until the secure one has been observed.
-
-const SIGNED_GROUPS = 'proctor.passbook.signedgroups.v1';
-
-function signedGroups(): string[] {
-  const raw = localStorage.getItem(SIGNED_GROUPS);
-  if (raw === null) return [];
-  try {
-    const v = JSON.parse(raw) as string[];
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
-
-/** True once this device has seen a signed wrapped-key set for `groupId`. */
-export function requiresSignature(groupId: string): boolean {
-  return signedGroups().includes(groupId);
-}
-
-function rememberSigned(groupId: string): void {
-  if (requiresSignature(groupId)) return;
-  localStorage.setItem(SIGNED_GROUPS, JSON.stringify([...signedGroups(), groupId]));
-}
-
-// ----- Rollback protection: the epoch floor ---------------------------------
-//
-// A signature proves WHO wrote a wrapped-key set, not WHICH set is current. A
-// relay that cannot forge one can still serve an OLDER set it captured earlier
-// — genuinely signed by a real member — to reinstate a revoked member's wrap or
-// undo a key rotation. Every signature check passes, because nothing is forged.
-//
-// Each set carries a monotonic epoch inside the signed payload, so it cannot be
-// edited without breaking the signature. This device records the highest epoch
-// it has VERIFIED for a group and refuses anything lower.
-//
-// Equal epochs are a fork, not a duplicate. Two members writing concurrently can
-// both produce epoch N, and a relay can serve whichever it prefers — or serve
-// different ones to different members, splitting the family onto two vault keys
-// while every signature and every epoch check passes. So the floor pins the
-// accepted set's DIGEST alongside its epoch, and a set at the same epoch with a
-// different digest is refused rather than silently taken.
-
-const EPOCH_FLOOR = 'proctor.passbook.epochfloor.v2';
-
-/** What this device has accepted for a group: how far, and exactly which set. */
-interface EpochPin {
-  epoch: number;
-  /** Truncated SHA-256 of the accepted wrapped-key set. */
-  digest: string;
-}
-
-/** A stable fingerprint of a wrapped-key set, for telling forks apart. */
-async function keysDigest(sharedJson: string): Promise<string> {
-  const bytes = new TextEncoder().encode(sharedJson);
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(hash).slice(0, 8))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function epochPins(): Record<string, EpochPin> {
-  const raw = localStorage.getItem(EPOCH_FLOOR);
-  if (raw === null) return {};
-  try {
-    const v = JSON.parse(raw) as Record<string, EpochPin>;
-    return v && typeof v === 'object' ? v : {};
-  } catch {
-    return {};
-  }
-}
-
-/** The highest verified epoch this device has accepted for a group. */
-export function epochFloor(groupId: string): number {
-  return epochPins()[groupId]?.epoch ?? 0;
-}
-
-/**
- * How a verified set ranks against what this device has already accepted.
+/** True once this account has seen a signed wrapped-key set for `groupId`.
  *
- * Only meaningful for a set whose SIGNATURE has already been checked — the
- * epoch lives inside the signed payload, so it means nothing until then.
- */
-type EpochVerdict = 'current' | 'rolled-back' | 'forked';
-
-async function rankEpoch(
-  groupId: string,
-  sharedJson: string,
-  epoch: number,
-): Promise<EpochVerdict> {
-  const pin = epochPins()[groupId];
-  if (pin === undefined) return 'current';
-  if (epoch < pin.epoch) return 'rolled-back';
-  if (epoch > pin.epoch) return 'current';
-  // Same epoch. Identical set is just a re-read; a DIFFERENT one at the same
-  // epoch means two sets claim to be the same version of the truth.
-  return (await keysDigest(sharedJson)) === pin.digest ? 'current' : 'forked';
-}
-
-/**
- * Record `sharedJson` as accepted. Never lowers the epoch — a floor that can be
- * walked back is not a floor, and the relay controls what we are shown.
- */
-async function acceptEpoch(groupId: string, sharedJson: string, epoch: number): Promise<void> {
-  const pins = epochPins();
-  const pin = pins[groupId];
-  if (pin !== undefined && epoch < pin.epoch) return;
-  pins[groupId] = { epoch, digest: await keysDigest(sharedJson) };
-  localStorage.setItem(EPOCH_FLOOR, JSON.stringify(pins));
-}
-
-// ----- Vault-key pinning ----------------------------------------------------
-//
-// THE GAP THIS CLOSES. Member-key pinning stops us HANDING OVER the vault key,
-// but it does not stop a relay replacing what it already holds. A relay can
-// mint its own vault key, wrap it correctly to every genuine member public key,
-// overwrite both the wrapped-key and content blobs, and every member decrypts
-// successfully. Nothing detects it: the safety number digests only member ids
-// and public keys, which are unchanged, so a family comparing fingerprints out
-// of band sees nothing wrong. At group creation it is entirely invisible,
-// because the owner's first read is of an empty entry list either way.
-//
-// Pinning a fingerprint of the vault key makes the substitution VISIBLE. It
-// does not make it impossible — that needs member-signed directory entries,
-// which is a protocol change left for external review (review-scope.md Q2a).
-//
-// A changed key is deliberately NOT treated as proof of attack: a legitimate
-// rotation (any member revoking someone) also changes it, and this device may
-// not have initiated it. The two are indistinguishable from here, which is
-// exactly why it must be a human decision rather than a silent accept.
-
-const VAULT_KEY_PINS = 'proctor.passbook.vaultkeypins.v1';
-
-/** groupId -> fingerprint of the vault key this device has accepted. */
-function vaultKeyPins(): Record<string, string> {
-  const raw = localStorage.getItem(VAULT_KEY_PINS);
-  if (raw === null) return {};
-  try {
-    const v = JSON.parse(raw) as Record<string, string>;
-    return v && typeof v === 'object' ? v : {};
-  } catch {
-    return {};
-  }
+ *  Once seen, an unsigned set for that group is a DOWNGRADE, not history, and is
+ *  refused. Same reasoning as HSTS: the insecure path stays open only until the
+ *  secure one has been observed. */
+export function requiresSignature(groupId: string): boolean {
+  return trust.isSignedGroup(groupId);
 }
 
 /**
  * A fingerprint of the vault key — never the key itself.
  *
- * Uses SHA-256 via WebCrypto and keeps only the first 16 hex chars. Storing the
- * raw key would put a second copy of the most sensitive value in localStorage
- * for no benefit; a truncated digest is enough to notice it changed, and is
+ * Storing the raw key would put a second copy of the most sensitive value at
+ * rest for no benefit; a truncated digest is enough to notice it changed, and is
  * useless to anyone who reads it.
  */
 async function vaultKeyFingerprint(vaultKeyHex: string): Promise<string> {
@@ -534,11 +344,9 @@ async function vaultKeyFingerprint(vaultKeyHex: string): Promise<string> {
     .join('');
 }
 
-/** Record the vault key this device accepts for a group. */
+/** Record the vault key this account accepts for a group. */
 async function pinVaultKey(groupId: string, vaultKeyHex: string): Promise<void> {
-  const pins = vaultKeyPins();
-  pins[groupId] = await vaultKeyFingerprint(vaultKeyHex);
-  localStorage.setItem(VAULT_KEY_PINS, JSON.stringify(pins));
+  await trust.pinVaultKey(groupId, await vaultKeyFingerprint(vaultKeyHex));
 }
 
 /**
@@ -547,9 +355,49 @@ async function pinVaultKey(groupId: string, vaultKeyHex: string): Promise<void> 
  * `null` means no pin yet (first load) — nothing to compare against.
  */
 async function vaultKeyChanged(groupId: string, vaultKeyHex: string): Promise<boolean | null> {
-  const pinned = vaultKeyPins()[groupId];
+  const pinned = trust.vaultKeyPin(groupId);
   if (pinned === undefined) return null;
   return pinned !== (await vaultKeyFingerprint(vaultKeyHex));
+}
+
+/** A stable fingerprint of a wrapped-key set, for telling same-epoch forks apart. */
+async function keysDigest(sharedJson: string): Promise<string> {
+  const bytes = new TextEncoder().encode(sharedJson);
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash).slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** The highest verified epoch this account has accepted for a group. */
+export function epochFloor(groupId: string): number {
+  return trust.epochPin(groupId)?.epoch ?? 0;
+}
+
+/**
+ * How a verified set ranks against what has already been accepted.
+ *
+ * Only meaningful once the SIGNATURE has been checked — the epoch lives inside
+ * the signed payload, so it means nothing before then.
+ */
+type EpochVerdict = 'current' | 'rolled-back' | 'forked';
+
+async function rankEpoch(
+  groupId: string,
+  sharedJson: string,
+  epoch: number,
+): Promise<EpochVerdict> {
+  const pin = trust.epochPin(groupId);
+  if (pin === undefined) return 'current';
+  if (epoch < pin.epoch) return 'rolled-back';
+  if (epoch > pin.epoch) return 'current';
+  // Same epoch. An identical set is just a re-read; a DIFFERENT one at the same
+  // epoch means two sets claim to be the same version of the truth.
+  return (await keysDigest(sharedJson)) === pin.digest ? 'current' : 'forked';
+}
+
+async function acceptEpoch(groupId: string, sharedJson: string, epoch: number): Promise<void> {
+  await trust.acceptEpoch(groupId, epoch, await keysDigest(sharedJson));
 }
 
 /** How a relay-served member compares against what we have pinned. */
@@ -580,11 +428,11 @@ export function trustStateOf(
 }
 
 /** Adopt a signing key first seen for an already-trusted member (see above). */
-function backfillSigningPin(groupId: string, member: GroupMemberView): void {
+async function backfillSigningPin(groupId: string, member: GroupMemberView): Promise<void> {
   const pinned = pinnedKeys(groupId)[member.member_id];
   const seen = member.signing_key ?? '';
   if (pinned && pinned.signing_key === '' && seen !== '' && pinned.public_key === member.public_key) {
-    pinKey(groupId, member.member_id, member.public_key, seen);
+    await trust.pinMember(groupId, member.member_id, member.public_key, seen);
   }
 }
 
@@ -811,7 +659,7 @@ export async function createFamilyVault(memberName: string, vaultName: string): 
     ]),
     authorOf(member),
   );
-  rememberSigned(groupId);
+  await trust.markSigned(groupId);
   await acceptEpoch(groupId, shared, shared_vault_epoch(shared));
   const content = seal_group_content(JSON.stringify([]), vaultKey);
   const kv = await putKeys(groupId, shared, null);
@@ -1091,7 +939,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     }
     base.keysTrust = 'unsigned';
   } else {
-    rememberSigned(groupId);
+    await trust.markSigned(groupId);
     try {
       vaultKey = unwrap_vault_key(keys.json, member.secret, member.id, signed.signer);
     } catch (err) {
@@ -1222,9 +1070,9 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
   // makes a LATER substitution detectable. Existing wraps are not re-issued.
   for (const m of group.members) {
     if (wrappedIds.has(m.member_id) && trustStateOf(groupId, m) === 'unknown') {
-      pinKey(groupId, m.member_id, m.public_key, m.signing_key ?? '');
+      await trust.pinMember(groupId, m.member_id, m.public_key, m.signing_key ?? '');
     } else {
-      backfillSigningPin(groupId, m);
+      await backfillSigningPin(groupId, m);
     }
   }
 
@@ -1318,10 +1166,10 @@ export async function approveMember(
   );
   await putKeys(groupId, updated, keys.version);
   await acceptEpoch(groupId, updated, shared_vault_epoch(updated));
-  rememberSigned(groupId);
+  await trust.markSigned(groupId);
   // Pin only AFTER the grant lands, so a failed upload does not leave us
   // trusting a key we never actually shared to.
-  pinKey(groupId, memberId, target.public_key, target.signing_key ?? '');
+  await trust.pinMember(groupId, memberId, target.public_key, target.signing_key ?? '');
 }
 
 /**
@@ -1478,7 +1326,7 @@ export async function revokeMember(
   // attack — training the user to click through the warning, which is worse
   // than not having it.
   await pinVaultKey(groupId, newKey);
-  rememberSigned(groupId);
+  await trust.markSigned(groupId);
   await acceptEpoch(groupId, shared, shared_vault_epoch(shared));
 }
 
@@ -1513,6 +1361,6 @@ export async function adoptUnsignedKeys(groupId: string): Promise<void> {
   await putKeys(groupId, signed, keys.version);
   await acceptEpoch(groupId, signed, shared_vault_epoch(signed));
   await pinVaultKey(groupId, vaultKey);
-  pinKey(groupId, member.id, member.public_key, member.signing_key ?? '');
-  rememberSigned(groupId);
+  await trust.pinMember(groupId, member.id, member.public_key, member.signing_key ?? '');
+  await trust.markSigned(groupId);
 }
