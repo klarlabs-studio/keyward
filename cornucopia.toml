@@ -1,0 +1,44 @@
+# Cornucopia codegen settings for crates/sync-postgres.
+#
+# Everything the generator needs lives here rather than in shell flags, so that
+# the local regeneration command and the CI drift check cannot disagree about
+# how the code was produced. Regenerate with:
+#
+#   cornucopia fresh -u postgres://keyward:keyward@localhost:5432 \
+#       crates/sync-postgres/schema.sql
+#
+# `fresh` creates a THROWAWAY database on that server, applies the schema file,
+# prepares every query against it, and drops it again. That matters: codegen is
+# checked against the schema as committed, not against whatever DDL some
+# long-lived local database happens to have accumulated.
+
+# Query sources. Each `.sql` file becomes a module under src/queries/.
+queries = "crates/sync-postgres/queries"
+
+# The generated crate is COMMITTED (see the manifest note below), so builds and
+# `cargo test` need no database at all — only regeneration does.
+destination = "crates/sync-postgres-queries"
+
+# Sync only. crates/sync-postgres is a blocking r2d2/postgres stack behind a
+# blocking tiny_http server; there is no async runtime in this workspace and
+# generating async code would drag one in for nothing.
+sync = true
+async = false
+
+[manifest.package]
+# Renamed from cornucopia's default `cornucopia`, which would collide with the
+# generator's own crate name and says nothing about what this member is.
+#
+# `edition` and `rust-version` are NOT set here — cornucopia forces them to 2024
+# and 1.85 and warns if you try. The rest of the workspace is edition 2021 /
+# rust-version 1.90, so the generated member is simply newer than its siblings.
+# That is fine and expected: 1.90 > 1.85, so the pinned CI toolchain compiles it,
+# and edition is a per-crate property.
+name = "keyward-sync-queries"
+version = "0.0.0"
+
+# Not a published artifact. It is an internal implementation detail of
+# keyward-sync-postgres, versioned with the repo rather than on crates.io, and
+# republishing generated code under its own name would invite someone to depend
+# on it directly.
+publish = false

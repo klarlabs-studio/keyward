@@ -7,6 +7,10 @@ license.workspace = true
 
 [dependencies]
 keyward-sync = { path = "../sync" }
+# Cornucopia-generated, database-checked query functions for the accounts and
+# devices tables. Committed to the repo, so nothing here needs a database to
+# build; regeneration is the only step that does. See ../../cornucopia.toml.
+keyward-sync-queries = { path = "../sync-postgres-queries" }
 postgres = "0.19"
 r2d2 = "0.8"
 r2d2_postgres = "0.18"

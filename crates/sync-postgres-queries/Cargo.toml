@@ -1,0 +1,23 @@
+# This file was generated with `cornucopia`. Do not modify.
+
+[package]
+name = "keyward-sync-queries"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies.postgres]
+version = "0.19.13"
+optional = true
+
+[dependencies.postgres-protocol]
+version = "0.6.11"
+
+[dependencies.postgres-types]
+version = "0.2.13"
+features = ["derive"]
+
+[features]
+default = ["dep:postgres"]
+wasm-sync = []
