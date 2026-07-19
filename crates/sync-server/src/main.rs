@@ -54,6 +54,9 @@
 //!   PUT    /v1/vault          -> 200 + version (+ X-Vault-Version) | 409 (+ X-Vault-Version) | 401
 //!   DELETE /v1/vault          -> 204 | 401  (erase this account's vault, idempotent)
 //!   GET    /v1/account        -> 200 {account_id,plan,can_share,devices,device_limit} | 401
+//!   DELETE /v1/account        -> 204 | 401  (close the account: erases the vault blob,
+//!                               every device + token, and the account's presence in every
+//!                               share group — GDPR Art. 17. Irreversible, no grace period.)
 //!   POST   /v1/billing/checkout-> 200 {url} (hosted Stripe Checkout session) | 401 | 502 | 503
 //!   POST   /v1/billing/webhook-> 200 (Stripe-signed; updates the account's plan) | 400 | 503
 //!   OPTIONS *                 -> 204 (CORS preflight)
@@ -761,6 +764,7 @@ fn handle(request: Request, app: &App) {
         (Method::Delete, "/v1/vault") => handle_delete_vault(request, app),
         (_, "/v1/vault") => handle_vault(request, app, method, &url),
         (Method::Get, "/v1/account") => handle_account(request, app),
+        (Method::Delete, "/v1/account") => handle_delete_account(request, app),
         (Method::Post, "/v1/billing/checkout") => handle_billing_checkout(request, app),
         (Method::Post, "/v1/billing/webhook") => handle_billing_webhook(request, app),
         (_, path) if path == "/v1/groups" || path.starts_with("/v1/groups/") => {
@@ -1027,6 +1031,79 @@ fn handle_delete_vault(request: Request, app: &App) {
         }
         Err(e) => respond_500(request, &e),
     }
+}
+
+/// DELETE /v1/account — auth. Close the account: erase the vault blob, every
+/// device and token, and every trace of this account in every share group.
+/// Returns 204. Idempotent in the sense that matters — once it succeeds the
+/// token is dead, so a retry is a 401 rather than a second delete.
+///
+/// **Authorization is the same as every other account-scoped route**: any LIVE
+/// device token of THIS account, resolved through [`identity_for`], and the
+/// erasure is scoped to `identity.account_id`. No account id is ever read from
+/// the path or the body, which is what makes cross-account deletion structurally
+/// impossible rather than merely checked for — there is no parameter an attacker
+/// could aim at someone else's account. A token belonging to another account
+/// deletes that other account, exactly as `DELETE /v1/vault` drops that other
+/// account's vault; a token that is unknown, revoked, or expired gets 401.
+///
+/// Deliberately NOT gated on a re-authentication step or a grace period. Both
+/// are worth having eventually, but neither is possible today: the server holds
+/// no password material to re-authenticate against (that is the zero-knowledge
+/// design), and a "soft-deleted for 30 days" account is retained personal data
+/// wearing a deletion label. A live device token is the strongest credential
+/// this system has, and it is the same one that can already read and overwrite
+/// the entire vault.
+///
+/// ORDER MATTERS, and it is groups → vault → identity:
+///
+/// * Groups first, because that step needs the account to still exist as a
+///   member row to find, and because it is the only step that touches state
+///   other people can see.
+/// * Identity LAST, because the caller's token is what authorizes every step. If
+///   the process dies partway through, the token still resolves, so the client
+///   can simply retry and finish the job. Deleting the token first would strand
+///   an orphaned vault blob that nobody — including the user and including this
+///   endpoint — could ever reach again. That is the unrecoverable failure mode,
+///   and it is the one an intuitive "delete the account row first" ordering
+///   walks straight into.
+///
+/// A failure in any step is a 500 with nothing further attempted: reporting 204
+/// while rows survive would make the erasure claim false, which is worse than an
+/// honest error the client can retry.
+fn handle_delete_account(request: Request, app: &App) {
+    let account = match identity_for(&request, app) {
+        Some(i) => i.account_id,
+        None => {
+            eprintln!("DELETE /v1/account -> 401 (bad/missing token)");
+            respond(request, text("unauthorized", 401));
+            return;
+        }
+    };
+
+    let groups_touched = match app.groups.erase_account(&account) {
+        Ok(n) => n,
+        Err(e) => {
+            respond_500(request, &e);
+            return;
+        }
+    };
+    if let Err(e) = app.store.delete(&account) {
+        respond_500(request, &e);
+        return;
+    }
+    if let Err(e) = app.accounts.delete_account(&account) {
+        respond_500(request, &e);
+        return;
+    }
+
+    // Logged as a count, never as which groups: the whole point of the group
+    // relay is that the server does not publish the family graph, and a
+    // deletion log line is not an exception to that.
+    eprintln!(
+        "DELETE /v1/account account={account} -> 204 (erased, {groups_touched} group(s) updated)"
+    );
+    respond(request, text("", 204));
 }
 
 /// Which versioned blob of a group a `/keys` or `/vault` request targets.
@@ -1788,6 +1865,374 @@ fn respond_500(request: Request, err: &SyncError) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::net::{SocketAddr, TcpStream};
+
+    /// A real server on an ephemeral port, backed by in-memory stores.
+    ///
+    /// `DELETE /v1/account` is an authorization decision, and an authorization
+    /// decision is only proven end-to-end: calling the store directly would
+    /// bypass exactly the layer under test (token → account resolution). So these
+    /// tests speak HTTP to an actual listener and assert on real status codes.
+    struct TestServer {
+        addr: SocketAddr,
+        app: &'static App,
+    }
+
+    impl TestServer {
+        fn start() -> TestServer {
+            let app: &'static App = Box::leak(Box::new(App {
+                store: Box::new(MemoryStore::new()),
+                accounts: Box::new(MemoryAccountStore::new()),
+                groups: Box::new(MemoryShareGroupStore::new()),
+                seed_tokens: HashMap::new(),
+                token_ttl: None,
+                limiter: RateLimiter::per_minute(0),
+                stripe_secret: None,
+                stripe_checkout: None,
+                metrics: Metrics {
+                    requests_total: AtomicU64::new(0),
+                    start_epoch: 0,
+                    backend: "memory",
+                    funnel: Funnel::default(),
+                },
+            }));
+            let server = Server::http("127.0.0.1:0").expect("bind ephemeral port");
+            let addr = server
+                .server_addr()
+                .to_ip()
+                .expect("an IP listener, not a unix socket");
+            std::thread::spawn(move || {
+                for request in server.incoming_requests() {
+                    handle(request, app);
+                }
+            });
+            TestServer { addr, app }
+        }
+
+        /// Send a raw request and return `(status, body)`. `Connection: close`
+        /// lets us read to EOF instead of parsing framing.
+        fn send(&self, method: &str, path: &str, token: Option<&str>, body: &str) -> (u16, String) {
+            let auth = match token {
+                Some(t) => format!("Authorization: Bearer {t}\r\n"),
+                None => String::new(),
+            };
+            let raw = format!(
+                "{method} {path} HTTP/1.1\r\nHost: localhost\r\n{auth}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let mut stream = TcpStream::connect(self.addr).expect("connect");
+            stream.write_all(raw.as_bytes()).expect("write");
+            stream.flush().expect("flush");
+            let mut out = String::new();
+            stream.read_to_string(&mut out).expect("read");
+            let status = out
+                .split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| panic!("no status line in response: {out:?}"));
+            (status, out)
+        }
+
+        fn register(&self, label: &str) -> keyward_sync::Account {
+            self.app
+                .accounts
+                .register(None, label, 1_000, None)
+                .expect("register")
+        }
+    }
+
+    fn group_member(mid: &str, account: &str, role: Role) -> GroupMember {
+        GroupMember {
+            member_id: mid.into(),
+            account_id: account.into(),
+            name: mid.into(),
+            public_key: format!("{mid}-pub"),
+            signing_key: String::new(),
+            role,
+            added_epoch: 1_000,
+        }
+    }
+
+    #[test]
+    fn delete_account_erases_vault_devices_and_group_membership() {
+        let s = TestServer::start();
+        let alice = s.register("Alice laptop");
+        let alice_phone = s
+            .app
+            .accounts
+            .add_device(&alice.device_token, "Alice phone", 1_000, None)
+            .unwrap()
+            .unwrap();
+        s.app
+            .store
+            .put(&alice.account_id, None, b"alice".to_vec())
+            .unwrap();
+
+        // Alice owns a family vault that Bob is also in, so the cascade has group
+        // state to deal with.
+        let bob = s.register("Bob laptop");
+        s.app
+            .groups
+            .create(
+                "fam",
+                group_member("m-alice", &alice.account_id, Role::Owner),
+            )
+            .unwrap();
+        s.app
+            .groups
+            .add_invite(
+                "fam",
+                GroupInvite {
+                    code_hash: "h".into(),
+                    created_epoch: 1_000,
+                    expires_epoch: u64::MAX,
+                    redeemed_by: None,
+                },
+            )
+            .unwrap();
+        s.app
+            .groups
+            .redeem_invite(
+                "fam",
+                "h",
+                group_member("m-bob", &bob.account_id, Role::Member),
+                1_001,
+            )
+            .unwrap();
+
+        let (status, _) = s.send("DELETE", "/v1/account", Some(&alice.device_token), "");
+        assert_eq!(
+            status, 204,
+            "a live device token must be able to close its account"
+        );
+
+        // Vault blob gone.
+        assert!(s.app.store.get(&alice.account_id).unwrap().is_none());
+        // EVERY device token dead, including the one that did not make the call.
+        assert!(s
+            .app
+            .accounts
+            .resolve_token(&alice.device_token, 2_000)
+            .unwrap()
+            .is_none());
+        assert!(s
+            .app
+            .accounts
+            .resolve_token(&alice_phone.device_token, 2_000)
+            .unwrap()
+            .is_none());
+        assert!(s
+            .app
+            .accounts
+            .list_devices(&alice.account_id)
+            .unwrap()
+            .is_empty());
+        // Group membership gone, but the group survives for Bob — with an Owner,
+        // since Alice held the only one.
+        let g = s.app.groups.get("fam").unwrap().unwrap();
+        assert!(!g.is_member(&alice.account_id));
+        assert!(
+            g.is_owner(&bob.account_id),
+            "the group must not be orphaned"
+        );
+        assert!(
+            g.removed_accounts.is_empty(),
+            "no tombstone for an erased account"
+        );
+
+        // The token really is dead over HTTP too: a retry is 401, not a second 204.
+        let (status, _) = s.send("DELETE", "/v1/account", Some(&alice.device_token), "");
+        assert_eq!(status, 401);
+        let (status, _) = s.send("GET", "/v1/vault", Some(&alice.device_token), "");
+        assert_eq!(status, 401);
+    }
+
+    /// THE ATTACK. Mallory holds a perfectly valid token — for her OWN account —
+    /// and tries to make it delete Alice's, naming Alice every way the wire
+    /// allows: in the body, in a query string, and as a path segment.
+    ///
+    /// The endpoint takes no account parameter at all, so each attempt either
+    /// deletes Mallory (her own account, which is legitimate) or 404s. Alice must
+    /// come through completely intact.
+    #[test]
+    fn another_accounts_token_cannot_delete_this_account() {
+        let s = TestServer::start();
+        let alice = s.register("Alice laptop");
+        let mallory = s.register("Mallory laptop");
+        s.app
+            .store
+            .put(&alice.account_id, None, b"alice".to_vec())
+            .unwrap();
+
+        // Path-segment injection: no such route.
+        let (status, _) = s.send(
+            "DELETE",
+            &format!("/v1/account/{}", alice.account_id),
+            Some(&mallory.device_token),
+            "",
+        );
+        assert_eq!(
+            status, 404,
+            "there must be no account-id-addressable delete route"
+        );
+
+        // Query-string injection. The router matches the full URL for this route
+        // (unlike `/v1/groups...`, which strips the query), so a query string does
+        // not even reach the handler — it 404s. That fails closed, which is the
+        // property being asserted here: the important part is that it is never a
+        // 204 that erased somebody else.
+        let (status, _) = s.send(
+            "DELETE",
+            &format!("/v1/account?account_id={}", alice.account_id),
+            Some(&mallory.device_token),
+            "",
+        );
+        assert_eq!(status, 404);
+        // Mallory's own token is still live, proving nothing was deleted at all.
+        assert!(s
+            .app
+            .accounts
+            .resolve_token(&mallory.device_token, 2_000)
+            .unwrap()
+            .is_some());
+
+        // Body injection, with a still-live second attacker token.
+        let mallory2 = s.register("Mallory phone");
+        let (status, _) = s.send(
+            "DELETE",
+            "/v1/account",
+            Some(&mallory2.device_token),
+            &format!(r#"{{"account_id":"{}"}}"#, alice.account_id),
+        );
+        assert_eq!(
+            status, 204,
+            "the attacker deletes her OWN account — the request is not refused, it is redirected to her"
+        );
+
+        // Alice is completely untouched by all three.
+        assert_eq!(
+            s.app.store.get(&alice.account_id).unwrap().unwrap().blob,
+            b"alice",
+            "another account's token must never erase this vault"
+        );
+        assert!(
+            s.app
+                .accounts
+                .resolve_token(&alice.device_token, 2_000)
+                .unwrap()
+                .is_some(),
+            "another account's token must never revoke this account's devices"
+        );
+        assert_eq!(
+            s.app
+                .accounts
+                .list_devices(&alice.account_id)
+                .unwrap()
+                .len(),
+            1
+        );
+        // And Alice can still use her account normally.
+        let (status, _) = s.send("GET", "/v1/vault", Some(&alice.device_token), "");
+        assert_eq!(status, 200);
+    }
+
+    /// A group member deleting their account must not let them take the family
+    /// vault down with them, nor strand it without an Owner.
+    #[test]
+    fn deleting_a_members_account_does_not_corrupt_the_group_for_others() {
+        let s = TestServer::start();
+        let alice = s.register("Alice");
+        let bob = s.register("Bob");
+        s.app
+            .groups
+            .create(
+                "fam",
+                group_member("m-alice", &alice.account_id, Role::Owner),
+            )
+            .unwrap();
+        s.app
+            .groups
+            .add_invite(
+                "fam",
+                GroupInvite {
+                    code_hash: "h".into(),
+                    created_epoch: 1_000,
+                    expires_epoch: u64::MAX,
+                    redeemed_by: None,
+                },
+            )
+            .unwrap();
+        s.app
+            .groups
+            .redeem_invite(
+                "fam",
+                "h",
+                group_member("m-bob", &bob.account_id, Role::Member),
+                1_001,
+            )
+            .unwrap();
+        s.app
+            .groups
+            .put_content("fam", None, b"shared".to_vec())
+            .unwrap();
+
+        let (status, _) = s.send("DELETE", "/v1/account", Some(&bob.device_token), "");
+        assert_eq!(status, 204);
+
+        let g = s.app.groups.get("fam").unwrap().unwrap();
+        assert!(!g.is_member(&bob.account_id));
+        assert!(g.is_owner(&alice.account_id), "the owner keeps the group");
+        assert_eq!(g.content, b"shared", "the shared blob must survive");
+        // Alice can still read the shared vault.
+        let (status, _) = s.send("GET", "/v1/groups/fam/vault", Some(&alice.device_token), "");
+        assert_eq!(status, 200);
+    }
+
+    #[test]
+    fn delete_account_requires_a_live_token() {
+        let s = TestServer::start();
+        let acct = s.register("Laptop");
+
+        // No credential at all.
+        assert_eq!(s.send("DELETE", "/v1/account", None, "").0, 401);
+        // A fabricated one.
+        assert_eq!(s.send("DELETE", "/v1/account", Some("deadbeef"), "").0, 401);
+        // A malformed header (no Bearer prefix) — sent raw.
+        let raw = "DELETE /v1/account HTTP/1.1\r\nHost: localhost\r\nAuthorization: deadbeef\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let mut stream = TcpStream::connect(s.addr).unwrap();
+        stream.write_all(raw.as_bytes()).unwrap();
+        let mut out = String::new();
+        stream.read_to_string(&mut out).unwrap();
+        assert!(out.starts_with("HTTP/1.1 401"), "got: {out:?}");
+
+        // A REVOKED device's token: revocation must cut off deletion too, or a
+        // lost phone could still close the account it was cut off from.
+        let phone = s
+            .app
+            .accounts
+            .add_device(&acct.device_token, "Phone", 1_000, None)
+            .unwrap()
+            .unwrap();
+        assert!(s
+            .app
+            .accounts
+            .revoke_device(&acct.account_id, &phone.device_id)
+            .unwrap());
+        assert_eq!(
+            s.send("DELETE", "/v1/account", Some(&phone.device_token), "")
+                .0,
+            401
+        );
+
+        // The account is still there after every rejected attempt.
+        assert!(s
+            .app
+            .accounts
+            .resolve_token(&acct.device_token, 2_000)
+            .unwrap()
+            .is_some());
+    }
 
     /// Produce a valid `Stripe-Signature` header for `payload` at time `t`.
     fn sign(payload: &str, secret: &str, t: u64) -> String {

@@ -27,8 +27,8 @@ pub use accounts::{
     Account, AccountStore, DeviceInfo, FileAccountStore, MemoryAccountStore, Plan, TokenIdentity,
 };
 pub use groups::{
-    FileShareGroupStore, GroupInvite, GroupMember, MemoryShareGroupStore, RedeemOutcome, Role,
-    ShareGroup, ShareGroupStore,
+    AccountErasure, FileShareGroupStore, GroupInvite, GroupMember, MemoryShareGroupStore,
+    RedeemOutcome, Role, ShareGroup, ShareGroupStore,
 };
 
 use serde::{Deserialize, Serialize};
