@@ -16,3 +16,17 @@ findings.json
 # Local compose credentials (deploy/.env.example is the template).
 deploy/.env
 .env
+
+# Agent OS memory layer — DELIBERATELY UNTRACKED IN THIS PUBLIC REPO.
+#
+# These hold internal commercial reasoning, not code: the trademark position
+# (including a named third party), the decision to gate the external crypto
+# review on revenue, and session logs of what was broken and when. They were
+# committed accidentally on 2026-07-19 by a `git add -A` in a repo that keeps
+# files deliberately untracked, and removed again the same day.
+#
+# If you need them shared, put them in the private keyward-cloud repo. Do not
+# un-ignore them here.
+memory/
+wiki/
+AGENTS.md
