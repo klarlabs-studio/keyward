@@ -85,8 +85,45 @@ function rememberVersion(version: string | null): void {
 }
 
 /** Normalise a base URL: strip a trailing slash so we can append `/v1/...`. */
+/**
+ * Normalise a sync server URL, and REFUSE one that would send credentials in
+ * the clear.
+ *
+ * Every request to a sync server carries the device bearer token in an
+ * `Authorization` header. Over `http://` that token — which is enough to pull
+ * the encrypted vault and register new devices — is readable by anyone on the
+ * path. The vault blob stays encrypted, so this is not a plaintext leak, but it
+ * hands an attacker the sync account, and offline attack on the blob then needs
+ * only the master password rather than the password AND the Secret Key.
+ *
+ * Loopback is allowed: `docker compose up` serves plain HTTP on localhost, and
+ * traffic that never leaves the machine has no path to sit on. A self-hoster on
+ * a LAN must terminate TLS — the alternative is a token on the wire, and a LAN
+ * is not a trust boundary.
+ */
 function normalizeUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '');
+  const trimmed = url.trim().replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`"${trimmed}" is not a valid server address.`);
+  }
+  const loopback =
+    parsed.hostname === 'localhost' ||
+    parsed.hostname === '127.0.0.1' ||
+    parsed.hostname === '[::1]' ||
+    parsed.hostname === '::1';
+  if (parsed.protocol !== 'https:' && !loopback) {
+    throw new Error(
+      `Refusing to connect to ${trimmed} over plain HTTP — your device token would be ` +
+        'sent unencrypted. Use an https:// address.',
+    );
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error(`"${parsed.protocol}" is not a supported server address.`);
+  }
+  return trimmed;
 }
 
 function authHeaders(config: SyncConfig): HeadersInit {
