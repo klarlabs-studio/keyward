@@ -944,6 +944,33 @@ mod tests {
     }
 
     #[test]
+    fn stripping_a_signature_is_not_the_same_as_never_having_one() {
+        // A relay that cannot forge a signature can still DELETE one. The
+        // primitive must report that as `Unsigned`, distinct from
+        // `BadSignature`, so a client can apply the rule the primitive cannot:
+        // a group seen signed once must never be accepted unsigned again.
+        let alice = Member::generate("alice", "Alice");
+        let key = new_vault_key();
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        sv.sign_as(&alice);
+        assert!(sv.verify_signed_by(&alice.public()).is_ok());
+
+        let stripped: SharedVault =
+            serde_json::from_str(&serde_json::to_string(&sv).unwrap()).unwrap();
+        let mut stripped = stripped;
+        stripped.signer_id = None;
+        stripped.signature = None;
+
+        assert!(matches!(
+            stripped.verify_signed_by(&alice.public()),
+            Err(SharingError::Unsigned)
+        ));
+        // And it still decrypts — which is exactly why the caller, not the
+        // signature check, has to refuse it.
+        assert_eq!(stripped.unwrap_for(&alice).unwrap(), key);
+    }
+
+    #[test]
     fn a_signature_from_the_wrong_member_is_rejected() {
         let alice = Member::generate("m-alice", "Alice");
         let mallory = Member::generate("m-mallory", "Mallory");

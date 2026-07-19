@@ -142,6 +142,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
         account_id: "acct-owner".into(),
         name: "Alice".into(),
         public_key: "alice-pub".into(),
+        signing_key: String::new(),
         role: Role::Owner,
         added_epoch: 100,
     };
@@ -150,6 +151,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
         account_id: "acct-bob".into(),
         name: "Bob".into(),
         public_key: "bob-pub".into(),
+        signing_key: String::new(),
         role: Role::Member,
         added_epoch: 200,
     };
@@ -301,6 +303,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
                     account_id: "acct-mallory".into(),
                     name: "Mallory".into(),
                     public_key: "mallory-pub".into(),
+                    signing_key: String::new(),
                     role: Role::Member,
                     added_epoch: 300,
                 },
@@ -342,6 +345,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
                     account_id: "acct-owner".into(),
                     name: "Alice (new phone)".into(),
                     public_key: "alice-pub-2".into(),
+                    signing_key: String::new(),
                     role: Role::Member, // what the join handler always sends
                     added_epoch: 400,
                 },
@@ -401,6 +405,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
                     account_id: "acct-carol".into(),
                     name: "Carol".into(),
                     public_key: "carol-pub".into(),
+                    signing_key: String::new(),
                     role: Role::Member,
                     added_epoch: 500,
                 },
@@ -433,6 +438,7 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
                     account_id: "acct-bob".into(),
                     name: "Bob".into(),
                     public_key: "bob-pub".into(),
+                    signing_key: String::new(),
                     role: Role::Member,
                     added_epoch: 600,
                 },

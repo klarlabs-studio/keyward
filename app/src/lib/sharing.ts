@@ -12,6 +12,11 @@
 import {
   member_new,
   member_public_key,
+  member_signing_new,
+  member_signing_public,
+  shared_vault_signer,
+  unwrap_vault_key_unsigned,
+  sign_shared_vault,
   group_safety_number,
   generate_vault_key,
   seal_group_content,
@@ -38,6 +43,14 @@ export interface MemberIdentity {
   secret: string;
   /** X25519 public (hex) — published to groups. */
   public_key: string;
+  /**
+   * Ed25519 signing secret (hex) — authenticates every wrapped-key set this
+   * device writes. Optional only for identities enrolled before signing existed;
+   * `ensureMember` mints one on next use.
+   */
+  signing_secret?: string;
+  /** Ed25519 verifying key (hex) — published so others can check what we write. */
+  signing_key?: string;
 }
 
 /** A group this device belongs to, as tracked locally. */
@@ -55,6 +68,8 @@ export interface GroupMemberView {
   account_id: string;
   name: string;
   public_key: string;
+  /** Ed25519 verifying key. Empty for members enrolled before signing existed. */
+  signing_key?: string;
   role: Role;
   added_epoch: number;
 }
@@ -108,6 +123,15 @@ export interface FamilyVault {
    * under a key we have not accepted.
    */
   vaultKeyChanged?: boolean;
+  /**
+   * Whether the wrapped-key set could be authenticated to a pinned member.
+   *
+   * Anything other than `'verified'` means the vault key came from a set nobody
+   * has proven authorship of — which is the whole substitution attack. The UI
+   * must say which case it is: `'unsigned'` calls for an upgrade prompt,
+   * `'bad-signature'` for an alarm.
+   */
+  keysTrust?: KeysTrust;
   keysVersion: string | null;
   contentVersion: string | null;
 }
@@ -136,6 +160,9 @@ export function memberIdentity(): MemberIdentity | null {
   if (raw === null) return null;
   try {
     const m = JSON.parse(raw) as Partial<MemberIdentity>;
+    // signing_secret is deliberately NOT required: an identity enrolled before
+    // signing existed is still valid for reading, and rejecting it here would
+    // lock those members out of vaults they legitimately hold keys to.
     if (m.id && m.name && m.secret && m.public_key) return m as MemberIdentity;
   } catch {
     // fall through
@@ -153,7 +180,18 @@ export async function ensureMember(name: string): Promise<MemberIdentity> {
       localStorage.setItem(MEMBER_STORAGE, JSON.stringify(updated));
       return updated;
     }
-    return existing;
+    if (existing.signing_secret) return existing;
+    // Upgrade an identity from before signing existed. Only the signing key is
+    // minted — rotating the X25519 secret would orphan every vault already
+    // shared to this member.
+    await ensureReady();
+    const minted = JSON.parse(member_signing_new()) as {
+      signing_key: string;
+      signing_secret: string;
+    };
+    const upgraded = { ...existing, ...minted };
+    localStorage.setItem(MEMBER_STORAGE, JSON.stringify(upgraded));
+    return upgraded;
   }
   await ensureReady();
   const id = `m${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
@@ -166,6 +204,22 @@ export async function ensureMember(name: string): Promise<MemberIdentity> {
 export async function publicKeyOf(secretHex: string): Promise<string> {
   await ensureReady();
   return member_public_key(secretHex);
+}
+
+/** Recompute a verifying key (hex) from a stored signing secret (hex). */
+export async function signingKeyOf(signingSecretHex: string): Promise<string> {
+  await ensureReady();
+  return member_signing_public(signingSecretHex);
+}
+
+/** The `{id, secret, signing_secret}` shape the WASM signing calls want. */
+function authorOf(member: MemberIdentity): string {
+  return JSON.stringify({
+    id: member.id,
+    name: member.name,
+    secret: member.secret,
+    signing_secret: member.signing_secret ?? '',
+  });
 }
 
 // ----- Local group registry -------------------------------------------------
@@ -220,30 +274,88 @@ export function forgetGroup(groupId: string): void {
 
 const PINS_STORAGE = 'proctor.passbook.keypins.v1';
 
-/** groupId -> memberId -> the public key we have accepted for that member. */
-type PinMap = Record<string, Record<string, string>>;
+/** What we have accepted for one member: their X25519 and Ed25519 public keys. */
+export interface PinnedKeys {
+  public_key: string;
+  /** Empty when pinned before signing existed, or when the member has not
+   *  published one yet. An empty pin verifies nothing and fails closed. */
+  signing_key: string;
+}
+
+/** groupId -> memberId -> the keys we have accepted for that member. */
+type PinMap = Record<string, Record<string, PinnedKeys>>;
+
+/** Read a pin written in either the current or the pre-signing (bare string) form. */
+function normalizePin(v: PinnedKeys | string): PinnedKeys {
+  return typeof v === 'string' ? { public_key: v, signing_key: '' } : v;
+}
 
 function allPins(): PinMap {
   const raw = localStorage.getItem(PINS_STORAGE);
   if (raw === null) return {};
   try {
-    const v = JSON.parse(raw) as PinMap;
-    return v && typeof v === 'object' ? v : {};
+    const v = JSON.parse(raw) as Record<string, Record<string, PinnedKeys | string>>;
+    if (!v || typeof v !== 'object') return {};
+    const out: PinMap = {};
+    for (const [groupId, members] of Object.entries(v)) {
+      out[groupId] = Object.fromEntries(
+        Object.entries(members).map(([id, pin]) => [id, normalizePin(pin)]),
+      );
+    }
+    return out;
   } catch {
     return {};
   }
 }
 
-/** The keys pinned for `groupId` (memberId -> public key). */
-export function pinnedKeys(groupId: string): Record<string, string> {
+/** The keys pinned for `groupId` (memberId -> accepted keys). */
+export function pinnedKeys(groupId: string): Record<string, PinnedKeys> {
   return allPins()[groupId] ?? {};
 }
 
-/** Pin `publicKey` as the accepted key for `memberId` in `groupId`. */
-function pinKey(groupId: string, memberId: string, publicKey: string): void {
+/** Pin a member's current keys as the accepted ones for `groupId`. */
+function pinKey(groupId: string, memberId: string, publicKey: string, signingKey: string): void {
   const pins = allPins();
-  pins[groupId] = { ...(pins[groupId] ?? {}), [memberId]: publicKey };
+  pins[groupId] = {
+    ...(pins[groupId] ?? {}),
+    [memberId]: { public_key: publicKey, signing_key: signingKey },
+  };
   localStorage.setItem(PINS_STORAGE, JSON.stringify(pins));
+}
+
+// ----- Signature enforcement, once seen ------------------------------------
+//
+// A signature only helps if it cannot be stripped. `unwrap_vault_key_unsigned`
+// exists so vaults created before signing keep working, but that path is exactly
+// what an attacker would aim for: delete the signature, and an unsigned set is
+// accepted again.
+//
+// So the first time this device sees a SIGNED set for a group, it records that
+// fact permanently. From then on an unsigned set for that group is refused
+// outright — a downgrade, not a legacy blob. Same reasoning as HSTS: the
+// insecure path stays open only until the secure one has been observed.
+
+const SIGNED_GROUPS = 'proctor.passbook.signedgroups.v1';
+
+function signedGroups(): string[] {
+  const raw = localStorage.getItem(SIGNED_GROUPS);
+  if (raw === null) return [];
+  try {
+    const v = JSON.parse(raw) as string[];
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+/** True once this device has seen a signed wrapped-key set for `groupId`. */
+export function requiresSignature(groupId: string): boolean {
+  return signedGroups().includes(groupId);
+}
+
+function rememberSigned(groupId: string): void {
+  if (requiresSignature(groupId)) return;
+  localStorage.setItem(SIGNED_GROUPS, JSON.stringify([...signedGroups(), groupId]));
 }
 
 // ----- Vault-key pinning ----------------------------------------------------
@@ -326,11 +438,28 @@ export type TrustState =
 
 export function trustStateOf(
   groupId: string,
-  member: { member_id: string; public_key: string },
+  member: { member_id: string; public_key: string; signing_key?: string },
 ): TrustState {
   const pinned = pinnedKeys(groupId)[member.member_id];
   if (pinned === undefined) return 'unknown';
-  return pinned === member.public_key ? 'pinned' : 'changed';
+  if (pinned.public_key !== member.public_key) return 'changed';
+  // A signing key appearing where we pinned none is first sight of that key, not
+  // a change — every member pinned before signing existed is in that state, and
+  // treating it as a substitution would lock out every existing family at once.
+  // A DIFFERENT non-empty key is a real change and needs the same human decision
+  // as a moved X25519 key.
+  const seen = member.signing_key ?? '';
+  if (pinned.signing_key !== '' && seen !== '' && pinned.signing_key !== seen) return 'changed';
+  return 'pinned';
+}
+
+/** Adopt a signing key first seen for an already-trusted member (see above). */
+function backfillSigningPin(groupId: string, member: GroupMemberView): void {
+  const pinned = pinnedKeys(groupId)[member.member_id];
+  const seen = member.signing_key ?? '';
+  if (pinned && pinned.signing_key === '' && seen !== '' && pinned.public_key === member.public_key) {
+    pinKey(groupId, member.member_id, member.public_key, seen);
+  }
 }
 
 // ----- Group relay HTTP -----------------------------------------------------
@@ -358,7 +487,12 @@ async function createGroupOnServer(member: MemberIdentity): Promise<string> {
   const res = await fetch(`${base}/v1/groups`, {
     method: 'POST',
     headers: authJson(token),
-    body: JSON.stringify({ member_id: member.id, name: member.name, public_key: member.public_key }),
+    body: JSON.stringify({
+      member_id: member.id,
+      name: member.name,
+      public_key: member.public_key,
+      signing_key: member.signing_key ?? '',
+    }),
   });
   if (!res.ok) throw new Error(`Could not create the family vault (HTTP ${res.status}).`);
   return ((await res.json()) as { group_id: string }).group_id;
@@ -437,12 +571,84 @@ async function putContent(groupId: string, json: string, ifMatch: string | null)
 
 // ----- High-level operations ------------------------------------------------
 
-/** Map the relay's member view to the `{id,name,public_key}` shape WASM wants. */
+/** Map the relay's member view to the shape WASM wants. */
 function recipients(members: GroupMemberView[]): string {
   return JSON.stringify(
-    members.map((m) => ({ id: m.member_id, name: m.name, public_key: m.public_key })),
+    members.map((m) => ({
+      id: m.member_id,
+      name: m.name,
+      public_key: m.public_key,
+      signing_key: m.signing_key ?? '',
+    })),
   );
 }
+
+/**
+ * Resolve the PINNED identity of whoever signed `sharedJson`, ready to verify
+ * against.
+ *
+ * Deliberately built from the local pin, never from the relay's directory: the
+ * signature exists to authenticate a blob the relay served, so checking it
+ * against a key the same relay also served would prove nothing.
+ *
+ * Returns null when the set is unsigned, or when the signer is someone this
+ * device has no pinned signing key for — both cases the caller must handle
+ * explicitly rather than read through.
+ */
+function pinnedSignerFor(
+  groupId: string,
+  sharedJson: string,
+  me: MemberIdentity,
+): { id: string; signer: string } | null {
+  const signerId = shared_vault_signer(sharedJson);
+  if (!signerId) return null;
+  if (signerId === me.id) {
+    // We signed it ourselves; verify against our own key, which needs no pin.
+    return {
+      id: signerId,
+      signer: JSON.stringify({
+        id: me.id,
+        name: me.name,
+        public_key: me.public_key,
+        signing_key: me.signing_key ?? '',
+      }),
+    };
+  }
+  const pin = pinnedKeys(groupId)[signerId];
+  if (!pin || pin.signing_key === '') return null;
+  return {
+    id: signerId,
+    signer: JSON.stringify({
+      id: signerId,
+      name: '',
+      public_key: pin.public_key,
+      signing_key: pin.signing_key,
+    }),
+  };
+}
+
+/** This device's own public identity, in the shape a verify call wants. */
+function selfSigner(me: MemberIdentity): string {
+  return JSON.stringify({
+    id: me.id,
+    name: me.name,
+    public_key: me.public_key,
+    signing_key: me.signing_key ?? '',
+  });
+}
+
+/** Why a wrapped-key set could not be authenticated. */
+export type KeysTrust =
+  /** Signed by a member whose key we have pinned, and the signature verifies. */
+  | 'verified'
+  /** No signature. Only possible for a group predating signing (a downgrade on
+   *  a group we have seen signed is refused outright, not reported here). */
+  | 'unsigned'
+  /** Signed by someone we hold no pinned signing key for — we cannot tell
+   *  whether it is a real member or the relay. */
+  | 'unknown-signer'
+  /** A signature is present and does NOT verify. This is tampering. */
+  | 'bad-signature';
 
 /**
  * Create a new family vault owned by this device. Generates a fresh vault key,
@@ -460,8 +666,17 @@ export async function createFamilyVault(memberName: string, vaultName: string): 
   await pinVaultKey(groupId, vaultKey);
   const shared = share_vault_key(
     vaultKey,
-    JSON.stringify([{ id: member.id, name: member.name, public_key: member.public_key }]),
+    JSON.stringify([
+      {
+        id: member.id,
+        name: member.name,
+        public_key: member.public_key,
+        signing_key: member.signing_key ?? '',
+      },
+    ]),
+    authorOf(member),
   );
+  rememberSigned(groupId);
   const content = seal_group_content(JSON.stringify([]), vaultKey);
   const kv = await putKeys(groupId, shared, null);
   await putContent(groupId, content, null);
@@ -636,6 +851,7 @@ export async function joinFamilyVault(
       member_id: member.id,
       name: member.name,
       public_key: member.public_key,
+      signing_key: member.signing_key ?? '',
     }),
   });
   if (res.status === 403) throw new Error('That invite is invalid, used, or expired.');
@@ -707,12 +923,49 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
   };
   if (!keys) return base;
 
-  // Do I have a wrapped key?
+  // AUTHENTICATE THE WRAPPED-KEY SET BEFORE USING IT.
+  //
+  // Unwrapping alone proves only that somebody wrapped a key to us. Producing a
+  // wrap needs nothing but our PUBLIC key, so the relay can mint its own vault
+  // key, wrap it correctly to every real member, and overwrite the blob — and
+  // every member decrypts happily. The signature is what makes that forgeable
+  // only by a member whose key we have pinned.
+  const signed = pinnedSignerFor(groupId, keys.json, member);
   let vaultKey: string;
-  try {
-    vaultKey = unwrap_vault_key(keys.json, member.secret, member.id);
-  } catch {
-    return base; // joined but not yet granted access
+  if (signed === null) {
+    const signerId = shared_vault_signer(keys.json);
+    if (signerId) {
+      // Signed, but by someone we hold no pinned signing key for. Could be a
+      // member we have never completed a trust decision with — or the relay.
+      // Indistinguishable from here, so we stop.
+      return { ...base, keysTrust: 'unknown-signer' };
+    }
+    if (requiresSignature(groupId)) {
+      // We have seen this group signed before. An unsigned set now is a
+      // downgrade, not history.
+      return { ...base, keysTrust: 'bad-signature' };
+    }
+    // Genuinely predates signing. Readable, but nobody has proven authorship —
+    // surfaced so the UI can ask a member to adopt and sign it.
+    try {
+      vaultKey = unwrap_vault_key_unsigned(keys.json, member.secret, member.id);
+    } catch {
+      return base; // joined but not yet granted access
+    }
+    base.keysTrust = 'unsigned';
+  } else {
+    rememberSigned(groupId);
+    try {
+      vaultKey = unwrap_vault_key(keys.json, member.secret, member.id, signed.signer);
+    } catch (err) {
+      const msg = String(err);
+      // Not a recipient yet is an ordinary state; a failed signature is not.
+      if (msg.includes('signature') || msg.includes('unsigned')) {
+        return { ...base, keysTrust: 'bad-signature' };
+      }
+      return base; // joined but not yet granted access
+    }
+    base.keysTrust = 'verified';
   }
 
   // Has the vault key itself changed since this device last accepted one?
@@ -781,14 +1034,34 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     }
   }
 
+  // Never extend a set we could not authenticate. Granting would re-sign the
+  // attacker's vault key with a real member's key, laundering it into something
+  // every other member accepts.
+  if (toGrant.length > 0 && base.keysTrust !== 'verified') {
+    for (const m of toGrant) {
+      pendingApproval.push({
+        memberId: m.member_id,
+        name: m.name || m.member_id,
+        publicKey: m.public_key,
+        state: trustStateOf(groupId, m),
+      });
+    }
+    toGrant.length = 0;
+  }
+
   if (toGrant.length > 0) {
     let updated = keys.json;
     for (const m of toGrant) {
       updated = grant_group_access(
         updated,
-        member.secret,
-        member.id,
-        JSON.stringify({ id: m.member_id, name: m.name, public_key: m.public_key }),
+        authorOf(member),
+        JSON.stringify({
+          id: m.member_id,
+          name: m.name,
+          public_key: m.public_key,
+          signing_key: m.signing_key ?? '',
+        }),
+        signed?.signer ?? selfSigner(member),
       );
       grantedNames.push(m.name || m.member_id);
     }
@@ -802,7 +1075,9 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
   // makes a LATER substitution detectable. Existing wraps are not re-issued.
   for (const m of group.members) {
     if (wrappedIds.has(m.member_id) && trustStateOf(groupId, m) === 'unknown') {
-      pinKey(groupId, m.member_id, m.public_key);
+      pinKey(groupId, m.member_id, m.public_key, m.signing_key ?? '');
+    } else {
+      backfillSigningPin(groupId, m);
     }
   }
 
@@ -871,16 +1146,34 @@ export async function approveMember(
   const keys = await getKeys(groupId);
   if (keys === null) throw new Error('This vault has no keys to share yet.');
 
+  // Authenticate the set we are about to extend. Approving into a forged set
+  // would sign the attacker's vault key with a real member's key.
+  const signed = pinnedSignerFor(groupId, keys.json, member);
+  if (signed === null) {
+    if (shared_vault_signer(keys.json) !== null || requiresSignature(groupId)) {
+      throw new Error(
+        'The shared keys for this vault could not be verified as coming from a member you trust. ' +
+          'Nothing was shared. Check the safety number with your family before approving anyone.',
+      );
+    }
+  }
+
   const updated = grant_group_access(
     keys.json,
-    member.secret,
-    member.id,
-    JSON.stringify({ id: target.member_id, name: target.name, public_key: target.public_key }),
+    authorOf(member),
+    JSON.stringify({
+      id: target.member_id,
+      name: target.name,
+      public_key: target.public_key,
+      signing_key: target.signing_key ?? '',
+    }),
+    signed?.signer ?? selfSigner(member),
   );
   await putKeys(groupId, updated, keys.version);
+  rememberSigned(groupId);
   // Pin only AFTER the grant lands, so a failed upload does not leave us
   // trusting a key we never actually shared to.
-  pinKey(groupId, memberId, target.public_key);
+  pinKey(groupId, memberId, target.public_key, target.signing_key ?? '');
 }
 
 /**
@@ -898,7 +1191,16 @@ export async function acceptRotatedVaultKey(groupId: string): Promise<void> {
   if (member === null) throw new Error('No member identity on this device.');
   const keys = await getKeys(groupId);
   if (keys === null) throw new Error('This vault has no keys yet.');
-  const vaultKey = unwrap_vault_key(keys.json, member.secret, member.id);
+  const signed = pinnedSignerFor(groupId, keys.json, member);
+  if (signed === null && (shared_vault_signer(keys.json) !== null || requiresSignature(groupId))) {
+    throw new Error(
+      'The shared keys for this vault could not be verified as coming from a member you trust.',
+    );
+  }
+  const vaultKey =
+    signed === null
+      ? unwrap_vault_key_unsigned(keys.json, member.secret, member.id)
+      : unwrap_vault_key(keys.json, member.secret, member.id, signed.signer);
   await pinVaultKey(groupId, vaultKey);
 }
 
@@ -912,7 +1214,16 @@ export async function saveFamilyEntries(
   if (!member) throw new Error('This device has no sharing identity yet.');
   const keys = await getKeys(groupId);
   if (!keys) throw new Error('This family vault has no keys yet.');
-  const vaultKey = unwrap_vault_key(keys.json, member.secret, member.id);
+  const signed = pinnedSignerFor(groupId, keys.json, member);
+  if (signed === null && (shared_vault_signer(keys.json) !== null || requiresSignature(groupId))) {
+    throw new Error(
+      'The shared keys for this vault could not be verified as coming from a member you trust.',
+    );
+  }
+  const vaultKey =
+    signed === null
+      ? unwrap_vault_key_unsigned(keys.json, member.secret, member.id)
+      : unwrap_vault_key(keys.json, member.secret, member.id, signed.signer);
   const content = seal_group_content(JSON.stringify(entries), vaultKey);
   return putContent(groupId, content, contentVersion);
 }
@@ -963,7 +1274,7 @@ export async function revokeMember(
   if (group === null) throw new Error('You are not a member of this family vault.');
   const remaining = group.members.filter((m) => m.member_id !== memberId);
   const newKey = generate_vault_key();
-  const shared = share_vault_key(newKey, recipients(remaining));
+  const shared = share_vault_key(newKey, recipients(remaining), authorOf(member));
   const content = seal_group_content(JSON.stringify(currentEntries), newKey);
 
   const keys = await getKeys(groupId);
@@ -976,4 +1287,39 @@ export async function revokeMember(
   // attack — training the user to click through the warning, which is worse
   // than not having it.
   await pinVaultKey(groupId, newKey);
+  rememberSigned(groupId);
+}
+
+/**
+ * Adopt an unsigned, pre-signing wrapped-key set: sign it as this device without
+ * changing a single wrap, so every other member can authenticate it from here on.
+ *
+ * An explicit user action, never automatic. Signing says "I vouch that these are
+ * my family's keys" — and this device cannot actually verify that, because the
+ * set predates the mechanism that would let it. What it CAN do is pin the vault
+ * key it has been reading all along, so from this point a substitution is
+ * detectable. The UI must ask the user to confirm the safety number with their
+ * family out of band first.
+ */
+export async function adoptUnsignedKeys(groupId: string): Promise<void> {
+  await ensureReady();
+  const member = await ensureMember(memberIdentity()?.name ?? 'Me');
+  const keys = await getKeys(groupId);
+  if (keys === null) throw new Error('This vault has no keys yet.');
+  if (shared_vault_signer(keys.json) !== null) {
+    throw new Error('These keys are already signed — reload the vault.');
+  }
+  if (requiresSignature(groupId)) {
+    throw new Error(
+      'These keys lost a signature they previously had. Do not adopt them — ' +
+        'check with your family before going further.',
+    );
+  }
+  // Confirm we can actually read the set before vouching for it.
+  const vaultKey = unwrap_vault_key_unsigned(keys.json, member.secret, member.id);
+  const signed = sign_shared_vault(keys.json, authorOf(member));
+  await putKeys(groupId, signed, keys.version);
+  await pinVaultKey(groupId, vaultKey);
+  pinKey(groupId, member.id, member.public_key, member.signing_key ?? '');
+  rememberSigned(groupId);
 }

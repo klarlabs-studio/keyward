@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS group_members (
     account_id    TEXT NOT NULL,
     name          TEXT NOT NULL,
     public_key    TEXT NOT NULL,
+    signing_key   TEXT NOT NULL DEFAULT '',
     role          TEXT NOT NULL DEFAULT 'member',
     added_epoch    BIGINT NOT NULL,
     PRIMARY KEY (group_id, member_id)
@@ -77,6 +78,11 @@ CREATE TABLE IF NOT EXISTS group_members (
 -- legacy NOT NULL `is_owner` (so inserts may omit it) and backfill Owner from it.
 -- A no-op on fresh databases, which never had `is_owner`.
 ALTER TABLE group_members ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'member';
+-- Members enrolled before wrapped-key sets were signed have no verifying key.
+-- Default empty rather than backfilling anything: a fabricated key would make
+-- forged sets appear verified, which is the exact failure this column exists to
+-- prevent. Empty means "cannot verify", and clients fail closed on it.
+ALTER TABLE group_members ADD COLUMN IF NOT EXISTS signing_key TEXT NOT NULL DEFAULT '';
 DO $$
 BEGIN
     IF EXISTS (
@@ -451,7 +457,7 @@ fn load_group(
     };
     let members = client
         .query(
-            "SELECT member_id, account_id, name, public_key, role, added_epoch \
+            "SELECT member_id, account_id, name, public_key, signing_key, role, added_epoch \
              FROM group_members WHERE group_id = $1 ORDER BY added_epoch",
             &[&group_id],
         )
@@ -462,7 +468,8 @@ fn load_group(
             account_id: r.get(1),
             name: r.get(2),
             public_key: r.get(3),
-            role: Role::parse(&r.get::<_, String>(4)),
+            signing_key: r.get(4),
+            role: Role::parse(&r.get::<_, String>(5)),
             added_epoch: r.get::<_, i64>(5) as u64,
         })
         .collect();
@@ -565,7 +572,7 @@ fn insert_member(
     client
         .execute(
             "INSERT INTO group_members \
-             (group_id, member_id, account_id, name, public_key, role, added_epoch) \
+             (group_id, member_id, account_id, name, public_key, signing_key, role, added_epoch) \
              VALUES ($1, $2, $3, $4, $5, $6, $7)",
             &[
                 &group_id,
@@ -573,6 +580,7 @@ fn insert_member(
                 &m.account_id,
                 &m.name,
                 &m.public_key,
+                &m.signing_key,
                 &m.role.as_str(),
                 &(m.added_epoch as i64),
             ],

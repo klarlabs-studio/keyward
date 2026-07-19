@@ -237,6 +237,36 @@ impl MemberPublicJson {
     }
 }
 
+/// A member's SECRET identity as it crosses the JS boundary: the X25519 secret
+/// that unwraps vaults, plus the Ed25519 signing secret that authenticates
+/// wrapped-key sets this member writes.
+///
+/// Both come from the caller's own encrypted vault, never from a relay.
+#[derive(Deserialize)]
+struct MemberSecretJson {
+    id: String,
+    #[serde(default)]
+    name: String,
+    secret: String,
+    /// Absent for identities enrolled before signing existed. `Member::from_secrets`
+    /// then mints a fresh signing key, so this member can still READ vaults shared
+    /// to them; the new public half must be published before anyone can verify
+    /// what they WRITE.
+    #[serde(default)]
+    signing_secret: Option<String>,
+}
+
+impl MemberSecretJson {
+    fn into_domain(self) -> Result<Member, JsValue> {
+        let secret = from_hex_32(&self.secret)?;
+        let signing = match self.signing_secret.as_deref() {
+            Some(hex) if !hex.is_empty() => Some(from_hex_32(hex)?),
+            _ => None,
+        };
+        Ok(Member::from_secrets(&self.id, &self.name, secret, signing))
+    }
+}
+
 /// Generate a fresh member X25519 keypair. Returns
 /// `{id, name, public_key, secret}` — `public_key` is published to the group,
 /// `secret` is stored ENCRYPTED in the member's own vault (never sent to a server).
@@ -248,8 +278,36 @@ pub fn member_new(id: &str, name: &str) -> String {
         "name": name,
         "public_key": to_hex(&m.public().public_key),
         "secret": to_hex(&m.secret_bytes()),
+        "signing_key": to_hex(&m.signing_public()),
+        "signing_secret": to_hex(&m.signing_bytes()),
     })
     .to_string()
+}
+
+/// Mint a signing key for an identity enrolled before wrapped-key sets were
+/// signed. Returns `{signing_key, signing_secret}` (hex).
+///
+/// Kept separate from `member_new` so upgrading an existing member does NOT
+/// touch their X25519 secret — rotating that would orphan every vault already
+/// shared to them.
+#[wasm_bindgen]
+pub fn member_signing_new() -> String {
+    let m = Member::generate("", "");
+    serde_json::json!({
+        "signing_key": to_hex(&m.signing_public()),
+        "signing_secret": to_hex(&m.signing_bytes()),
+    })
+    .to_string()
+}
+
+/// Recompute a member's Ed25519 verifying key (hex) from their stored signing
+/// secret (hex) — used when re-publishing an existing identity.
+#[wasm_bindgen]
+pub fn member_signing_public(signing_secret_hex: &str) -> Result<String, JsValue> {
+    let signing = from_hex_32(signing_secret_hex)?;
+    Ok(to_hex(
+        &Member::from_secrets("", "", [0u8; 32], Some(signing)).signing_public(),
+    ))
 }
 
 /// Recompute a member's public key (hex) from their stored secret (hex) — used
@@ -291,34 +349,117 @@ pub fn open_group_content(blob_json: &str, vault_key_hex: &str) -> Result<String
     serde_json::to_string(&entries).map_err(js_err)
 }
 
-/// Wrap a vault key (hex) to each member, returning a `SharedVault` as JSON (the
-/// opaque per-member wrapped keys the group relay stores). `members_json` is an
-/// array of `{id, name, public_key}` (public_key in hex).
+/// Wrap a vault key (hex) to each member and SIGN the result as `author_json`,
+/// returning a `SharedVault` as JSON (the opaque per-member wrapped keys the
+/// group relay stores). `members_json` is an array of
+/// `{id, name, public_key, signing_key}` (keys in hex); `author_json` is
+/// `{id, secret, signing_secret}`.
+///
+/// The author is required because an UNSIGNED set proves nothing: wrapping needs
+/// only the recipients' public keys, so anyone who can read the directory —
+/// including the relay — can mint a vault key, wrap it correctly to every real
+/// member, and overwrite the blob undetected.
 #[wasm_bindgen]
-pub fn share_vault_key(vault_key_hex: &str, members_json: &str) -> Result<String, JsValue> {
+pub fn share_vault_key(
+    vault_key_hex: &str,
+    members_json: &str,
+    author_json: &str,
+) -> Result<String, JsValue> {
     let key = from_hex_32(vault_key_hex)?;
     let members: Vec<MemberPublicJson> = serde_json::from_str(members_json).map_err(js_err)?;
     let recipients: Vec<MemberPublic> = members
         .into_iter()
         .map(MemberPublicJson::into_domain)
         .collect::<Result<_, _>>()?;
-    let shared = SharedVault::share_to(&key, &recipients).map_err(js_err)?;
+    let author: MemberSecretJson = serde_json::from_str(author_json).map_err(js_err)?;
+    let mut shared = SharedVault::share_to(&key, &recipients).map_err(js_err)?;
+    shared.sign_as(&author.into_domain()?);
     serde_json::to_string(&shared).map_err(js_err)
 }
 
-/// Recover the vault key (hex) from a `SharedVault` (JSON) using this member's
-/// stored secret (hex) and id. Fails if this member is not a recipient.
+/// Recover the vault key (hex) from a `SharedVault` (JSON), first VERIFYING the
+/// set was signed by `expected_signer_json` — a `{id, name, public_key,
+/// signing_key}` the caller has PINNED locally.
+///
+/// Verification is not optional and not a separate call: an unwrap that succeeds
+/// tells you only that somebody wrapped a key to you, not who. Passing a signer
+/// fetched from the same relay that served the blob would prove nothing, since an
+/// attacker who can replace the wraps can replace the key beside them.
+///
+/// Throws `unsigned wrapped-key set` for a legacy or stripped blob and
+/// `wrapped-key set signature is invalid` for active tampering — distinct
+/// because the first calls for an upgrade prompt and the second for an alarm.
 #[wasm_bindgen]
 pub fn unwrap_vault_key(
     shared_json: &str,
     member_secret_hex: &str,
     member_id: &str,
+    expected_signer_json: &str,
 ) -> Result<String, JsValue> {
     let shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    let signer: MemberPublicJson = serde_json::from_str(expected_signer_json).map_err(js_err)?;
+    shared
+        .verify_signed_by(&signer.into_domain()?)
+        .map_err(js_err)?;
     let secret = from_hex_32(member_secret_hex)?;
     let member = Member::from_secret(member_id, "", secret);
     let key = shared.unwrap_for(&member).map_err(js_err)?;
     Ok(to_hex(&key))
+}
+
+/// Unwrap a wrapped-key set that predates signing, WITHOUT authenticating it.
+///
+/// Refuses if the set carries a signature at all, so this can never be used to
+/// skip verifying one that exists — an attacker who strips a signature to force
+/// this path gets a set that still has to pass the caller's own
+/// "this group has been signed before" check.
+///
+/// A set opened this way is unauthenticated: it proves someone wrapped a key to
+/// you, not who. Callers must surface that and get the set re-signed.
+#[wasm_bindgen]
+pub fn unwrap_vault_key_unsigned(
+    shared_json: &str,
+    member_secret_hex: &str,
+    member_id: &str,
+) -> Result<String, JsValue> {
+    let shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    if shared.signer().is_some() {
+        return Err(JsValue::from_str(
+            "this wrapped-key set is signed — verify it instead of opening it unsigned",
+        ));
+    }
+    let secret = from_hex_32(member_secret_hex)?;
+    let member = Member::from_secret(member_id, "", secret);
+    let key = shared.unwrap_for(&member).map_err(js_err)?;
+    Ok(to_hex(&key))
+}
+
+/// Sign an existing wrapped-key set as `author_json` without changing its wraps
+/// — how a legacy, unsigned set is adopted once a human takes responsibility for
+/// it. Refuses an already-signed set, so it cannot overwrite someone else's
+/// signature.
+#[wasm_bindgen]
+pub fn sign_shared_vault(shared_json: &str, author_json: &str) -> Result<String, JsValue> {
+    let mut shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    if let Some(existing) = shared.signer() {
+        return Err(JsValue::from_str(&format!(
+            "this wrapped-key set is already signed by {existing}"
+        )));
+    }
+    let author: MemberSecretJson = serde_json::from_str(author_json).map_err(js_err)?;
+    shared.sign_as(&author.into_domain()?);
+    serde_json::to_string(&shared).map_err(js_err)
+}
+
+/// Who signed a `SharedVault`, or `null` if it carries no signature.
+///
+/// Lets a caller look up the right PINNED signer before calling
+/// `unwrap_vault_key`. Trust nothing about the answer itself — it is attacker-
+/// controlled until verification passes.
+#[wasm_bindgen]
+pub fn shared_vault_signer(shared_json: &str) -> Result<Option<String>, JsValue> {
+    let shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    Ok(shared.signer().map(|s| s.to_owned()))
 }
 
 /// Add a new member to a `SharedVault` (JSON) — an existing member re-wraps the
@@ -327,17 +468,26 @@ pub fn unwrap_vault_key(
 #[wasm_bindgen]
 pub fn grant_group_access(
     shared_json: &str,
-    existing_secret_hex: &str,
-    existing_id: &str,
+    existing_json: &str,
     new_member_json: &str,
+    expected_signer_json: &str,
 ) -> Result<String, JsValue> {
     let mut shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
-    let secret = from_hex_32(existing_secret_hex)?;
-    let existing = Member::from_secret(existing_id, "", secret);
+    let signer: MemberPublicJson = serde_json::from_str(expected_signer_json).map_err(js_err)?;
+    // Verify BEFORE extending. Granting access to a forged set would re-sign the
+    // attacker's vault key with a real member's key, laundering it into something
+    // every other member accepts.
+    shared
+        .verify_signed_by(&signer.into_domain()?)
+        .map_err(js_err)?;
+    let existing: Member = serde_json::from_str::<MemberSecretJson>(existing_json)
+        .map_err(js_err)?
+        .into_domain()?;
     let new_member: MemberPublicJson = serde_json::from_str(new_member_json).map_err(js_err)?;
     shared
         .grant_access(&existing, &new_member.into_domain()?)
         .map_err(js_err)?;
+    shared.sign_as(&existing);
     serde_json::to_string(&shared).map_err(js_err)
 }
 
@@ -378,14 +528,23 @@ pub fn group_safety_number(members_json: &str) -> Result<String, JsValue> {
     Ok(safety_number(&domain))
 }
 
-/// Remove a member's wrapped copy from a `SharedVault` (JSON), returning the
+/// Remove a member's wrapped copy from a `SharedVault` (JSON), re-sign it as
+/// `author_json` (`{id, secret, signing_secret}`), and return the
 /// updated JSON. For TRUE revocation the caller must also rotate the vault key
 /// (`generate_vault_key` → `seal_group_content` → `share_vault_key` to the
 /// remaining members), since a removed member may retain a key they already read.
 #[wasm_bindgen]
-pub fn revoke_group_member(shared_json: &str, member_id: &str) -> Result<String, JsValue> {
+pub fn revoke_group_member(
+    shared_json: &str,
+    member_id: &str,
+    author_json: &str,
+) -> Result<String, JsValue> {
     let mut shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
     shared.revoke(member_id);
+    // Re-sign: removing a wrap changes the signed payload, so an unsigned or
+    // stale-signed set would be indistinguishable from one a relay truncated.
+    let author: MemberSecretJson = serde_json::from_str(author_json).map_err(js_err)?;
+    shared.sign_as(&author.into_domain()?);
     serde_json::to_string(&shared).map_err(js_err)
 }
 

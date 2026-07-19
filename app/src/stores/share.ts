@@ -369,6 +369,28 @@ export const useShareStore = defineStore('share', {
       }
     },
 
+    /**
+     * Sign a wrapped-key set that predates signing, so the family can
+     * authenticate it from now on.
+     *
+     * Explicit action only. This device cannot verify the set is genuine — it
+     * predates the mechanism that would let it — so the user is vouching, and
+     * the dialog says so before offering the button.
+     */
+    async adoptUnsignedKeys(): Promise<void> {
+      if (!this.active) return;
+      this.busy = true;
+      try {
+        await share.adoptUnsignedKeys(this.active.groupId);
+        toast('Shared keys signed — your family can now verify them');
+        await this.reloadActive();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Could not sign the shared keys');
+      } finally {
+        this.busy = false;
+      }
+    },
+
     async approveMember(memberId: string, publicKey: string): Promise<void> {
       if (!this.active) return;
       this.busy = true;
