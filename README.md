@@ -4,7 +4,11 @@
 
 **The credential manager that's as polished as 1Password, as open as Bitwarden, and as private as you want it — because you decide where your vault lives.**
 
-Keyward is an **open-source, B2C credential manager** (passwords + passkeys + TOTP + email aliases + identities) built to close the two gaps the market leaves open:
+Keyward is an **open-source, B2C credential manager**. Today it stores passwords,
+TOTP, secure notes, cards, and identities; **passkeys and email aliases are on the
+roadmap, not yet implemented** (the data model reserves a passkey field, but there
+is no WebAuthn create/use path). It is built to close the two gaps the market
+leaves open:
 
 - The best UX (**1Password**) is proprietary, has no free tier, and just got more expensive.
 - The best open option (**Bitwarden**) has a degraded browser extension and weak connectivity.
