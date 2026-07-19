@@ -78,9 +78,20 @@ group creation it is completely invisible.
   or is a signature from an authorised member required?
 - Should the group-state digest the client pins cover the wrapped-key set, and
   what is the right rollback/epoch discipline alongside it?
-- We have deliberately **not** implemented a fix, because we judged the choice
-  between "AAD + pinned group digest" and "member-signed directory entries" to
-  be a protocol design decision worth your judgement rather than our guess.
+- We have deliberately **not** implemented a cryptographic fix, because the
+  choice between "AAD + pinned group digest" and "member-signed directory
+  entries" is a protocol design decision worth your judgement rather than our
+  guess.
+
+- We HAVE since added a detection layer, and want your view on whether it is
+  adequate as an interim control: the client pins a fingerprint of the vault
+  key and, on any change, refuses to decrypt or re-seal until a human accepts
+  it. That makes substitution observable and denies the relay plaintext without
+  active user consent — but the signal is ambiguous, because a legitimate
+  revoke-triggered rotation is indistinguishable from an attack at the client.
+  Our concern is habituation: rotation is an ordinary event, so users may learn
+  to accept the prompt. Is detection-with-an-ambiguous-prompt worth having, or
+  does it mainly create false confidence?
 
 ### Q3 — Is domain separation adequate?
 

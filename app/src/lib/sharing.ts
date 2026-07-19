@@ -98,6 +98,16 @@ export interface FamilyVault {
    * to them. Nothing has been sent for these; they are waiting on the user.
    */
   pendingApproval: PendingMember[];
+  /**
+   * The shared vault key differs from the one this device previously accepted.
+   *
+   * Usually a legitimate rotation someone else performed (revoking a member
+   * rotates the key). But it is also exactly what a relay substituting its own
+   * key looks like, and the two cannot be told apart from here — so entries are
+   * left unread until a human decides, rather than silently re-sealing content
+   * under a key we have not accepted.
+   */
+  vaultKeyChanged?: boolean;
   keysVersion: string | null;
   contentVersion: string | null;
 }
@@ -234,6 +244,74 @@ function pinKey(groupId: string, memberId: string, publicKey: string): void {
   const pins = allPins();
   pins[groupId] = { ...(pins[groupId] ?? {}), [memberId]: publicKey };
   localStorage.setItem(PINS_STORAGE, JSON.stringify(pins));
+}
+
+// ----- Vault-key pinning ----------------------------------------------------
+//
+// THE GAP THIS CLOSES. Member-key pinning stops us HANDING OVER the vault key,
+// but it does not stop a relay replacing what it already holds. A relay can
+// mint its own vault key, wrap it correctly to every genuine member public key,
+// overwrite both the wrapped-key and content blobs, and every member decrypts
+// successfully. Nothing detects it: the safety number digests only member ids
+// and public keys, which are unchanged, so a family comparing fingerprints out
+// of band sees nothing wrong. At group creation it is entirely invisible,
+// because the owner's first read is of an empty entry list either way.
+//
+// Pinning a fingerprint of the vault key makes the substitution VISIBLE. It
+// does not make it impossible — that needs member-signed directory entries,
+// which is a protocol change left for external review (review-scope.md Q2a).
+//
+// A changed key is deliberately NOT treated as proof of attack: a legitimate
+// rotation (any member revoking someone) also changes it, and this device may
+// not have initiated it. The two are indistinguishable from here, which is
+// exactly why it must be a human decision rather than a silent accept.
+
+const VAULT_KEY_PINS = 'proctor.passbook.vaultkeypins.v1';
+
+/** groupId -> fingerprint of the vault key this device has accepted. */
+function vaultKeyPins(): Record<string, string> {
+  const raw = localStorage.getItem(VAULT_KEY_PINS);
+  if (raw === null) return {};
+  try {
+    const v = JSON.parse(raw) as Record<string, string>;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * A fingerprint of the vault key — never the key itself.
+ *
+ * Uses SHA-256 via WebCrypto and keeps only the first 16 hex chars. Storing the
+ * raw key would put a second copy of the most sensitive value in localStorage
+ * for no benefit; a truncated digest is enough to notice it changed, and is
+ * useless to anyone who reads it.
+ */
+async function vaultKeyFingerprint(vaultKeyHex: string): Promise<string> {
+  const bytes = new TextEncoder().encode(vaultKeyHex);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest).slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** Record the vault key this device accepts for a group. */
+async function pinVaultKey(groupId: string, vaultKeyHex: string): Promise<void> {
+  const pins = vaultKeyPins();
+  pins[groupId] = await vaultKeyFingerprint(vaultKeyHex);
+  localStorage.setItem(VAULT_KEY_PINS, JSON.stringify(pins));
+}
+
+/**
+ * Whether the vault key differs from the one previously accepted.
+ *
+ * `null` means no pin yet (first load) — nothing to compare against.
+ */
+async function vaultKeyChanged(groupId: string, vaultKeyHex: string): Promise<boolean | null> {
+  const pinned = vaultKeyPins()[groupId];
+  if (pinned === undefined) return null;
+  return pinned !== (await vaultKeyFingerprint(vaultKeyHex));
 }
 
 /** How a relay-served member compares against what we have pinned. */
@@ -377,6 +455,9 @@ export async function createFamilyVault(memberName: string, vaultName: string): 
   const groupId = await createGroupOnServer(member);
 
   const vaultKey = generate_vault_key();
+  // Trusted by construction: we generated it locally, it has not been near the
+  // relay. Pinning here means any later change is a real change.
+  await pinVaultKey(groupId, vaultKey);
   const shared = share_vault_key(
     vaultKey,
     JSON.stringify([{ id: member.id, name: member.name, public_key: member.public_key }]),
@@ -634,6 +715,35 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     return base; // joined but not yet granted access
   }
 
+  // Has the vault key itself changed since this device last accepted one?
+  //
+  // This is the check that makes wholesale substitution visible. A relay can
+  // mint its own key, wrap it correctly to every genuine member public key, and
+  // overwrite both blobs; everyone still decrypts, and the safety number is
+  // unchanged because it covers only member ids and public keys. Without this,
+  // nothing anywhere notices.
+  //
+  // A change is NOT reported as an attack. A legitimate rotation — any member
+  // revoking someone — also changes the key, and this device may not have
+  // initiated it. The two are indistinguishable from here, so it is surfaced
+  // as a decision with the benign explanation stated first.
+  const keyChanged = await vaultKeyChanged(groupId, vaultKey);
+  if (keyChanged === true) {
+    return {
+      ...base,
+      members: group.members,
+      // Deliberately NOT granting access: entries are left unread and nothing
+      // is re-sealed under a key we have not accepted. Re-sealing would hand
+      // the relay the plaintext it is fishing for.
+      hasAccess: false,
+      vaultKeyChanged: true,
+    };
+  }
+  if (keyChanged === null) {
+    // First load on this device: trust on first use, same as member keys.
+    await pinVaultKey(groupId, vaultKey);
+  }
+
   // Reconcile members who lack a wrap — but ONLY to keys we have already
   // accepted. This loop used to wrap K_vault to every relay-listed key with no
   // check at all, which is precisely how a hostile relay reads a shared vault:
@@ -773,6 +883,25 @@ export async function approveMember(
   pinKey(groupId, memberId, target.public_key);
 }
 
+/**
+ * Accept a changed vault key for a group.
+ *
+ * Called only from an explicit user action, after they have established that a
+ * member was legitimately removed (which rotates the key). Accepting means this
+ * device will read and re-seal content under the new key — so if the change was
+ * in fact a relay substituting its own key, this is the step that hands over
+ * the plaintext. The UI must say so plainly before offering it.
+ */
+export async function acceptRotatedVaultKey(groupId: string): Promise<void> {
+  await ensureReady();
+  const member = memberIdentity();
+  if (member === null) throw new Error('No member identity on this device.');
+  const keys = await getKeys(groupId);
+  if (keys === null) throw new Error('This vault has no keys yet.');
+  const vaultKey = unwrap_vault_key(keys.json, member.secret, member.id);
+  await pinVaultKey(groupId, vaultKey);
+}
+
 export async function saveFamilyEntries(
   groupId: string,
   entries: Entry[],
@@ -841,4 +970,10 @@ export async function revokeMember(
   await putKeys(groupId, shared, keys?.version ?? null);
   const existingContent = await getContent(groupId);
   await putContent(groupId, content, existingContent?.version ?? null);
+
+  // We rotated deliberately, so accept the new key here. Without this, our own
+  // revoke would trip the substitution check on the next load and look like an
+  // attack — training the user to click through the warning, which is worse
+  // than not having it.
+  await pinVaultKey(groupId, newKey);
 }

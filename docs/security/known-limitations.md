@@ -135,35 +135,39 @@ pinning does not address §3a at all, which needs no grant from us.
 
 ---
 
-## 3a. Wraps carry no sender authentication, and the safety number does not cover them
+## 3a. Wraps carry no sender authentication — substitution now DETECTABLE, still not preventable
 
-**Open. This is the most significant remaining gap in family sharing.**
+**Partially closed. Read the distinction carefully.**
 
-`wrap_to` requires only the recipient's public key — anyone can produce a
-well-formed wrap — and the AEAD carries no associated data and no signature.
-`unwrap_for` accepts any wrap under a matching `member_id` that decrypts to 32
-bytes.
+`wrap_to` still requires only a recipient public key, still carries no
+signature, and `safety_number` still digests only member ids and public keys —
+so a relay can mint its own vault key, wrap it correctly to every genuine
+member, overwrite both blobs, and every member decrypts successfully with an
+unchanged safety number.
 
-`safety_number` digests `SAFETY_NUMBER_INFO` and, per sorted member,
-`len(id) ‖ id ‖ public_key`. The **wrapped-key set and the content blob are
-outside that digest.** So a relay can generate its own vault key, wrap it
-correctly to every genuine member public key, overwrite both blobs, and the
-safety number is byte-identical. Members decrypt successfully and notice
-nothing; a family diligently comparing fingerprints out of band detects nothing.
-At group creation this is entirely invisible, because the owner's first read is
-of an empty entry list either way.
+**What changed:** the client now pins a fingerprint of the vault key it has
+accepted (`vaultKeyPins`). On any later load where the unwrapped key differs, it
+refuses to decrypt entries, refuses to re-seal anything, and surfaces the change
+for an explicit human decision. Previously the substitution was completely
+invisible — nothing anywhere noticed, and the first subsequent save re-sealed
+every shared credential under the attacker's key.
 
-Trust-on-first-use pinning (added for §3) does **not** close this: pinning
-constrains which key *we* wrap to, whereas this attack does not need us to wrap
-anything at all.
+**What has NOT changed:** this is detection, not prevention. A relay can still
+perform the substitution; it just cannot do so unobserved, and cannot obtain
+plaintext without a member actively accepting the new key.
 
-The real fix is member-signed directory entries plus key epochs — i.e. wraps
-that are verifiable as having come from a member, and a group-state digest the
-client pins. That is a **protocol design decision**, not a patch, which is why
-it is written down here for the external review rather than improvised. It is
-the question most worth an auditor's time in this codebase.
+**The residual, and it is real:** a change is genuinely ambiguous. Any member
+revoking someone rotates the key, and a device that did not initiate that
+rotation sees exactly what an attack looks like. The UI therefore leads with the
+benign explanation and asks the user to confirm out of band that someone was
+removed. A user conditioned to click through will hand over the vault. Rotation
+being an ordinary event is what makes this weaker than a cryptographic control.
 
----
+**The actual fix remains member-signed directory entries plus key epochs** —
+wraps verifiable as having come from a member, and a group-state digest the
+client pins. That is a protocol design decision, deliberately left for external
+review: it is `review-scope.md` **Q2a**, and remains the question most worth an
+auditor's time in this codebase.
 
 ## 4. `member_id` uniqueness — CLOSED (was: unenforced)
 

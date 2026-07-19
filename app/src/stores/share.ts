@@ -348,6 +348,27 @@ export const useShareStore = defineStore('share', {
      * can read every shared credential, and revoking afterwards means rotating
      * the vault key and re-sealing everything.
      */
+    /**
+     * Accept a vault key that differs from the one this device pinned.
+     *
+     * Explicit action only. If the change was a relay substituting its own key
+     * rather than a legitimate rotation, this is the step that gives it the
+     * plaintext — so the dialog states that before offering the button.
+     */
+    async acceptRotatedKey(): Promise<void> {
+      if (!this.active) return;
+      this.busy = true;
+      try {
+        await share.acceptRotatedVaultKey(this.active.groupId);
+        toast('New vault key accepted');
+        await this.reloadActive();
+      } catch (e) {
+        toast(e instanceof Error ? e.message : 'Could not accept the new key');
+      } finally {
+        this.busy = false;
+      }
+    },
+
     async approveMember(memberId: string, publicKey: string): Promise<void> {
       if (!this.active) return;
       this.busy = true;

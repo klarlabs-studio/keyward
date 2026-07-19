@@ -231,6 +231,33 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           </p>
 
           <!--
+            The shared vault key changed. Entries are deliberately not shown and
+            nothing is re-sealed until the user decides: re-sealing under a key
+            we have not accepted is exactly what hands a substituting relay the
+            plaintext.
+          -->
+          <div v-if="s.active.vaultKeyChanged" class="section keychanged">
+            <div class="lbl">This vault's key changed</div>
+            <p class="kc-body">
+              The shared key protecting these items is not the one this device saw last time.
+              <b>Usually that means somebody removed a member</b> — removing someone replaces
+              the key so they can't read anything new.
+            </p>
+            <p class="kc-body">
+              But a compromised server would look identical from here. Until you accept it,
+              nothing is read and nothing is re-encrypted.
+            </p>
+            <p class="kc-check">
+              Ask your family, out of band — a call or in person, not through this app —
+              whether someone was just removed. If nobody was, <b>do not accept</b>: tell the
+              others and stop using this vault.
+            </p>
+            <button class="approve danger" :disabled="s.busy" @click="s.acceptRotatedKey()">
+              Someone was removed — accept the new key
+            </button>
+          </div>
+
+          <!--
             Pending approvals. Nothing has been shared with these people yet.
 
             This exists because granting used to happen silently on every load,
@@ -798,6 +825,26 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
 .danger-note {
   margin: 0.6rem 0 0;
   font-size: 0.82rem;
+  color: var(--danger, #d64545);
+}
+
+/* Vault-key change — the most consequential decision in this dialog, so it is
+   styled as a stop rather than a notice. */
+.keychanged {
+  border: 1px solid var(--danger, #d64545);
+  border-radius: 8px;
+  padding: 0.85rem;
+  background: color-mix(in srgb, var(--danger, #d64545) 8%, transparent);
+}
+.kc-body {
+  margin: 0.4rem 0;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.kc-check {
+  margin: 0.6rem 0 0.75rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
   color: var(--danger, #d64545);
 }
 </style>
