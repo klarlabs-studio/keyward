@@ -3,6 +3,100 @@
 All notable changes to Proctor are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [1.43.0] — 2026-07-19
+
+**Security release. Closes F2 — the attack the 1.42.0 mitigations could only
+make visible.** Wrapped-key sets are now authenticated and versioned, so a
+compromised relay can neither forge one nor replay an old one.
+
+The gap 1.42.0 left: producing a wrap requires only the recipient's **public**
+key. Anyone who could read a group directory — including the relay — could mint
+their own vault key, wrap it correctly to every genuine member, and overwrite
+the blob. Every member decrypted successfully. The safety number did not move,
+because it digested only member ids and public keys. Vault-key pinning made this
+*visible*; it did not make it *impossible*.
+
+### Fixed — wrapped-key forgery (critical)
+
+- **Wrapped-key sets are signed.** Each member holds an Ed25519 key alongside
+  their X25519 one and signs the set on every write (share, grant, revoke). A
+  reader verifies against a signing key it has **pinned locally** — never one
+  taken from the same relay that served the blob, which would prove nothing.
+- The signed payload sorts wraps by member id and length-prefixes every variable
+  field, so fields cannot be shuffled between wraps with the signature intact.
+- `Unsigned` and `BadSignature` are distinct: the first is a legacy blob, the
+  second is active tampering, and callers must treat them differently.
+
+### Fixed — rollback (high)
+
+- **A signature says who wrote a set, not which set is current.** A relay could
+  serve an older, genuinely signed set to reinstate a revoked member's wrap or
+  undo a key rotation, and every signature check would pass.
+- Each set now carries a **monotonic epoch inside the signed payload**. The
+  client pins the highest verified epoch per group and refuses anything lower.
+- Revocation rotates *from* the current set. Building a fresh one would restart
+  at epoch 1 and let the relay replay the higher-ranked pre-revocation set —
+  handing the removed member their access straight back.
+- A no-op revoke does not advance the epoch, or a relay could pump it by
+  replaying harmless removals until a stale set outranked a genuine one.
+
+### Fixed — fork (medium)
+
+- Equal epochs were accepted as duplicates. A relay could serve different
+  members different sets at the same epoch, splitting a family onto two vault
+  keys while every signature and epoch check passed. The client now pins the
+  accepted set's digest alongside its epoch and refuses a same-epoch mismatch.
+
+### Fixed — plain-HTTP sync server (high)
+
+- `normalizeUrl` accepted any scheme. Every sync request carries the device
+  bearer token, so an `http://` server put it on the wire in clear text — which
+  hands over the sync account and collapses 2SKD to a single offline guess of
+  the master password. Now refused unless the host is loopback.
+
+### Changed — the safety number covers signing keys
+
+- It previously digested only ids and X25519 keys, leaving first contact open: a
+  relay could hand a newcomer a fabricated **signing** key and that newcomer
+  would verify forged sets as genuine, with a safety number matching everyone
+  else's exactly.
+- **The number therefore changed for every existing group** (context label v1 →
+  v2). The dialog says so. A family comparing against one written down earlier
+  would otherwise read a version bump as an attack.
+
+### Changed — approving a member requires confirming the out-of-band check
+
+- Instructions alone were not enough; the Approve buttons worked whether or not
+  anyone read them. The confirmation resets whenever the directory changes,
+  since it attests to a check against the members shown *right now*.
+
+### Added — wiped-trust-state detection
+
+- Every pin and floor lives in `localStorage`. Clearing site data wiped them
+  while account and membership survived on the relay, so the device silently
+  re-trusted on first use with every warning disarmed. Now surfaced.
+
+### Fixed — hardcoded database credentials
+
+- `deploy/docker-compose.pg.yml` carried `proctor:proctor` in two places. Now
+  `${PROCTOR_DB_PASSWORD:?...}` with no default: compose fails with a pointer to
+  `deploy/.env.example` rather than starting on a password that is public
+  knowledge in an open-source repository.
+
+### Known limitations
+
+`sharing.rs` remains **unreviewed by an external cryptographer**. The F2 work
+was designed and tested in-house, and those tests pass because they encode the
+same threat model that produced the design. Review is now formally gated on the
+managed cloud taking paying families — see
+[`docs/security/review-scope.md`](docs/security/review-scope.md). The prototype
+banner stays up until then.
+
+Fork detection detects but does not resolve. Trust state is still in
+`localStorage` rather than the synced encrypted vault. First contact is still
+trust-on-first-use. All recorded in
+[`docs/security/known-limitations.md`](docs/security/known-limitations.md).
+
 ## [1.42.0] — 2026-07-18
 
 **Security release. Family sharing did not hold against its own threat model;

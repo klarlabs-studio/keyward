@@ -12,6 +12,35 @@ closes that gate.
 If the answer is "this composition is not sound", that is the most valuable
 outcome available and we would rather have it now than after users trust it.
 
+## When this engagement happens — decided 2026-07-19
+
+**Before the managed cloud takes paying families. Not before shipping the
+prototype.**
+
+This is the order 1Password and Bitwarden both followed: ship, grow, then
+commission and publish external review. Neither audited before v1. Both audited
+before asking families to trust the product at scale, and both publish the
+results — for an open-core product that publication is an asset, not a cost,
+because the code being readable is what makes an audit citable rather than
+promotional.
+
+What that means concretely:
+
+- The **prototype banner stays up** until this engagement completes. It is the
+  thing that makes shipping-before-review honest rather than negligent.
+- Self-host and the free tier may ship against an unreviewed `sharing.rs`, with
+  `known-limitations.md` linked from the sharing UI.
+- **Taking money from a family is the gate.** At that point the claim stops
+  being "here is a prototype" and starts being "we protect your credentials",
+  and only an external reviewer can support the second one.
+
+The reasoning that makes this necessary rather than cautious: the F2 work
+(signed wrapped-key sets, epochs, fork detection) was designed and tested
+in-house. Those tests pass because they encode the same threat model that
+produced the design. The value of an external cryptographer is precisely the
+failure mode that model does not contain — and no amount of internal testing
+reaches it.
+
 ---
 
 ## 1. Questions, in priority order
