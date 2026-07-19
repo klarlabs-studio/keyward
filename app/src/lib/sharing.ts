@@ -15,6 +15,8 @@ import {
   member_signing_new,
   member_signing_public,
   shared_vault_signer,
+  shared_vault_epoch,
+  rotate_vault_key,
   unwrap_vault_key_unsigned,
   sign_shared_vault,
   group_safety_number,
@@ -359,6 +361,51 @@ function rememberSigned(groupId: string): void {
   localStorage.setItem(SIGNED_GROUPS, JSON.stringify([...signedGroups(), groupId]));
 }
 
+// ----- Rollback protection: the epoch floor ---------------------------------
+//
+// A signature proves WHO wrote a wrapped-key set, not WHICH set is current. A
+// relay that cannot forge one can still serve an OLDER set it captured earlier
+// — genuinely signed by a real member — to reinstate a revoked member's wrap or
+// undo a key rotation. Every signature check passes, because nothing is forged.
+//
+// Each set carries a monotonic epoch inside the signed payload, so it cannot be
+// edited without breaking the signature. This device records the highest epoch
+// it has VERIFIED for a group and refuses anything lower.
+//
+// Residual: two members writing concurrently can both produce the same epoch,
+// and this cannot tell a legitimate race from a fork. The relay's If-Match
+// versioning makes one of those writes lose, so it should not arise in practice
+// — but "should not" is not "cannot", and equal-epoch sets are accepted.
+
+const EPOCH_FLOOR = 'proctor.passbook.epochfloor.v1';
+
+function epochFloors(): Record<string, number> {
+  const raw = localStorage.getItem(EPOCH_FLOOR);
+  if (raw === null) return {};
+  try {
+    const v = JSON.parse(raw) as Record<string, number>;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The highest verified epoch this device has accepted for a group. */
+export function epochFloor(groupId: string): number {
+  return epochFloors()[groupId] ?? 0;
+}
+
+/**
+ * Raise the floor to `epoch`. Never lowers it — a floor that could be walked
+ * back is not a floor, and the relay controls what we are shown.
+ */
+function raiseEpochFloor(groupId: string, epoch: number): void {
+  if (epoch <= epochFloor(groupId)) return;
+  const floors = epochFloors();
+  floors[groupId] = epoch;
+  localStorage.setItem(EPOCH_FLOOR, JSON.stringify(floors));
+}
+
 // ----- Vault-key pinning ----------------------------------------------------
 //
 // THE GAP THIS CLOSES. Member-key pinning stops us HANDING OVER the vault key,
@@ -649,7 +696,11 @@ export type KeysTrust =
    *  whether it is a real member or the relay. */
   | 'unknown-signer'
   /** A signature is present and does NOT verify. This is tampering. */
-  | 'bad-signature';
+  | 'bad-signature'
+  /** Verified, but OLDER than a set this device already accepted — the relay
+   *  served a stale set. Nothing is forged, which is exactly why the epoch,
+   *  not the signature, is what catches it. */
+  | 'rolled-back';
 
 /**
  * Create a new family vault owned by this device. Generates a fresh vault key,
@@ -678,6 +729,7 @@ export async function createFamilyVault(memberName: string, vaultName: string): 
     authorOf(member),
   );
   rememberSigned(groupId);
+  raiseEpochFloor(groupId, shared_vault_epoch(shared));
   const content = seal_group_content(JSON.stringify([]), vaultKey);
   const kv = await putKeys(groupId, shared, null);
   await putContent(groupId, content, null);
@@ -966,6 +1018,14 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
       }
       return base; // joined but not yet granted access
     }
+    // Verified — so the epoch inside the signed payload is now trustworthy.
+    // Check it BEFORE using the key: a replayed set decrypts perfectly, since
+    // nothing about it was forged.
+    const epoch = shared_vault_epoch(keys.json);
+    if (epoch < epochFloor(groupId)) {
+      return { ...base, keysTrust: 'rolled-back' };
+    }
+    raiseEpochFloor(groupId, epoch);
     base.keysTrust = 'verified';
   }
 
@@ -1067,6 +1127,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
       grantedNames.push(m.name || m.member_id);
     }
     const newVersion = await putKeys(groupId, updated, keys.version);
+    raiseEpochFloor(groupId, shared_vault_epoch(updated));
     keys = { json: updated, version: newVersion };
     base.keysVersion = newVersion;
   }
@@ -1171,6 +1232,7 @@ export async function approveMember(
     signed?.signer ?? selfSigner(member),
   );
   await putKeys(groupId, updated, keys.version);
+  raiseEpochFloor(groupId, shared_vault_epoch(updated));
   rememberSigned(groupId);
   // Pin only AFTER the grant lands, so a failed upload does not leave us
   // trusting a key we never actually shared to.
@@ -1198,6 +1260,17 @@ export async function acceptRotatedVaultKey(groupId: string): Promise<void> {
       'The shared keys for this vault could not be verified as coming from a member you trust.',
     );
   }
+  if (signed !== null) {
+    const epoch = shared_vault_epoch(keys.json);
+    if (epoch < epochFloor(groupId)) {
+      throw new Error(
+        'These shared keys are older than ones this device already accepted. ' +
+          'That is a stale copy being served back to you, not a normal change. ' +
+          'Nothing was read. Check with your family before continuing.',
+      );
+    }
+    raiseEpochFloor(groupId, epoch);
+  }
   const vaultKey =
     signed === null
       ? unwrap_vault_key_unsigned(keys.json, member.secret, member.id)
@@ -1220,6 +1293,17 @@ export async function saveFamilyEntries(
     throw new Error(
       'The shared keys for this vault could not be verified as coming from a member you trust.',
     );
+  }
+  if (signed !== null) {
+    const epoch = shared_vault_epoch(keys.json);
+    if (epoch < epochFloor(groupId)) {
+      throw new Error(
+        'These shared keys are older than ones this device already accepted. ' +
+          'That is a stale copy being served back to you, not a normal change. ' +
+          'Nothing was read. Check with your family before continuing.',
+      );
+    }
+    raiseEpochFloor(groupId, epoch);
   }
   const vaultKey =
     signed === null
@@ -1275,11 +1359,16 @@ export async function revokeMember(
   if (group === null) throw new Error('You are not a member of this family vault.');
   const remaining = group.members.filter((m) => m.member_id !== memberId);
   const newKey = generate_vault_key();
-  const shared = share_vault_key(newKey, recipients(remaining), authorOf(member));
+  const keys = await getKeys(groupId);
+  if (keys === null) throw new Error('This vault has no keys to rotate.');
+  // Rotate FROM the current set so the new one carries a higher epoch. Building
+  // a fresh set instead would restart at epoch 1, and the relay could replay the
+  // pre-revocation set — which outranks it — to hand the removed member their
+  // access straight back.
+  const shared = rotate_vault_key(keys.json, newKey, recipients(remaining), authorOf(member));
   const content = seal_group_content(JSON.stringify(currentEntries), newKey);
 
-  const keys = await getKeys(groupId);
-  await putKeys(groupId, shared, keys?.version ?? null);
+  await putKeys(groupId, shared, keys.version);
   const existingContent = await getContent(groupId);
   await putContent(groupId, content, existingContent?.version ?? null);
 
@@ -1289,6 +1378,7 @@ export async function revokeMember(
   // than not having it.
   await pinVaultKey(groupId, newKey);
   rememberSigned(groupId);
+  raiseEpochFloor(groupId, shared_vault_epoch(shared));
 }
 
 /**
@@ -1320,6 +1410,7 @@ export async function adoptUnsignedKeys(groupId: string): Promise<void> {
   const vaultKey = unwrap_vault_key_unsigned(keys.json, member.secret, member.id);
   const signed = sign_shared_vault(keys.json, authorOf(member));
   await putKeys(groupId, signed, keys.version);
+  raiseEpochFloor(groupId, shared_vault_epoch(signed));
   await pinVaultKey(groupId, vaultKey);
   pinKey(groupId, member.id, member.public_key, member.signing_key ?? '');
   rememberSigned(groupId);

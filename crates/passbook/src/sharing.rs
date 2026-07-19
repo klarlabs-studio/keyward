@@ -377,6 +377,21 @@ struct WrappedKey {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SharedVault {
     wrapped: Vec<WrappedKey>,
+    /// Monotonic version of this wrapped-key set.
+    ///
+    /// THIS IS WHAT CLOSES ROLLBACK. A signature proves WHO wrote a set, not
+    /// WHICH set is current — so a relay that cannot forge one can still serve
+    /// an older, perfectly valid set it captured earlier, reinstating a revoked
+    /// member's wrap or reverting a key rotation. Every reader accepts it,
+    /// because it really was signed by a real member.
+    ///
+    /// The epoch is inside the signed payload, so it cannot be edited without
+    /// invalidating the signature. A client pins the highest epoch it has seen
+    /// for a group and refuses anything lower.
+    ///
+    /// `#[serde(default)]` (0) for sets written before epochs existed.
+    #[serde(default)]
+    epoch: u64,
     /// The member id that produced this wrapped-key set, if it is signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signer_id: Option<String>,
@@ -402,12 +417,13 @@ impl SharedVault {
     /// message — without that, an attacker could shuffle fields between wraps
     /// and keep a signature valid. The context label is included so this
     /// signature cannot be replayed as a signature over anything else.
-    fn signing_payload(wrapped: &[WrappedKey]) -> Vec<u8> {
+    fn signing_payload(wrapped: &[WrappedKey], epoch: u64) -> Vec<u8> {
         let mut sorted: Vec<&WrappedKey> = wrapped.iter().collect();
         sorted.sort_by(|a, b| a.member_id.cmp(&b.member_id));
 
         let mut msg = Vec::with_capacity(WRAP_SIGNATURE_CONTEXT.len() + sorted.len() * 128);
         msg.extend_from_slice(WRAP_SIGNATURE_CONTEXT);
+        msg.extend_from_slice(&epoch.to_be_bytes());
         msg.extend_from_slice(&(sorted.len() as u32).to_be_bytes());
         for w in sorted {
             msg.extend_from_slice(&(w.member_id.len() as u32).to_be_bytes());
@@ -426,7 +442,9 @@ impl SharedVault {
     /// tell WHO produced it: wraps require nothing but public keys, so an
     /// unsigned set proves only that somebody could read a directory.
     pub fn sign_as(&mut self, member: &Member) {
-        let sig = member.signing.sign(&Self::signing_payload(&self.wrapped));
+        let sig = member
+            .signing
+            .sign(&Self::signing_payload(&self.wrapped, self.epoch));
         self.signer_id = Some(member.id.clone());
         self.signature = Some(sig.to_bytes().to_vec());
     }
@@ -462,16 +480,43 @@ impl SharedVault {
         let vk = VerifyingKey::from_bytes(&signer.signing_key)
             .map_err(|_| SharingError::BadSignature)?;
         let sig = Signature::from_slice(sig_bytes).map_err(|_| SharingError::BadSignature)?;
-        vk.verify(&Self::signing_payload(&self.wrapped), &sig)
+        vk.verify(&Self::signing_payload(&self.wrapped, self.epoch), &sig)
             .map_err(|_| SharingError::BadSignature)
     }
 
     /// Wrap `vault_key` to each of `members`, producing a shareable [`SharedVault`].
     pub fn share_to(vault_key: &[u8; VAULT_KEY_LEN], members: &[MemberPublic]) -> Result<Self> {
-        let mut sv = SharedVault::default();
+        // Epoch 1, not 0: 0 is what a pre-epoch set deserializes to, and a fresh
+        // set must outrank one so a captured legacy set cannot be replayed over it.
+        let mut sv = SharedVault {
+            epoch: 1,
+            ..Default::default()
+        };
         for m in members {
             sv.wrap_to(vault_key, m)?;
         }
+        Ok(sv)
+    }
+
+    /// This set's monotonic epoch. A reader must refuse any set whose epoch is
+    /// lower than the highest it has already accepted for the group.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Rotate to a NEW vault key at the next epoch after `previous`.
+    ///
+    /// Used for true revocation: dropping a wrap is not enough, since a removed
+    /// member may already hold the key. Carrying `previous.epoch + 1` is what
+    /// stops the relay answering the rotation by replaying the pre-rotation set
+    /// and handing the removed member their access back.
+    pub fn rotate_from(
+        previous: &SharedVault,
+        vault_key: &[u8; VAULT_KEY_LEN],
+        members: &[MemberPublic],
+    ) -> Result<Self> {
+        let mut sv = SharedVault::share_to(vault_key, members)?;
+        sv.epoch = previous.epoch.saturating_add(1);
         Ok(sv)
     }
 
@@ -569,7 +614,9 @@ impl SharedVault {
         new_member: &MemberPublic,
     ) -> Result<()> {
         let vault_key = Zeroizing::new(self.unwrap_for(existing_member)?);
-        self.wrap_to(&vault_key, new_member)
+        self.wrap_to(&vault_key, new_member)?;
+        self.epoch = self.epoch.saturating_add(1);
+        Ok(())
     }
 
     /// Remove a member's wrapped copy of the vault key.
@@ -581,7 +628,11 @@ impl SharedVault {
     pub fn revoke(&mut self, member_id: &str) -> bool {
         let before = self.wrapped.len();
         self.wrapped.retain(|w| w.member_id != member_id);
-        self.wrapped.len() != before
+        let removed = self.wrapped.len() != before;
+        if removed {
+            self.epoch = self.epoch.saturating_add(1);
+        }
+        removed
     }
 }
 
@@ -973,6 +1024,74 @@ mod tests {
             evil.verify_signed_by(&alice.public()),
             Err(SharingError::Unsigned)
         ));
+    }
+
+    #[test]
+    fn a_replayed_older_set_is_still_perfectly_signed() {
+        // ROLLBACK, the attack signatures alone do NOT stop. Alice revokes Mallory
+        // and rotates. The relay kept the pre-revocation set -- which Alice
+        // genuinely signed -- and serves it back. Every signature check passes,
+        // because nothing was forged. Only the epoch distinguishes them.
+        let alice = Member::generate("alice", "Alice");
+        let mallory = Member::generate("mallory", "Mallory");
+
+        let key1 = new_vault_key();
+        let mut before = SharedVault::share_to(&key1, &[alice.public(), mallory.public()]).unwrap();
+        before.sign_as(&alice);
+
+        let key2 = new_vault_key();
+        let mut after = SharedVault::rotate_from(&before, &key2, &[alice.public()]).unwrap();
+        after.sign_as(&alice);
+
+        // The stale set verifies. That is the whole problem.
+        assert!(before.verify_signed_by(&alice.public()).is_ok());
+        assert!(after.verify_signed_by(&alice.public()).is_ok());
+        // And replaying it hands Mallory her access back.
+        assert!(before.unwrap_for(&mallory).is_ok());
+        assert!(after.unwrap_for(&mallory).is_err());
+
+        // The epoch is the only thing that tells them apart, and it is inside
+        // the signature, so the relay cannot raise it.
+        assert!(after.epoch() > before.epoch());
+    }
+
+    #[test]
+    fn an_epoch_cannot_be_edited_without_breaking_the_signature() {
+        let alice = Member::generate("alice", "Alice");
+        let key = new_vault_key();
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        sv.sign_as(&alice);
+        assert!(sv.verify_signed_by(&alice.public()).is_ok());
+
+        // A relay trying to make a stale set outrank a current one.
+        sv.epoch = 99;
+        assert!(matches!(
+            sv.verify_signed_by(&alice.public()),
+            Err(SharingError::BadSignature)
+        ));
+    }
+
+    #[test]
+    fn every_mutation_advances_the_epoch() {
+        let alice = Member::generate("alice", "Alice");
+        let bob = Member::generate("bob", "Bob");
+        let key = new_vault_key();
+
+        let mut sv = SharedVault::share_to(&key, &[alice.public()]).unwrap();
+        // Not 0: a pre-epoch set deserializes to 0, and a fresh set must outrank
+        // one so a captured legacy set cannot be replayed over it.
+        assert_eq!(sv.epoch(), 1);
+
+        sv.grant_access(&alice, &bob.public()).unwrap();
+        assert_eq!(sv.epoch(), 2);
+
+        assert!(sv.revoke("bob"));
+        assert_eq!(sv.epoch(), 3);
+
+        // A no-op revoke must NOT advance it, or a relay could pump the epoch by
+        // replaying harmless removals to outrank a genuine set.
+        assert!(!sv.revoke("nobody"));
+        assert_eq!(sv.epoch(), 3);
     }
 
     #[test]

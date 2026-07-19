@@ -175,9 +175,24 @@ everyone, because it cannot produce a signature any member's pin accepts.
 
 **Three things are still open, and none of them are small:**
 
-1. **Rollback.** A relay can serve an OLDER, genuinely signed set. Signatures
-   say who wrote a set, not which is current. This needs key epochs and a
-   monotonic floor the client pins — the second half of Q2a, still unbuilt.
+1. **Rollback — closed.** Each wrapped-key set carries a monotonic epoch
+   INSIDE the signed payload, so it cannot be edited without breaking the
+   signature. Every mutation advances it (a no-op revoke does not, or a relay
+   could pump the epoch by replaying harmless removals). Revocation rotates
+   *from* the current set rather than building a fresh one, which would restart
+   at epoch 1 and let the relay replay the higher-ranked pre-revocation set. The
+   client pins the highest VERIFIED epoch per group and refuses anything lower.
+
+   Residual: two members writing concurrently can produce the same epoch, and
+   the client cannot distinguish a legitimate race from a fork. The relay's
+   `If-Match` versioning makes one of those writes lose, so it should not arise
+   — but "should not" is not "cannot", and equal-epoch sets are accepted.
+
+   Second residual: the floor lives in `localStorage`. Clearing site data resets
+   it to 0, and that device will then accept any epoch. This is the same
+   exposure as the key pins beside it — a device whose local state an attacker
+   can rewrite has already lost — but it is worth naming rather than implying
+   the floor is durable.
 
 2. **First contact — partly closed.** The signing key is pinned
    trust-on-first-use, same as the X25519 key, so a relay hostile from the very

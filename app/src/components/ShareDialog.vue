@@ -260,6 +260,31 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           </div>
 
           <!--
+            Rollback. Distinct from a bad signature: nothing here is forged, the
+            set really was written by a member. It is simply OLD, served back to
+            undo a revocation or a key rotation. Only the epoch catches it, which
+            is why it gets its own state rather than folding into the signature
+            warning.
+          -->
+          <div v-if="s.active.keysTrust === 'rolled-back'" class="section keychanged">
+            <div class="lbl">These shared keys are out of date</div>
+            <p class="kc-body">
+              The server sent an <b>older version</b> of this vault's keys than one this
+              device already accepted. The keys are genuine — a family member really did
+              write them — but they've been rewound.
+            </p>
+            <p class="kc-body">
+              That can undo a removal: someone you took out of this vault could have their
+              access back. It is not something that happens by accident.
+            </p>
+            <p class="kc-check">
+              Nothing has been read. Ask your family out of band whether anyone changed
+              members recently, and don't share anything through this vault until you know
+              why it went backwards.
+            </p>
+          </div>
+
+          <!--
             Pre-signing vault: readable, but nobody has proven authorship. Offered
             as an upgrade rather than a block, because blocking every vault that
             predates signing would strand real families — and the vault-key pin

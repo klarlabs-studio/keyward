@@ -451,6 +451,47 @@ pub fn sign_shared_vault(shared_json: &str, author_json: &str) -> Result<String,
     serde_json::to_string(&shared).map_err(js_err)
 }
 
+/// Rotate to a NEW vault key at the next epoch after `previous_json`, wrapped to
+/// `members_json` and signed as `author_json`.
+///
+/// This is the correct call for revocation. Building a fresh set with
+/// `share_vault_key` instead would restart the epoch at 1, and the relay could
+/// then replay the pre-revocation set — which outranks it — to hand the removed
+/// member their access straight back.
+#[wasm_bindgen]
+pub fn rotate_vault_key(
+    previous_json: &str,
+    vault_key_hex: &str,
+    members_json: &str,
+    author_json: &str,
+) -> Result<String, JsValue> {
+    let previous: SharedVault = serde_json::from_str(previous_json).map_err(js_err)?;
+    let key = from_hex_32(vault_key_hex)?;
+    let members: Vec<MemberPublicJson> = serde_json::from_str(members_json).map_err(js_err)?;
+    let recipients: Vec<MemberPublic> = members
+        .into_iter()
+        .map(MemberPublicJson::into_domain)
+        .collect::<Result<_, _>>()?;
+    let author: MemberSecretJson = serde_json::from_str(author_json).map_err(js_err)?;
+    let mut rotated = SharedVault::rotate_from(&previous, &key, &recipients).map_err(js_err)?;
+    rotated.sign_as(&author.into_domain()?);
+    serde_json::to_string(&rotated).map_err(js_err)
+}
+
+/// A `SharedVault`'s monotonic epoch.
+///
+/// Attacker-controlled until the signature verifies — the epoch is inside the
+/// signed payload, so a verified set has a trustworthy epoch and an unverified
+/// one does not. Callers must pin the highest VERIFIED epoch per group and
+/// refuse anything lower.
+#[wasm_bindgen]
+pub fn shared_vault_epoch(shared_json: &str) -> Result<f64, JsValue> {
+    let shared: SharedVault = serde_json::from_str(shared_json).map_err(js_err)?;
+    // f64 crosses to JS exactly up to 2^53; epochs increment once per membership
+    // change, so that ceiling is unreachable in practice.
+    Ok(shared.epoch() as f64)
+}
+
 /// Who signed a `SharedVault`, or `null` if it carries no signature.
 ///
 /// Lets a caller look up the right PINNED signer before calling
