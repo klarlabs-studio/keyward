@@ -157,4 +157,19 @@ operations, unattended out-of-band alerts, sync/self-host surfaces. See the
 
 ## License
 
-Open-core (planned): AGPL-3.0 server + GPL/MPL clients. See the PRD's decisions log.
+**AGPL-3.0-or-later**, for the whole workspace — see [LICENSE](LICENSE). This is
+what `Cargo.toml` has declared all along; the file backing it was missing until
+now, which meant the "open-source" claim above had nothing behind it (absent a
+license, default copyright reserves all rights).
+
+Open-core in practice: the tool is public and AGPL. The **managed cloud
+deployment** — cluster topology, ingress, RollOps config, ops runbooks — is a
+separate private repository. The server *code* is not private, and self-hosting
+needs no permission: `proctor-sync-server` runs file-backed with no Postgres and
+no Stripe configured, which is the free self-host path.
+
+AGPL rather than GPL on the clients too, one consequence worth stating plainly:
+the crates (`proctor-crypto`, `proctor-passbook`, …) cannot be embedded in
+proprietary software. For a credential manager that is intended. If any of them
+should be reusable by others, that crate wants a permissive licence instead, and
+that is a per-crate decision this file does not foreclose.
