@@ -26,6 +26,53 @@ const STORAGE_KEY = 'keyward.passbook.vault.v1';
 // The device Secret Key (2SKD factor). It is not secret *from this device* — it
 // lives here so the vault can be unlocked with just the typed master — but it
 // never leaves the device, so a stolen sealed vault is uncrackable without it.
+//
+// WHY THIS IS STILL A PLAINTEXT STRING IN localStorage, AND NOT A NON-EXTRACTABLE
+// CryptoKey IN IndexedDB.
+//
+// The standard browser answer to "long-lived secret at rest on the origin" is a
+// `CryptoKey` created with `extractable: false` and persisted in IndexedDB: the
+// browser will then perform operations with it but no script can ever serialise
+// it back out, so an XSS or a malicious extension can USE the key while the page
+// is live but cannot EXFILTRATE it for later offline use.
+//
+// That mechanism cannot hold this value, and the reason is structural rather
+// than a matter of effort. Look at the boundary it has to cross:
+//
+//     seal_vault(entries_json: string, master: string, secret_key?: string|null)
+//     open_vault(sealed_json:  string, master: string, secret_key?: string|null)
+//
+// The Secret Key is a `string` parameter to WASM. Inside `crates/crypto` it is
+// mixed into Argon2id as part of the 2SKD derivation. To hand it to that
+// function we must materialise it as a JS string — and "can be materialised as a
+// JS string" is the exact negation of "non-extractable". A `CryptoKey` has no
+// operation that yields its bytes; that is the whole point of it.
+//
+// Nor can the derivation move to WebCrypto so the key could stay a handle:
+// WebCrypto has no Argon2 (nor any memory-hard KDF), so there is no algorithm a
+// `CryptoKey` could be typed as that would consume this value the way 2SKD needs.
+// Closing this properly means reworking the WASM boundary itself — a Rust-side
+// change, not an app-side one.
+//
+// DO NOT "FIX" THIS BY ENCRYPTING THE STRING UNDER A NON-EXTRACTABLE AES-GCM KEY
+// HELD IN IndexedDB. It is the obvious next idea and it buys nothing:
+//
+//   - The decryption oracle sits on the same origin as the attacker. Any script
+//     that can call `localStorage.getItem` today can `await` the unwrap
+//     tomorrow and receive the identical string. It costs an attacker one line.
+//   - It does not help at rest either. `extractable: false` is enforced by the
+//     browser's JS API layer, not by hardware or by the OS keychain; the key
+//     material still lives in the profile directory, so anyone with filesystem
+//     access to the profile is unaffected by the flag.
+//
+// The result would be a wrapper that still hands out the bytes while LOOKING
+// like protection — strictly worse than this comment, because it would retire
+// section 10 of docs/security/known-limitations.md without changing the threat.
+// The honest status quo is documented; a decorative mitigation would not be.
+//
+// See scripts/keymaterial.test.ts: it asserts the WASM signatures above still
+// take strings, so if that boundary is ever reworked this analysis fails loudly
+// instead of silently going stale.
 const SECRET_KEY_STORAGE = 'keyward.passbook.secretkey.v1';
 
 let ready: Promise<void> | null = null;

@@ -34,6 +34,38 @@ import * as trust from './trust';
 import { syncConfig } from './sync';
 import type { Entry } from './passbook-types';
 
+// The member X25519 secret. See passbook.ts for the full argument against
+// moving this to a non-extractable `CryptoKey` in IndexedDB; the short form for
+// THIS value is that it crosses the same string-typed WASM boundary:
+//
+//     unwrap_vault_key(shared_json, member_secret_hex: string, ...)
+//     unwrap_vault_key_unsigned(shared_json, member_secret_hex: string, ...)
+//     open_recovery(sealed_json, member_secret_hex: string)
+//
+// This one is a nearer miss than the device Secret Key, and it is worth being
+// precise about why it is still a miss. WebCrypto *does* now support X25519,
+// and a non-extractable X25519 private key that can `deriveBits` is a real
+// thing in current browsers — so the raw Diffie-Hellman could in principle
+// happen outside WASM with the secret never materialising in JS.
+//
+// It stops there. The DH output is not what the caller wants: it is consumed
+// inside Rust by a KDF, an AEAD wrapping format, and a signature envelope that
+// together define the `SharedVault` blob. Only the DH step is expressible in
+// WebCrypto; the rest is not. Taking it would mean splitting one construction
+// across two languages and two crypto stacks — in the module that describes
+// itself as "prototype crypto of the shape" pending formal review. A reviewer
+// would then have to verify a composition that is half Rust and half TypeScript,
+// which is a worse artefact to review than the one that exists now, for a
+// mitigation that still ends at the same place: the wrapped vault key comes back
+// into JS as a hex string regardless.
+//
+// So: not moved, deliberately. The durable fix is the one ADR-0004 §2 already
+// specifies and this file does not implement — keep the member secret as an
+// encrypted field inside the vault, so it is covered by the vault AEAD at rest
+// and only exists in memory after an unlock. That is a vault-format and
+// identity-lifecycle change (`ensureMember` mints a fresh keypair when it reads
+// nothing, so an unhydrated read would silently orphan every vault already
+// shared to this member), and it is deliberately not bolted on here.
 const MEMBER_STORAGE = 'keyward.passbook.member.v1';
 const GROUPS_STORAGE = 'keyward.passbook.groups.v1';
 const VERSION_HEADER = 'X-Vault-Version';
