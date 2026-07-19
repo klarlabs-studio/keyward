@@ -1,6 +1,6 @@
 //! Password + passphrase generation, and the hash primitive for breach checks.
 //!
-//! Randomness comes from the shared kernel's CSPRNG ([`proctor_crypto::fill_random`]);
+//! Randomness comes from the shared kernel's CSPRNG ([`keyward_crypto::fill_random`]);
 //! selection is unbiased (rejection sampling), and a generated password always
 //! contains at least one character from each selected class. Passphrases draw
 //! from the EFF Long Wordlist (7772 entries after removing hyphenated words),
@@ -11,7 +11,7 @@
 //! strength by character space is not conservative, it is simply wrong: it
 //! cannot tell 5 uniform word draws from a same-length string a human invented.
 
-use proctor_crypto::fill_random;
+use keyward_crypto::fill_random;
 use sha1::{Digest, Sha1};
 use std::sync::LazyLock;
 
@@ -88,7 +88,7 @@ fn shuffle(v: &mut [u8]) {
         // old `256 - (256 % n)` rejection limit evaluated to 0, no draw could
         // ever fall below it, and the loop spun forever. `generate_password`
         // clamps only the lower bound on length, and both the WASM export and
-        // the CLI accept an unbounded length, so `proctor generate 300` hung.
+        // the CLI accept an unbounded length, so `keyward generate 300` hung.
         let n = i + 1;
         let j = loop {
             let mut b = [0u8; 2];
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn shuffle_and_pick_terminate_past_the_256_cliff() {
-        // `proctor generate 300` used to hang forever: the byte-sized rejection
+        // `keyward generate 300` used to hang forever: the byte-sized rejection
         // limit collapsed to 0 for n > 256. The pre-existing test used 200,
         // just under the cliff, so it passed throughout.
         let o = PasswordOptions {

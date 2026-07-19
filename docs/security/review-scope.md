@@ -1,4 +1,4 @@
-# Proctor — Review Scope and Request
+# Keyward — Review Scope and Request
 
 > What we are asking an external cryptography reviewer to do, in priority order,
 > with the exact code in scope and what is explicitly not.
@@ -129,7 +129,7 @@ Three labels/derivations exist:
 | Derivation | Label | Location |
 |---|---|---|
 | Wrapping key | `b"proctor-passbook family-share v1"` (HKDF `info`, salt `None`) | `sharing.rs:39, 403-409` |
-| Safety number | `b"proctor-passbook group-safety-number v1"` (SHA-256 prefix) | `sharing.rs:77, 93-115` |
+| Safety number | `b"keyward-passbook group-safety-number v1"` (SHA-256 prefix) | `sharing.rs:77, 93-115` |
 | 2SKD fold | *no label* — bare `SHA-256(argon2_out ‖ secret_key)` | `sealing.rs:30-38` |
 
 - Is the constant `HKDF_INFO`, binding no key material and no group id,

@@ -1,11 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: proctor-sync-server
-  namespace: proctor
+  name: keyward-sync-server
+  namespace: keyward
   labels:
-    app.kubernetes.io/name: proctor-sync-server
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/name: keyward-sync-server
+    app.kubernetes.io/part-of: keyward
 spec:
   # Stateless: all state lives in PostgreSQL, so the API scales horizontally.
   # Start at 2 for availability; the HPA (hpa.yaml) scales on CPU.
@@ -23,13 +23,13 @@ spec:
   # IMMUTABLE, so this list must keep matching the deployed object exactly.
   selector:
     matchLabels:
-      app.kubernetes.io/name: proctor-sync-server
-      app.kubernetes.io/part-of: proctor
+      app.kubernetes.io/name: keyward-sync-server
+      app.kubernetes.io/part-of: keyward
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: proctor-sync-server
-        app.kubernetes.io/part-of: proctor
+        app.kubernetes.io/name: keyward-sync-server
+        app.kubernetes.io/part-of: keyward
       annotations:
         # Prometheus scrapes the POD directly on 8787 via these annotations —
         # that path does not go through the Ingress.
@@ -58,7 +58,7 @@ spec:
         runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      # The server calls process::exit(1) if it cannot reach PROCTOR_SYNC_PG at
+      # The server calls process::exit(1) if it cannot reach KEYWARD_SYNC_PG at
       # startup. Without this gate the app pods lose the race against a cold
       # Postgres and enter CrashLoopBackOff — whose exponential backoff then keeps
       # the API down for minutes AFTER the database is healthy (observed live:
@@ -75,8 +75,8 @@ spec:
             - sh
             - -c
             - |
-              until pg_isready -q -h proctor-postgres -p 5432 -U proctor; do
-                echo "waiting for proctor-postgres:5432 ..."
+              until pg_isready -q -h keyward-postgres -p 5432 -U keyward; do
+                echo "waiting for keyward-postgres:5432 ..."
                 sleep 2
               done
               echo "postgres is accepting connections"
@@ -94,36 +94,36 @@ spec:
               cpu: 100m
               memory: 64Mi
       containers:
-        - name: proctor-sync-server
+        - name: keyward-sync-server
           # Parameterize this image ref for your registry / release tag.
-          image: ghcr.io/klarlabs-studio/proctor-sync-server:1.42.0
+          image: ghcr.io/klarlabs-studio/keyward-sync-server:1.42.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8787
           env:
-            - name: PROCTOR_SYNC_ADDR
+            - name: KEYWARD_SYNC_ADDR
               value: "0.0.0.0:8787"
-            # The Postgres URL and Stripe secret come from the proctor-sync-secrets
+            # The Postgres URL and Stripe secret come from the keyward-sync-secrets
             # Secret (created out-of-band; see deploy/README.md § Secrets).
-            - name: PROCTOR_SYNC_PG
+            - name: KEYWARD_SYNC_PG
               valueFrom:
                 secretKeyRef:
-                  name: proctor-sync-secrets
+                  name: keyward-sync-secrets
                   key: postgres-url
-            - name: PROCTOR_SYNC_PG_POOL
+            - name: KEYWARD_SYNC_PG_POOL
               value: "8"
-            - name: PROCTOR_STRIPE_WEBHOOK_SECRET
+            - name: KEYWARD_STRIPE_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: proctor-sync-secrets
+                  name: keyward-sync-secrets
                   key: stripe-webhook-secret
                   optional: true
             # Device-token lifetime in seconds (0 / unset → never expire). 30 days.
-            - name: PROCTOR_SYNC_TOKEN_TTL
+            - name: KEYWARD_SYNC_TOKEN_TTL
               value: "2592000"
             # Per-client-IP rate limit for register + invite mint (0 disables).
-            - name: PROCTOR_SYNC_RATELIMIT_PER_MIN
+            - name: KEYWARD_SYNC_RATELIMIT_PER_MIN
               value: "30"
             # Honour X-Forwarded-For when deriving the client IP.
             #
@@ -138,7 +138,7 @@ spec:
             # proxy. On a directly-exposed server the header is caller-supplied,
             # and trusting it would let a client mint a fresh identity per
             # request and bypass rate limiting entirely.
-            - name: PROCTOR_SYNC_TRUST_PROXY
+            - name: KEYWARD_SYNC_TRUST_PROXY
               value: "1"
           securityContext:
             allowPrivilegeEscalation: false

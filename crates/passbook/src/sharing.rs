@@ -29,7 +29,7 @@ use chacha20poly1305::{
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use proctor_crypto::{aead_open, aead_seal, random_array, NONCE_LEN};
+use keyward_crypto::{aead_open, aead_seal, random_array, NONCE_LEN};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,6 +37,18 @@ use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 /// Domain-separation label mixed into every vault-key wrapping derivation.
+// FROZEN WIRE IDENTIFIERS — do not "finish the rename" here.
+//
+// These four strings are cryptographic domain-separation labels baked into
+// every wrap, sealed box, signature and safety number ever produced. They are
+// not branding: changing one silently changes a derived key or a signed
+// payload, so every existing shared vault stops decrypting and every signature
+// stops verifying, with no error that points here.
+//
+// They say "keyward-passbook" because that is what the product was called when
+// the format was fixed. That is the correct spelling of a wire format's
+// history. If they ever must change, it is a versioned format migration with a
+// re-wrap path — never a find-and-replace.
 const HKDF_INFO: &[u8] = b"proctor-passbook family-share v1";
 
 /// Separate label for the general-purpose [`SealedBox`] (recovery payloads). Two
@@ -230,11 +242,11 @@ pub fn open_content(blob: &ContentBlob, vault_key: &[u8; VAULT_KEY_LEN]) -> Resu
 /// Not `SigningKey::generate`: ed25519-dalek and x25519-dalek depend on
 /// different `rand_core` versions, so the `OsRng` used for X25519 does not
 /// satisfy the trait ed25519-dalek expects. Drawing 32 bytes from
-/// `proctor_crypto::fill_random` keeps one entropy source across the crate
+/// `keyward_crypto::fill_random` keeps one entropy source across the crate
 /// rather than introducing a second RNG stack to reason about.
 fn random_signing_key() -> SigningKey {
     let mut seed = [0u8; 32];
-    proctor_crypto::fill_random(&mut seed);
+    keyward_crypto::fill_random(&mut seed);
     SigningKey::from_bytes(&seed)
 }
 

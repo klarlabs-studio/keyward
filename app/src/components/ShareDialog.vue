@@ -246,7 +246,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           <p v-else-if="!s.active.hasAccess" class="note warn">
             <b>You're in — waiting for the key.</b> Your family's secrets can only be
             unlocked by someone who already has them, so nothing here is readable
-            until one of them opens this vault once. Ask any member to open Proctor,
+            until one of them opens this vault once. Ask any member to open Keyward,
             then <a href="#" @click.prevent="s.reloadActive()">check again</a>.
           </p>
 
@@ -293,7 +293,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           <div v-if="s.active.trustWiped" class="section pending">
             <div class="lbl">This device forgot what it knew about your family</div>
             <p class="pending-why">
-              Proctor keeps a record of which keys it has already trusted, so it can warn
+              Keyward keeps a record of which keys it has already trusted, so it can warn
               you if they change. That record is gone on this device — most likely your
               browser data was cleared.
             </p>
@@ -356,7 +356,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
           <div v-if="s.active.keysTrust === 'unsigned'" class="section pending">
             <div class="lbl">These shared keys aren't signed yet</div>
             <p class="pending-why">
-              This vault was set up before Proctor signed shared keys, so there's no way to
+              This vault was set up before Keyward signed shared keys, so there's no way to
               prove who wrote them. Signing them now means your family can verify every
               change from here on.
             </p>

@@ -1,7 +1,66 @@
 # Changelog
 
-All notable changes to Proctor are documented here. Format loosely follows
+All notable changes to Keyward are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
+
+## [2.0.0] — 2026-07-19
+
+**Renamed: Proctor → Keyward.** Breaking, hence the major bump — every crate,
+binary and environment variable changed name. No functional change.
+
+### Why
+
+Research into the name found no password manager called Proctor, which was the
+only good news. Against it:
+
+- **Trademark.** `PROCTOR` is live in class 9 software (reg. 1766565) and in
+  class 42 SaaS (reg. 3743797), and an EU application covering classes 9/41/42
+  was filed 2026-05-14. A generic-software `PROCTOR` mark already existed and
+  was cancelled in 2007.
+- **Namespaces.** `crates.io/proctor` is taken; the GitHub handle is a dormant
+  user account and so cannot become an org; npm and PyPI are taken; every good
+  domain is registered or for sale. `proctor.app` redirects to proctorio.com.
+- **Meaning.** A cold search for "proctor app" returns ten results, all exam
+  surveillance, and nothing else. That category is actively resented — EFF
+  campaigned against it, schools dropped it after student petitions, ProctorU
+  breached ~440,000 records.
+
+The last point decided it. This is a local-first, privacy-preserving credential
+manager whose signature feature is that agents act **without seeing secrets**;
+naming it after webcam monitoring and room scans inverts the pitch. And a family
+manager is bought by parents but used by teenagers — the people who were
+proctored.
+
+*Keyward*: key + ward, where **ward** carries protection, guardianship, and a
+family dependent at once.
+
+### Breaking
+
+- Crates `proctor-*` → `keyward-*`; Rust paths `proctor_*` → `keyward_*`.
+- Environment variables `PROCTOR_*` → `KEYWARD_*`. **No fallback** — set the new
+  names.
+- Kubernetes Secret `proctor-sync-secrets` → `keyward-sync-secrets`. The **keys
+  inside it are unchanged** (`postgres-url`, `stripe-webhook-secret`), so
+  recreating it under the new name is the whole migration.
+
+### Deliberately NOT renamed
+
+- **Four cryptographic domain-separation labels** in `sharing.rs`
+  (`proctor-passbook family-share v1` and siblings). They are baked into every
+  wrap, sealed box, signature and safety number ever produced. Changing one
+  silently changes a derived key or a signed payload: every existing shared
+  vault stops decrypting, every signature stops verifying, and nothing points at
+  the cause. They record what the product was called when the format was fixed,
+  which is what a wire format is supposed to do.
+- **`localStorage` keys** (`proctor.passbook.*`). They address data already in
+  real browsers; renaming them orphans every key pin and epoch floor on every
+  existing device — the silent re-trust that 237f09b added detection for.
+- **`proctor.klarlabs.de`.** The DNS record, the certificate and the live
+  service did not rename themselves. Migrating the hostname is a separate,
+  ordered ops task documented in the ingress overlay.
+
+Both frozen categories are marked `FROZEN` in the source so the rename is not
+"finished" later by someone tidying up.
 
 ## [1.43.0] — 2026-07-19
 
@@ -78,8 +137,8 @@ because it digested only member ids and public keys. Vault-key pinning made this
 
 ### Fixed — hardcoded database credentials
 
-- `deploy/docker-compose.pg.yml` carried `proctor:proctor` in two places. Now
-  `${PROCTOR_DB_PASSWORD:?...}` with no default: compose fails with a pointer to
+- `deploy/docker-compose.pg.yml` carried `keyward:keyward` in two places. Now
+  `${KEYWARD_DB_PASSWORD:?...}` with no default: compose fails with a pointer to
   `deploy/.env.example` rather than starting on a password that is public
   knowledge in an open-source repository.
 
@@ -159,7 +218,7 @@ asserted in the shared contract suite against memory, file, and a real Postgres.
   orphan anyone still in the directory. Rotation-on-revoke still works.
 - Rate limiting keyed on `remote_addr`, which behind an ingress is the same
   value for every user on the internet — one shared bucket. Now honours
-  `X-Forwarded-For`, rightmost entry, **only** when `PROCTOR_SYNC_TRUST_PROXY`
+  `X-Forwarded-For`, rightmost entry, **only** when `KEYWARD_SYNC_TRUST_PROXY`
   is set.
 - 16 MiB application-layer cap on every request body. ADR-0004 listed blob caps
   as implemented; they were not.
@@ -283,7 +342,7 @@ every pod restarted 2–3 times on a cold start. After: **0 restarts.**
   socket** so it can never be perturbed by network state.
 
 ### Fixed — app pods crash-looped against a cold Postgres
-- The server exits if it can't reach `PROCTOR_SYNC_PG` at startup, so every replica
+- The server exits if it can't reach `KEYWARD_SYNC_PG` at startup, so every replica
   lost the race on a fresh apply, and CrashLoopBackOff then kept the API down for
   minutes *after* the database was healthy. Added a `wait-for-postgres`
   initContainer reusing the already-pinned Postgres image (no new image to trust).
@@ -494,8 +553,8 @@ reveal that. This closes it the way Signal does — out-of-band verification.
   session + subscription metadata, so the existing webhook applies the plan on
   completion. The Stripe secret key never leaves the server. `503` when
   unconfigured (self-host), `401` unauthenticated, `502` on a Stripe error.
-  Config: `PROCTOR_STRIPE_SECRET_KEY`, `PROCTOR_STRIPE_PRICE_FAMILY`, and optional
-  `PROCTOR_STRIPE_SUCCESS_URL` / `PROCTOR_STRIPE_CANCEL_URL`.
+  Config: `KEYWARD_STRIPE_SECRET_KEY`, `KEYWARD_STRIPE_PRICE_FAMILY`, and optional
+  `KEYWARD_STRIPE_SUCCESS_URL` / `KEYWARD_STRIPE_CANCEL_URL`.
 
 ### Added — plans UX
 - The upgrade panel now shows a **plan comparison** (Free / Individual / Family with
@@ -557,21 +616,21 @@ a backup path — the managed cloud is deployable end-to-end (minus the crypto-r
 gate before real users).
 
 ### Added — observability
-- **`GET /metrics`** — Prometheus exposition: `proctor_requests_total` (counter),
-  `proctor_uptime_seconds`, and `proctor_build_info{backend,version}`. Aggregate
+- **`GET /metrics`** — Prometheus exposition: `keyward_requests_total` (counter),
+  `keyward_uptime_seconds`, and `keyward_build_info{backend,version}`. Aggregate
   counters only (no PII); unauthenticated and meant to stay cluster-internal. Unit
   test for the renderer; live-verified (counts requests, labels the backend).
 
 ### Changed — k8s deploy is now stateless on Postgres
-- The Deployment reads **`PROCTOR_SYNC_PG`** (+ optional Stripe secret) from a
-  `proctor-sync-secrets` Secret and runs **stateless**: `replicas: 2`,
+- The Deployment reads **`KEYWARD_SYNC_PG`** (+ optional Stripe secret) from a
+  `keyward-sync-secrets` Secret and runs **stateless**: `replicas: 2`,
   **RollingUpdate** (zero-downtime), no per-pod PVC. New **`hpa.yaml`** autoscales
   2→10 on CPU, and pods carry `prometheus.io/scrape` annotations. The app PVC is
   gone (removed `pvc.yaml`).
 - New **`postgres.yaml`** — a bundled in-cluster Postgres StatefulSet for simple
-  deploys (production should point `PROCTOR_SYNC_PG` at a managed DB / operator).
+  deploys (production should point `KEYWARD_SYNC_PG` at a managed DB / operator).
 - **No Secret manifest is committed** (that would put credentials in git); the
-  `proctor-sync-secrets` Secret is created out-of-band via `kubectl create secret`
+  `keyward-sync-secrets` Secret is created out-of-band via `kubectl create secret`
   (documented, with the required keys).
 - **`backup.sh`** — `pg_dump`/`pg_restore` helper, plus a Postgres backup/restore +
   observability section in `deploy/README.md` (the old file-`/data` backup docs are
@@ -596,7 +655,7 @@ gate before real users).
 The plan (`accounts.plan`) is now enforced, and Stripe drives plan changes — the
 paid tiers become real. (Email verification, needing an SMTP provider, is deferred.)
 
-### Added — the entitlements plane (`proctor-sync`)
+### Added — the entitlements plane (`keyward-sync`)
 - A `Plan` type — `Free` / `Individual` / `Family` — with `can_share()` (Family
   only) and `device_limit()` (Free = 2, paid = unlimited). Stored on the account
   (`accounts.plan` in Postgres; a `#[serde(default)]` field in `accounts.json`, so
@@ -615,7 +674,7 @@ paid tiers become real. (Email verification, needing an SMTP provider, is deferr
   `Stripe-Signature` HMAC** (SHA-256 over `"{t}.{payload}"`, constant-time compared,
   with replay-window checking), then maps a subscription event's
   `metadata.{account_id,plan}` to `set_plan` (a cancelled subscription drops to
-  Free). `PROCTOR_STRIPE_WEBHOOK_SECRET` gates it (unset → 503). Metadata plane only
+  Free). `KEYWARD_STRIPE_WEBHOOK_SECRET` gates it (unset → 503). Metadata plane only
   — **zero-knowledge is untouched**.
 
 ### Verified
@@ -659,15 +718,15 @@ foundational backend swap.
   keys, and SHA-256 *hashes* of tokens/invite codes. An `accounts.plan` column seeds
   the entitlements plane (free/individual/family).
 
-### Added — reusable port contracts (`proctor-sync` `testkit` feature)
+### Added — reusable port contracts (`keyward-sync` `testkit` feature)
 - The port-behaviour suites (`sync_store_contract` / `account_store_contract` /
   `share_group_store_contract`) are now shared: File, Memory, **and** Postgres run
   the *identical* contracts, so every backend is provably behaviourally equal.
 
 ### Changed — server backend selection
-- `proctor-sync-server` picks its backend by precedence: **`PROCTOR_SYNC_PG`**
-  (Postgres, managed cloud) → `PROCTOR_SYNC_DIR` (file, self-host) → in-memory. New
-  `PROCTOR_SYNC_PG_POOL` (default 8). Added `deploy/docker-compose.pg.yml` to run the
+- `keyward-sync-server` picks its backend by precedence: **`KEYWARD_SYNC_PG`**
+  (Postgres, managed cloud) → `KEYWARD_SYNC_DIR` (file, self-host) → in-memory. New
+  `KEYWARD_SYNC_PG_POOL` (default 8). Added `deploy/docker-compose.pg.yml` to run the
   scalable backend locally.
 
 ### Verified
@@ -710,10 +769,10 @@ shared items in the main vault view.**
   (Deployment with non-root/read-only-rootfs/dropped-caps + probes, Service, PVC,
   Ingress with **cert-manager TLS**, Namespace, Kustomization) plus a runbook.
   TLS terminates at the ingress — the Rust server stays plain HTTP behind it.
-- **`proctor-sync-server`**: added `GET /healthz` + `/readyz` (unauthenticated,
+- **`keyward-sync-server`**: added `GET /healthz` + `/readyz` (unauthenticated,
   not rate-limited) and a dependency-free per-client-IP **rate limiter**
   (fixed-window) on `POST /v1/register` and invite-mint, returning 429 over the
-  limit (`PROCTOR_SYNC_RATELIMIT_PER_MIN`, default 30/min, `0` disables). Closes the
+  limit (`KEYWARD_SYNC_RATELIMIT_PER_MIN`, default 30/min, `0` disables). Closes the
   invite/register DoS item from ADR-0004's threat model. 5 new unit tests; verified
   at runtime (healthz 200; 4th register → 429 at limit 3).
 
@@ -780,7 +839,7 @@ The [v1.28.0] server relay can now be driven from the client: the browser can mi
 a member keypair, wrap/unwrap the vault key, seal/open shared content, and add or
 remove members — all client-side, plaintext never leaving the device.
 
-### Added — sharing primitives (`proctor-passbook::sharing`)
+### Added — sharing primitives (`keyward-passbook::sharing`)
 - `Member::from_secret` / `secret_bytes` — a member's X25519 secret can now be
   exported for encrypted-at-rest storage in their *own* vault and rebuilt from it,
   so a sharing identity is stable across devices and master-password changes.
@@ -827,7 +886,7 @@ was wired to nothing — no server, no UI. This begins wiring it into a usable
 feature. See **[ADR-0004](docs/architecture/ADR-0004-family-sharing.md)** for the
 architecture, the STRIDE threat model, and the increment plan.
 
-### Added — share-group store (`proctor-sync::groups`)
+### Added — share-group store (`keyward-sync::groups`)
 - A `ShareGroupStore` port with `MemoryShareGroupStore` + `FileShareGroupStore`
   adapters. A **share group** holds a public member directory (X25519 *public*
   keys + names), single-use TTL'd invites stored as SHA-256 *hashes* of the code,
@@ -836,7 +895,7 @@ architecture, the STRIDE threat model, and the increment plan.
   (expiry + single-use) and both version bumps are atomic under the store lock.
   Fully unit-tested (memory + file, plus path-traversal safety).
 
-### Added — share-group HTTP relay (`proctor-sync-server`)
+### Added — share-group HTTP relay (`keyward-sync-server`)
 - `POST /v1/groups`, `GET /v1/groups/{id}`, `POST .../invites`, `POST .../members`
   (redeem), `GET|PUT .../keys`, `GET|PUT .../vault`, `DELETE .../members/{mid}`.
   Auth reuses per-device bearer tokens; membership/owner checks run against the
@@ -930,7 +989,7 @@ narrow viewport: the menu opens the drawer and Watchtower is reachable again.
 **Password generator + breach check.** Two core password-manager features, in the
 shared Rust core so the CLI, WASM, and web vault all get them.
 
-### Added — `proctor-passbook` `generate` module
+### Added — `keyward-passbook` `generate` module
 - **Password generator:** configurable length + character classes (upper / lower /
   digits / symbols), "avoid look-alikes", and a **passphrase** mode from an
   embedded word list. Unbiased selection (rejection sampling over the shared
@@ -965,19 +1024,19 @@ Three lanes, built in parallel and integrated.
   is the flagship "choose cloud or on-device, migrate seamlessly" working end to
   end.
 
-### Added — token lifecycle (`proctor-sync` / `proctor-sync-server`)
-- Optional **token expiry** (`PROCTOR_SYNC_TOKEN_TTL`; default: never expire —
+### Added — token lifecycle (`keyward-sync` / `keyward-sync-server`)
+- Optional **token expiry** (`KEYWARD_SYNC_TOKEN_TTL`; default: never expire —
   backward compatible), **rotation** (`POST /v1/devices/rotate` mints a fresh
   secret for the same device, invalidating the old), and **vault deletion**
   (`DELETE /v1/vault`, idempotent — account closure / erasure). 13 crate tests +
   a curl proof (rotate → old token 401; delete → 204 then 404).
 
-### Changed — Broker DDD alignment (`proctor-broker`)
+### Changed — Broker DDD alignment (`keyward-broker`)
 - The Credential Broker context gets the same ports & adapters treatment as
   Passbook: a `ports` module (`Clock`, `AuditSink`) with in-crate
   `adapters::{SystemClock, FileAuditSink}`. `AuditLog` now writes through the
   `AuditSink` port (byte-identical on-disk format); the Minter/Executor remain
-  ports owned by `proctor-mint`. No behavior change — broker/mcp/vault/mint tests
+  ports owned by `keyward-mint`. No behavior change — broker/mcp/vault/mint tests
   all pass. Documented in the context map + ADR-0003.
 
 ## [1.21.0] — 2026-07-13
@@ -985,7 +1044,7 @@ Three lanes, built in parallel and integrated.
 **Sync auth hardening — hashed tokens + device revocation.** Two real security
 gaps in cloud sync, closed and verified.
 
-### Changed — `proctor-sync` / `proctor-sync-server`
+### Changed — `keyward-sync` / `keyward-sync-server`
 - **Device tokens are stored only as their SHA-256 hash.** Like passwords, the
   plaintext token is returned once (at register / add-device) and never
   persisted — a breached `accounts.json` yields no usable credentials. Verified:
@@ -1008,7 +1067,7 @@ gaps in cloud sync, closed and verified.
 and integrated: accounts on the server, sync in the web vault, and a Tauri
 desktop shell. Verified live in a headless browser against the running server.
 
-### Added — accounts + per-device tokens + CORS (`proctor-sync` / `proctor-sync-server`)
+### Added — accounts + per-device tokens + CORS (`keyward-sync` / `keyward-sync-server`)
 - `AccountStore` (Memory/File adapters): `register` issues an account + device
   token; `add_device` mints another token for the SAME account; tokens resolve to
   accounts. Endpoints `POST /v1/register`, `POST /v1/devices`; the vault endpoints
@@ -1039,13 +1098,13 @@ master password, the device Secret Key, or the decrypted entries — a stolen
 server yields only ciphertext (the 2SKD promise, extended to the cloud). A new
 **Sync** bounded context.
 
-### Added — `proctor-sync` (domain)
+### Added — `keyward-sync` (domain)
 - `SyncStore` port + `MemoryStore`/`FileStore` adapters. Optimistic concurrency:
   a client presents the version it last saw; a stale push is a `Conflict` telling
   it to pull first. The store never interprets a blob (path-sanitized accounts).
   6 tests (round-trip, conflict, first-push, path-traversal safety).
 
-### Added — `proctor-sync-server`
+### Added — `keyward-sync-server`
 - A tiny HTTP server (`GET`/`PUT /v1/vault`, bearer-token → account, `If-Match`
   versioning, `X-Vault-Version`). The blob is never logged or inspected.
 - Verified headless with curl against a **real** 2SKD-sealed vault: first push →
@@ -1062,18 +1121,18 @@ Design explicit — no behavior change, all tests green throughout, and the
 sealed-vault byte format unchanged (verified: a vault sealed before the refactor
 still opens after).
 
-### Added — `proctor-crypto` (shared kernel)
+### Added — `keyward-crypto` (shared kernel)
 - New crate: the Argon2id KDF + XChaCha20-Poly1305 AEAD + CSPRNG primitives,
-  previously duplicated in `proctor-vault` and `proctor-passbook`. Both contexts
+  previously duplicated in `keyward-vault` and `keyward-passbook`. Both contexts
   now depend on it; the construction is defined once. 5 tests.
 
-### Changed — `proctor-passbook` (domain core)
+### Changed — `keyward-passbook` (domain core)
 - Split the single `lib.rs` into DDD modules: `domain` (entities + value
   objects), `sealing` (sealing service + `SealedVault` aggregate, on the shared
   kernel), `watchtower` (analysis service), plus existing `sharing` / `totp`. The
   crate root re-exports the public API, so downstream code is unchanged.
 - New `ports` module: `VaultRepository` and `Clock` driven ports.
-- `proctor-vault` refactored onto the shared kernel too.
+- `keyward-vault` refactored onto the shared kernel too.
 
 ### Added — adapters + docs
 - `passbook-cli::adapters`: `FileVaultRepository` and `SystemClock` implement the
@@ -1116,11 +1175,11 @@ reach). Verified end-to-end headless by driving the host as a real process.
 three formats, and the native format round-trips back through the importer.
 
 ### Added — web vault (`app/`)
-- **`app/src/lib/export.ts`:** export to **Proctor JSON** (full fidelity,
+- **`app/src/lib/export.ts`:** export to **Keyward JSON** (full fidelity,
   re-importable), **Bitwarden JSON** (unencrypted export shape, portable), and
   **CSV** (universal, lossy). Export dialog with a format picker, item count, a
   clear plaintext warning, and Copy / Download.
-- **Proctor-native import:** the importer now recognizes and ingests Proctor JSON
+- **Keyward-native import:** the importer now recognizes and ingests Keyward JSON
   (entries re-id'd on import), completing the export→import round-trip.
 - **Round-trip test** (`npm test`, `app/scripts/roundtrip.test.ts`): exports each
   format and re-imports, asserting counts, categories, and that a tricky password
@@ -1208,8 +1267,8 @@ clippy/fmt clean, `wasm32` build succeeds, warden gate passed).
   `show <id> [--reveal]`, `totp <id>` (live code + seconds remaining),
   `watchtower` (weak/reused report + 0–100 score), `emergency-kit`.
 - Vault persisted as an encrypted `SealedVault` JSON; 2SKD transparently reused.
-  Config via `PROCTOR_PASSBOOK`, `PROCTOR_PASSBOOK_MASTER_FILE`,
-  `PROCTOR_PASSBOOK_SECRETKEY_FILE`. 4 tests (incl. a roundtrip that asserts the
+  Config via `KEYWARD_PASSBOOK`, `KEYWARD_PASSBOOK_MASTER_FILE`,
+  `KEYWARD_PASSBOOK_SECRETKEY_FILE`. 4 tests (incl. a roundtrip that asserts the
   on-disk file is ciphertext, not plaintext).
 
 ### Added — family sharing (`crates/passbook/src/sharing.rs`)
@@ -1229,7 +1288,7 @@ clippy/fmt clean, `wasm32` build succeeds, warden gate passed).
   usage example and `wasm-pack build --target web` instructions.
 
 ### Added — browser extension (`extension/`)
-- Manifest V3 autofill extension for Proctor Passbook: content script detects
+- Manifest V3 autofill extension for Keyward Passbook: content script detects
   username/password fields and fills them through the native value setter with
   proper `input`/`change` events (SPA-safe); `background.js` service worker relays
   popup→tab messages; a branded, theme-aware popup lists items with a
@@ -1237,7 +1296,7 @@ clippy/fmt clean, `wasm32` build succeeds, warden gate passed).
   native-messaging bridge a production build would use so secrets are never bundled.
 
 ### Notes
-- Prototype crypto throughout `proctor-passbook`; a formal external review remains
+- Prototype crypto throughout `keyward-passbook`; a formal external review remains
   before any real use (tracked in the threat model).
 
 ## [1.11.0] — 2026-07-12
@@ -1247,7 +1306,7 @@ clippy/fmt clean, `wasm32` build succeeds, warden gate passed).
 The broker (Phase B) is the developer wedge; this begins the mainstream family
 product, sharing the crypto core.
 
-### Added — `proctor-passbook` (foundation, tested)
+### Added — `keyward-passbook` (foundation, tested)
 - **Rich item model:** logins (username/password/URLs/TOTP/passkey), secure notes,
   cards, identities — with titles, tags, favorites.
 - **Secret Key (2SKD):** a 128-bit device key combined with the master password
@@ -1269,7 +1328,7 @@ product, sharing the crypto core.
 The last two threat-model residuals (R4, R5).
 
 ### Added / hardened
-- **R4 — signed audit log.** With `PROCTOR_AUDIT_KEY` (hex), the hash chain is
+- **R4 — signed audit log.** With `KEYWARD_AUDIT_KEY` (hex), the hash chain is
   **HMAC-SHA256**-signed instead of plain SHA-256, so an attacker with only
   filesystem write (no key) cannot forge a valid chain — tamper-*resistant*, not
   just tamper-evident. (`AuditLog::with_file_signed`, `Broker::with_audit_file_signed`.)
@@ -1296,7 +1355,7 @@ Supply-chain gate + lint hygiene.
 
 ### Changed
 - Codebase is now `cargo fmt`-clean and `clippy -D warnings`-clean; refreshed the
-  `proctor-mcp` module docs to list the current tool + config surface.
+  `keyward-mcp` module docs to list the current tool + config surface.
 
 ## [1.9.0] — 2026-07-12
 
@@ -1308,7 +1367,7 @@ External security-expert review — all seven findings fixed — plus nox scanni
   the `egress` posture. Isolation now contains the network, not just /proc + FS.
 - **T2 origin-binding teeth:** the GitHub executor refuses an origin it doesn't
   actually serve — the credential is bound to the request *destination*, not a label.
-- **T3 master + env inheritance:** master is read from `PROCTOR_MASTER_FILE` (not
+- **T3 master + env inheritance:** master is read from `KEYWARD_MASTER_FILE` (not
   env/`/proc`); the runner **`env_clear()`s** the child and re-adds only a minimal
   baseline + the injected credential — the broker's env (incl. the master) no
   longer leaks into subprocesses.
@@ -1331,9 +1390,9 @@ External security-expert review — all seven findings fixed — plus nox scanni
 Trust gate for the exec path (threat-model R2).
 
 ### Added
-- **`PROCTOR_TRUST=untrusted`** makes the safe posture enforceable: `run_command`
+- **`KEYWARD_TRUST=untrusted`** makes the safe posture enforceable: `run_command`
   is **refused** when isolation is `none`, directing the operator to set
-  `PROCTOR_ISOLATION` (`docker:<image>` / `bwrap`) or explicitly choose trusted
+  `KEYWARD_ISOLATION` (`docker:<image>` / `bwrap`) or explicitly choose trusted
   mode. Default remains trusted (local interactive use). The refusal is a hard
   gate at the top of the run path, before any credential is touched.
 
@@ -1367,7 +1426,7 @@ Security review artifact + the first hardening it surfaced.
   sets `allow_shell = true`, because a shell runs arbitrary work past
   command-binding. Allowed shells still carry a `shell_warning` in the response.
 - Profiles gained an `allow_shell` field (default false) and `is_shell_interpreter`
-  in `proctor-profiles`.
+  in `keyward-profiles`.
 
 ### Top open items for the auditor (from the threat model)
 - R1 secrets not zeroized in memory · R2 `isolation=none` default · R4 audit log
@@ -1380,11 +1439,11 @@ Multi-field minted credentials + per-provider minter routing — the two edges
 left open by v1.4.0.
 
 ### Added
-- **`proctor-mint::aws` — AWS STS `AssumeRoleWithWebIdentity` minter.** Exchanges a
+- **`keyward-mint::aws` — AWS STS `AssumeRoleWithWebIdentity` minter.** Exchanges a
   held OIDC web-identity token for short-lived role credentials and emits the
   **trio** (access key id / secret / session token) as JSON, so a minted cred
   composes directly into a multi-field (`env_map`) profile. HTTP injected for
-  offline tests; real reqwest behind `net`; wired via `PROCTOR_AWS_ROLE_ARN`.
+  offline tests; real reqwest behind `net`; wired via `KEYWARD_AWS_ROLE_ARN`.
 - **Per-provider minter routing.** Provider profiles declare their minter with a
   `mint` field (`"github-app"`, `"token-exchange"`, `"aws-sts"`). The server keeps
   a minter map keyed by kind and routes each item's mint through
@@ -1408,12 +1467,12 @@ Protocol minters + prefer-minted on the exec path (ADR-0002 Phase 3) — the las
 unbuilt axis. ADR-0002 is now fully implemented.
 
 ### Added
-- **`proctor-mint::exchange` — RFC 8693 OAuth 2.0 Token Exchange minter.** Present
+- **`keyward-mint::exchange` — RFC 8693 OAuth 2.0 Token Exchange minter.** Present
   a held subject token (an OIDC identity / JWT) to an STS token endpoint and get a
   short-lived scoped access token. One minter, any conforming STS — the mechanism
   behind OIDC Workload Identity Federation (GCP WIF, generic STS). HTTP injected
   for offline tests; real reqwest form-post behind `net`. Wired via
-  `PROCTOR_STS_ENDPOINT` (+ `_AUDIENCE` / `_SCOPE` / `_SUBJECT_TYPE`).
+  `KEYWARD_STS_ENDPOINT` (+ `_AUDIENCE` / `_SCOPE` / `_SUBJECT_TYPE`).
 - **Prefer minted short-TTL creds on the `run_command` exec path.** A mintable
   item mints a short-lived token and injects *that* into the subprocess (not the
   durable secret), bounding how long a leaked value stays useful. Falls back to
@@ -1437,11 +1496,11 @@ run the credential-bearing command in a container/namespace, so `/proc` and the
 filesystem don't cross to the host.
 
 ### Added
-- **`Isolation` backend** (`proctor-mint::run`): `none` (default), `bubblewrap`
+- **`Isolation` backend** (`keyward-mint::run`): `none` (default), `bubblewrap`
   (Linux user/pid/mount namespaces, remounted `/proc`), and `container`
   (docker/podman: separate `/proc` + filesystem, `--rm`). Configured via
-  `PROCTOR_ISOLATION` = `none` | `bwrap` | `docker:<image>` | `podman:<image>`
-  (network via `PROCTOR_ISOLATION_NETWORK`, default `bridge`).
+  `KEYWARD_ISOLATION` = `none` | `bwrap` | `docker:<image>` | `podman:<image>`
+  (network via `KEYWARD_ISOLATION_NETWORK`, default `bridge`).
 - The credential is passed with `--env NAME` (value from the runtime's env),
   **never in argv** — verified by test that the secret value never appears in the
   wrapped command line.
@@ -1474,9 +1533,9 @@ CLI long tail via the external profiles.
     unknown commands step-up (attended) or are denied (unattended).
   - **Output redaction**: injected credential values are stripped from
     stdout/stderr before returning (so even `echo $TOKEN` yields `***REDACTED***`).
-- **`proctor-mint::run`** — the generic subprocess runner (`run_with_env`).
+- **`keyward-mint::run`** — the generic subprocess runner (`run_with_env`).
 - Vault items gain an optional **`provider`** field linking them to a profile;
-  `proctor add`'s new trailing `[provider]` arg sets it.
+  `keyward add`'s new trailing `[provider]` arg sets it.
 
 ### Security (see ADR-0002)
 - Env injection is hygiene, not an isolation boundary (`/proc/environ`, `ps`,
@@ -1489,8 +1548,8 @@ CLI long tail via the external profiles.
 Providers become **external config** (ADR-0002 registry, made concrete).
 
 ### Added
-- **`proctor-profiles`** — external, pluggable provider profiles loaded from TOML
-  at runtime (`$PROCTOR_PROFILES` or `~/.proctor/profiles`). A profile declares
+- **`keyward-profiles`** — external, pluggable provider profiles loaded from TOML
+  at runtime (`$KEYWARD_PROFILES` or `~/.keyward/profiles`). A profile declares
   how a credential is injected (`env_var` for single-token, `env_map` for
   multi-field JSON credentials) and argv risk patterns
   (`read_patterns` / `mutate_patterns`, **default-gate** when unmatched, so it's
@@ -1499,7 +1558,7 @@ Providers become **external config** (ADR-0002 registry, made concrete).
 - Seed profiles ship in `profiles/` (aws, azure, github, gitlab, hetzner) plus a
   `profiles/README.md`. **Adding a provider is dropping a `<id>.toml` file — no
   recompile.**
-- **`proctor profiles`** CLI command lists what's loaded (proves pluggability:
+- **`keyward profiles`** CLI command lists what's loaded (proves pluggability:
   drop a file → it appears).
 
 
@@ -1537,7 +1596,7 @@ the last behavioral gap.
 Accountability + capability lifecycle.
 
 ### Added
-- **Persistent audit log** — set `PROCTOR_AUDIT` to append every broker decision
+- **Persistent audit log** — set `KEYWARD_AUDIT` to append every broker decision
   to a JSON-lines file (hash-chained, tamper-evident). `AuditLog::with_file` /
   `Broker::with_audit_file`.
 - **Kill switch** — `revoke_all` MCP tool revokes all server-held minted tokens
@@ -1584,7 +1643,7 @@ downgraded to a reviewable artifact, and that artifact is actually performed.
 ### Changed
 - `Executor` HTTP is now a single injected `HttpClient` (get + post); the real
   client is `ReqwestClient` (behind `net`).
-- **CLI**: `proctor add`'s `mintable` is now an optional trailing arg defaulting
+- **CLI**: `keyward add`'s `mintable` is now an optional trailing arg defaulting
   to **false** — the vault-read model is the default (`add <id> <label>
   <origins> <secret> [mintable] [kind]`).
 
@@ -1623,13 +1682,13 @@ Closes the loop: **secretless execution**. The broker mints a scoped token,
 gets a result, not a value.
 
 ### Added
-- **`proctor-mint::exec`** — an `Executor` layer:
+- **`keyward-mint::exec`** — an `Executor` layer:
   - `Executor` trait + `ExecAction`/`ExecResult`; HTTP GET injected as `GetHttp`
     for offline tests.
   - `GitHubExecutor` — uses a minted installation token to list the repositories
     the installation can access (real read), returning only repo names/count.
   - `MockExecutor` for offline demos/tests.
-- **`proctor-mcp`** — `use_credential` on a `Read`/`FetchData` verb now **mints +
+- **`keyward-mcp`** — `use_credential` on a `Read`/`FetchData` verb now **mints +
   performs** the action and returns `primitive: "secretless_exec"` with a
   sanitized `result` — the base secret and the minted token never reach the model.
   Non-executing verbs still mint-and-hold. GitHub executor wired when configured,
@@ -1650,7 +1709,7 @@ First working version of the **Phase B wedge**: the AI credential broker, backed
 by a real vault and minting, driveable as an MCP server.
 
 ### Added
-- **`proctor-broker`** — the credential-broker security model:
+- **`keyward-broker`** — the credential-broker security model:
   - Origin-binding (defeats the confused-deputy / prompt-injection attack,
     independent of any human approval).
   - Capabilities scoped on `item × origin × verb × TTL × use-count`.
@@ -1659,17 +1718,17 @@ by a real vault and minting, driveable as an MCP server.
     (delete data · move money · ship to prod · comms-as-you · rotate/revoke creds).
   - Default primitive preference: minted → secretless → (raw, hard-denied).
   - Tamper-evident, hash-chained audit log.
-- **`proctor-vault`** — file-backed encrypted vault (Argon2id + XChaCha20-Poly1305);
+- **`keyward-vault`** — file-backed encrypted vault (Argon2id + XChaCha20-Poly1305);
   `seal`/`open`/`save_to_file`/`load_from_file`; secret-free `ItemRef` for the broker.
-- **`proctor-mint`** — "mint, don't inject": `Minter` trait, `MockMinter`, and a
+- **`keyward-mint`** — "mint, don't inject": `Minter` trait, `MockMinter`, and a
   real `GitHubAppMinter` (RS256 JWT + installation access-token flow) with signer
   and HTTP injected as traits (tested offline; real `jsonwebtoken`/`reqwest` behind
   the `net` feature). Minted values are zeroized and never model-facing.
-- **`proctor-mcp`** — the broker+vault+minting exposed as an MCP server (stdio) via
+- **`keyward-mcp`** — the broker+vault+minting exposed as an MCP server (stdio) via
   the official `rmcp` SDK. Tools: `list_credentials`, `use_credential`, `audit_log`.
   On an allowed mintable item it mints a token held server-side and returns only a
   `token_ref` + masked view. Real GitHub App minter wired when configured, else mock.
-- **`proctor` CLI** — `init` / `add` / `list` to manage a real on-disk vault, plus
+- **`keyward` CLI** — `init` / `add` / `list` to manage a real on-disk vault, plus
   a `demo` walkthrough of the broker.
 - **Docs** — market & feature research, product spec (PRD), and ADR-0001 (broker
   security model).

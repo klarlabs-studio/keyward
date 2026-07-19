@@ -10,7 +10,7 @@
 
 The codebase grew feature-first (vault → broker → passbook → web app → bridge).
 The domain concepts were sound but implicit: crypto was duplicated between the two
-vault contexts, `proctor-passbook` was a single 400-line `lib.rs` mixing entities,
+vault contexts, `keyward-passbook` was a single 400-line `lib.rs` mixing entities,
 crypto, and analysis, and I/O (files, time) was reached for directly inside what
 should be domain logic. We want the architecture to make its Domain-Driven Design
 explicit, without adding ceremony that Rust does not already express naturally.
@@ -22,12 +22,12 @@ constructs:
 
 1. **Bounded contexts = crates.** Passbook and the Credential Broker are separate
    contexts (Separate Ways); the crate boundary is the anti-corruption layer.
-2. **Shared Kernel = `proctor-crypto`.** The Argon2id + XChaCha20-Poly1305 + CSPRNG
-   primitives, previously duplicated in `proctor-vault` and `proctor-passbook`, are
+2. **Shared Kernel = `keyward-crypto`.** The Argon2id + XChaCha20-Poly1305 + CSPRNG
+   primitives, previously duplicated in `keyward-vault` and `keyward-passbook`, are
    extracted to one crate that both depend on. Byte formats are unchanged — the
    extraction moved code, it did not alter the construction (verified: a vault
    sealed before the refactor still opens after).
-3. **Domain model in modules.** `proctor-passbook` is split into `domain`
+3. **Domain model in modules.** `keyward-passbook` is split into `domain`
    (entities + value objects), `sealing` (sealing service + `SealedVault`
    aggregate), `watchtower` (analysis service), `sharing`, `totp`, and `ports`.
    The crate root re-exports the public API, so downstream code is unchanged.
@@ -56,12 +56,12 @@ constructs:
   core; storage/time are swappable; the vocabulary is documented and enforced by
   module names. All tests stayed green through the refactor (17 suites) and the
   sealed-vault format is unchanged.
-- **Negative / cost:** one more crate (`proctor-crypto`) and a light indirection
+- **Negative / cost:** one more crate (`keyward-crypto`) and a light indirection
   (ports) in the CLI. Judged worth it for the review surface and clarity.
 - **Deliberately not done:** we did not introduce a DI framework, application
   services layer, or CQRS — they would be ceremony here. Ports are plain traits.
 - **Follow-ups:** the same port/adapter treatment has since been applied inside the
-  broker context (`proctor-broker::ports::{Clock, AuditSink}` with in-crate
+  broker context (`keyward-broker::ports::{Clock, AuditSink}` with in-crate
   `adapters::{SystemClock, FileAuditSink}`; the Minter/Executor remain ports owned
-  by `proctor-mint`) — see [context-map.md](context-map.md). Consider a
+  by `keyward-mint`) — see [context-map.md](context-map.md). Consider a
   shared-kernel home for common serde/zeroize helpers if duplication reappears.

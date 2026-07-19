@@ -1,5 +1,5 @@
 //! Sealing service — turns the entry aggregate into an encrypted-at-rest
-//! [`SealedVault`] and back, composing the shared [`proctor_crypto`] kernel with
+//! [`SealedVault`] and back, composing the shared [`keyward_crypto`] kernel with
 //! the Passbook-specific 2SKD twist (folding in the device Secret Key).
 //!
 //! The wire format is deliberately stable: `salt` (16) + `nonce` (24) +
@@ -10,7 +10,7 @@
 
 use crate::domain::{Entry, SecretKey};
 use crate::PassbookError;
-use proctor_crypto::{
+use keyward_crypto::{
     aead_open, aead_seal, derive_key_argon2id, random_array, KEY_LEN, NONCE_LEN, SALT_LEN,
 };
 use serde::{Deserialize, Serialize};

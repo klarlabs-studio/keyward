@@ -1,4 +1,4 @@
-# Proctor — Cryptography Specification (implementation-accurate)
+# Keyward — Cryptography Specification (implementation-accurate)
 
 > **Scope:** the consumer vault (**Passbook**), **family sharing**, and the
 > **sync relay**. Describes what the code does at the referenced revision, not
@@ -65,7 +65,7 @@ else:                    K_vault_personal = mk
 **Argon2 parameters.** `Argon2::default()` (`crates/crypto/src/lib.rs:60`), i.e.
 `argon2` 0.5.3's `Params::DEFAULT`: **Argon2id, version 0x13 (19), m_cost =
 19456 KiB (19 MiB), t_cost = 2, p_cost = 1, output 32 bytes**, no secret key
-(pepper), no associated data. These are the crate defaults, not values Proctor
+(pepper), no associated data. These are the crate defaults, not values Keyward
 chose deliberately — the kernel's own header calls them "prototype-grade
 parameters" needing tuning (`crates/crypto/src/lib.rs:13-14`).
 
@@ -438,7 +438,7 @@ render: for each 4-byte chunk c of the 32-byte digest:
 **Domain-separation label** (`sharing.rs:77`):
 
 ```
-SAFETY_NUMBER_INFO = b"proctor-passbook group-safety-number v1"
+SAFETY_NUMBER_INFO = b"keyward-passbook group-safety-number v1"
 ```
 
 Properties, all covered by the test at `sharing.rs:477-517`:
@@ -532,7 +532,7 @@ token is returned exactly once, at register or add-device
 - `rotate_token` — same device id/label/expiry, fresh secret
   (`accounts.rs:305-325`).
 - `revoke_device` — the lost-device story.
-- **Expiry is optional and off by default** — `PROCTOR_SYNC_TOKEN_TTL` unset or
+- **Expiry is optional and off by default** — `KEYWARD_SYNC_TOKEN_TTL` unset or
   `0` means tokens never expire (`main.rs:246-253`).
 
 **Where the token lives on the client.** `localStorage`, under
@@ -540,7 +540,7 @@ token is returned exactly once, at register or add-device
 credential for both the personal vault and every group endpoint
 (`app/src/lib/sharing.ts:167-182`).
 
-**A pre-seed fallback exists.** `PROCTOR_SYNC_TOKENS` maps plaintext
+**A pre-seed fallback exists.** `KEYWARD_SYNC_TOKENS` maps plaintext
 `token:account` pairs from an environment variable, consulted when the registry
 does not resolve (`main.rs:587-596, 516-523`). Intended for tests and
 bootstrapping; it bypasses hashing entirely.
@@ -555,7 +555,7 @@ bootstrapping; it bypasses hashing entirely.
 ```
 header format: "t=<unix>,v1=<hex>[,v1=<hex>...]"
 signed string: "{t}.{raw_body}"
-tag          : HMAC-SHA256(key = PROCTOR_STRIPE_WEBHOOK_SECRET, msg = signed string)
+tag          : HMAC-SHA256(key = KEYWARD_STRIPE_WEBHOOK_SECRET, msg = signed string)
 compare      : lowercase hex, constant-time, any v1 candidate may match
 ```
 
@@ -713,7 +713,7 @@ the UI must state it plainly.*
 | `VAULT_KEY_LEN` | 32 | `crates/passbook/src/sharing.rs:42` |
 | Secret Key length | 16 (128 bits) | `crates/passbook/src/domain.rs:131` |
 | `HKDF_INFO` | `b"proctor-passbook family-share v1"` | `crates/passbook/src/sharing.rs:39` |
-| `SAFETY_NUMBER_INFO` | `b"proctor-passbook group-safety-number v1"` | `crates/passbook/src/sharing.rs:77` |
+| `SAFETY_NUMBER_INFO` | `b"keyward-passbook group-safety-number v1"` | `crates/passbook/src/sharing.rs:77` |
 | HKDF salt | `None` (zero-filled) | `crates/passbook/src/sharing.rs:407` |
 | Argon2 params | crate default: Argon2id v19, m=19456 KiB, t=2, p=1 | `crates/crypto/src/lib.rs:60` |
 | Invite / token / group id entropy | 128 bits, hex | `crates/sync/src/groups.rs:29`, `crates/sync/src/accounts.rs:172` |

@@ -1,4 +1,4 @@
-//! proctor-mcp — the Proctor credential broker exposed as an MCP server over
+//! keyward-mcp — the Keyward credential broker exposed as an MCP server over
 //! stdio, backed by a real vault, minting, and generic subprocess execution.
 //!
 //! Tools: list_credentials, use_credential, run_command, list_minted,
@@ -6,10 +6,10 @@
 //! secrets; it enforces origin/command-binding, propose-not-commit, a
 //! never-unattended floor, and (for run_command) OS isolation + risk gating.
 //!
-//! Config via env: PROCTOR_VAULT + PROCTOR_MASTER_FILE (or PROCTOR_MASTER),
-//! PROCTOR_PROFILES, PROCTOR_ISOLATION, PROCTOR_TRUST, PROCTOR_AUDIT,
-//! PROCTOR_APPROVED_ORIGINS, and minter config (PROCTOR_GH_*, PROCTOR_STS_*,
-//! PROCTOR_AWS_ROLE_ARN).
+//! Config via env: KEYWARD_VAULT + KEYWARD_MASTER_FILE (or KEYWARD_MASTER),
+//! KEYWARD_PROFILES, KEYWARD_ISOLATION, KEYWARD_TRUST, KEYWARD_AUDIT,
+//! KEYWARD_APPROVED_ORIGINS, and minter config (KEYWARD_GH_*, KEYWARD_STS_*,
+//! KEYWARD_AWS_ROLE_ARN).
 //!
 //! NOTE: prototype — a formal security review is required before real use.
 
@@ -33,16 +33,16 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use zeroize::Zeroizing;
 
-use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
-use proctor_mint::aws::{AwsWebIdentityMinter, ReqwestRawHttp};
-use proctor_mint::exchange::{ReqwestFormHttp, TokenExchangeMinter};
-use proctor_mint::exec::{
+use keyward_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy, Primitive};
+use keyward_mint::aws::{AwsWebIdentityMinter, ReqwestRawHttp};
+use keyward_mint::exchange::{ReqwestFormHttp, TokenExchangeMinter};
+use keyward_mint::exec::{
     ExecAction, ExecKind, Executor, GitHubExecutor, MockExecutor, ReqwestClient,
 };
-use proctor_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
-use proctor_mint::run::{run_isolated, Isolation};
-use proctor_mint::{MintScope, MintedToken, Minter, MockMinter};
-use proctor_profiles::{Registry, RiskClass};
+use keyward_mint::github::{GitHubAppMinter, RealSigner, ReqwestHttp};
+use keyward_mint::run::{run_isolated, Isolation};
+use keyward_mint::{MintScope, MintedToken, Minter, MockMinter};
+use keyward_profiles::{Registry, RiskClass};
 
 struct AppState {
     items: Vec<ItemRef>,
@@ -56,7 +56,7 @@ struct AppState {
 }
 
 #[derive(Clone)]
-struct ProctorServer {
+struct KeywardServer {
     state: Arc<Mutex<AppState>>,
     minter: Arc<dyn Minter>,
     /// Per-mint-kind minters (e.g. "aws-sts", "token-exchange"); routed by the
@@ -151,7 +151,7 @@ impl Approver for ElicitApprover {
     async fn request(&self, reason: &str) -> ApprovalOutcome {
         match self
             .peer
-            .elicit::<Approval>(format!("Proctor step-up approval required: {reason}"))
+            .elicit::<Approval>(format!("Keyward step-up approval required: {reason}"))
             .await
         {
             Ok(Some(a)) if a.approved => ApprovalOutcome::Approved,
@@ -190,7 +190,7 @@ fn scope_for(verb: ActionVerb) -> MintScope {
 }
 
 #[tool_router]
-impl ProctorServer {
+impl KeywardServer {
     #[allow(clippy::too_many_arguments)]
     fn with(
         items: Vec<ItemRef>,
@@ -211,7 +211,7 @@ impl ProctorServer {
             Some((p, None)) => Broker::with_audit_file(policy, p),
             None => Broker::new(policy),
         };
-        ProctorServer {
+        KeywardServer {
             state: Arc::new(Mutex::new(AppState {
                 items,
                 // Wrap secrets so they are wiped from memory when dropped.
@@ -461,7 +461,7 @@ impl ProctorServer {
                 return json!({
                     "decision": "allow",
                     "primitive": if mintable { "minted" } else { "secretless" },
-                    "note": "decision allows the action, but no credential is loaded (running without a vault). Load a vault via PROCTOR_VAULT/PROCTOR_MASTER."
+                    "note": "decision allows the action, but no credential is loaded (running without a vault). Load a vault via KEYWARD_VAULT/KEYWARD_MASTER."
                 })
             }
         };
@@ -617,7 +617,7 @@ impl ProctorServer {
         if self.require_isolation && matches!(self.isolation, Isolation::None) {
             return json!({
                 "decision": "deny",
-                "reason": "run_command requires OS isolation in untrusted mode; set PROCTOR_ISOLATION (e.g. docker:<image> or bwrap), or PROCTOR_TRUST=trusted for a trusted host."
+                "reason": "run_command requires OS isolation in untrusted mode; set KEYWARD_ISOLATION (e.g. docker:<image> or bwrap), or KEYWARD_TRUST=trusted for a trusted host."
             });
         }
 
@@ -666,7 +666,7 @@ impl ProctorServer {
             });
         }
         // Shells run arbitrary work past command-binding — blocked unless opted in.
-        if proctor_profiles::is_shell_interpreter(&args.program) && !profile.allow_shell {
+        if keyward_profiles::is_shell_interpreter(&args.program) && !profile.allow_shell {
             self.audit(
                 &args.item_id,
                 &provider_id,
@@ -800,7 +800,7 @@ impl ProctorServer {
                     "truncated": r.truncated,
                     "note": "the credential was injected into the subprocess environment and never returned to the model; any occurrences were redacted from the output."
                 });
-                if proctor_profiles::is_shell_interpreter(&args.program) {
+                if keyward_profiles::is_shell_interpreter(&args.program) {
                     if let Some(o) = out.as_object_mut() {
                         o.insert("shell_warning".into(), json!(
                             "authorized program is a shell interpreter; command-binding and argv risk classification cannot inspect the actual work — prefer authorizing specific tools (aws, terraform), not shells."
@@ -837,12 +837,12 @@ fn text_result(s: String) -> CallToolResult {
 }
 
 #[tool_handler]
-impl ServerHandler for ProctorServer {
+impl ServerHandler for KeywardServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
             .with_instructions(
-                "Proctor credential broker. Tools: list_credentials, use_credential, run_command, \
+                "Keyward credential broker. Tools: list_credentials, use_credential, run_command, \
                  list_minted, revoke_all, audit_log. The broker returns results/handles, never \
                  plaintext secrets; it enforces origin-binding, propose-not-commit, a never-unattended \
                  floor, and (for run_command) command-binding + risk gating with the credential \
@@ -853,10 +853,10 @@ impl ServerHandler for ProctorServer {
 }
 
 /// Build the server from the environment: a real vault if configured, else demo.
-fn build_server() -> ProctorServer {
+fn build_server() -> KeywardServer {
     let gh = match (
-        std::env::var("PROCTOR_GH_APP_ID"),
-        std::env::var("PROCTOR_GH_INSTALLATION_ID"),
+        std::env::var("KEYWARD_GH_APP_ID"),
+        std::env::var("KEYWARD_GH_INSTALLATION_ID"),
     ) {
         (Ok(a), Ok(i)) if !a.is_empty() && !i.is_empty() => Some((a, i)),
         _ => None,
@@ -876,18 +876,18 @@ fn build_server() -> ProctorServer {
             )),
         );
     }
-    if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
+    if let Ok(ep) = std::env::var("KEYWARD_STS_ENDPOINT") {
         if !ep.is_empty() && require_https(&ep, "token-exchange") {
-            eprintln!("proctor-mcp: token-exchange endpoint {ep}");
+            eprintln!("keyward-mcp: token-exchange endpoint {ep}");
             let mut m = TokenExchangeMinter::new(ep, ReqwestFormHttp::new());
-            m.audience = std::env::var("PROCTOR_STS_AUDIENCE").ok();
-            m.scope = std::env::var("PROCTOR_STS_SCOPE").ok();
+            m.audience = std::env::var("KEYWARD_STS_AUDIENCE").ok();
+            m.scope = std::env::var("KEYWARD_STS_SCOPE").ok();
             minters.insert("token-exchange".into(), Arc::new(m));
         }
     }
-    if let Ok(arn) = std::env::var("PROCTOR_AWS_ROLE_ARN") {
+    if let Ok(arn) = std::env::var("KEYWARD_AWS_ROLE_ARN") {
         if !arn.is_empty() {
-            eprintln!("proctor-mcp: aws-sts minter enabled (role {arn})");
+            eprintln!("keyward-mcp: aws-sts minter enabled (role {arn})");
             minters.insert(
                 "aws-sts".into(),
                 Arc::new(AwsWebIdentityMinter::new(arn, ReqwestRawHttp::new())),
@@ -903,13 +903,13 @@ fn build_server() -> ProctorServer {
     };
 
     // Minter: RFC 8693 token-exchange (STS) > GitHub App > mock.
-    let minter: Arc<dyn Minter> = if let Ok(ep) = std::env::var("PROCTOR_STS_ENDPOINT") {
+    let minter: Arc<dyn Minter> = if let Ok(ep) = std::env::var("KEYWARD_STS_ENDPOINT") {
         if !ep.is_empty() && require_https(&ep, "token-exchange") {
-            eprintln!("proctor-mcp: using RFC 8693 token-exchange minter ({ep})");
+            eprintln!("keyward-mcp: using RFC 8693 token-exchange minter ({ep})");
             let mut m = TokenExchangeMinter::new(ep, ReqwestFormHttp::new());
-            m.audience = std::env::var("PROCTOR_STS_AUDIENCE").ok();
-            m.scope = std::env::var("PROCTOR_STS_SCOPE").ok();
-            if let Ok(t) = std::env::var("PROCTOR_STS_SUBJECT_TYPE") {
+            m.audience = std::env::var("KEYWARD_STS_AUDIENCE").ok();
+            m.scope = std::env::var("KEYWARD_STS_SCOPE").ok();
+            if let Ok(t) = std::env::var("KEYWARD_STS_SUBJECT_TYPE") {
                 m.subject_token_type = t;
             }
             Arc::new(m)
@@ -917,7 +917,7 @@ fn build_server() -> ProctorServer {
             Arc::new(MockMinter)
         }
     } else if let Some((app, inst)) = gh {
-        eprintln!("proctor-mcp: using GitHub App minter (app {app})");
+        eprintln!("keyward-mcp: using GitHub App minter (app {app})");
         Arc::new(GitHubAppMinter::new(
             app,
             inst,
@@ -928,21 +928,21 @@ fn build_server() -> ProctorServer {
         Arc::new(MockMinter)
     };
 
-    let audit_path = std::env::var("PROCTOR_AUDIT").ok().map(PathBuf::from);
+    let audit_path = std::env::var("KEYWARD_AUDIT").ok().map(PathBuf::from);
     // Optional HMAC signing key for the audit chain (hex). With it, an FS-write
     // attacker without the key cannot forge a valid chain.
-    let audit_key: Option<Vec<u8>> = std::env::var("PROCTOR_AUDIT_KEY").ok().and_then(|h| {
+    let audit_key: Option<Vec<u8>> = std::env::var("KEYWARD_AUDIT_KEY").ok().and_then(|h| {
         match (0..h.len()).step_by(2).map(|i| u8::from_str_radix(h.get(i..i + 2)?, 16).ok()).collect::<Option<Vec<u8>>>() {
             Some(k) if !k.is_empty() => Some(k),
             _ => {
-                eprintln!("proctor-mcp: PROCTOR_AUDIT_KEY is not valid hex; audit chain will be unsigned");
+                eprintln!("keyward-mcp: KEYWARD_AUDIT_KEY is not valid hex; audit chain will be unsigned");
                 None
             }
         }
     });
     if let Some(p) = &audit_path {
         eprintln!(
-            "proctor-mcp: appending audit log to {} ({})",
+            "keyward-mcp: appending audit log to {} ({})",
             p.display(),
             if audit_key.is_some() {
                 "HMAC-signed"
@@ -954,29 +954,29 @@ fn build_server() -> ProctorServer {
     let audit = audit_path.map(|p| (p, audit_key));
 
     let profiles = Arc::new(load_profiles());
-    eprintln!("proctor-mcp: {} provider profile(s) loaded", profiles.len());
+    eprintln!("keyward-mcp: {} provider profile(s) loaded", profiles.len());
 
     let isolation = isolation_from_env();
     let require_isolation = matches!(
-        std::env::var("PROCTOR_TRUST").unwrap_or_default().as_str(),
+        std::env::var("KEYWARD_TRUST").unwrap_or_default().as_str(),
         "untrusted" | "untrust"
     );
     if matches!(isolation, Isolation::None) {
         if require_isolation {
-            eprintln!("proctor-mcp: TRUST=untrusted + isolation=none — run_command will be refused until PROCTOR_ISOLATION is set");
+            eprintln!("keyward-mcp: TRUST=untrusted + isolation=none — run_command will be refused until KEYWARD_ISOLATION is set");
         } else {
-            eprintln!("proctor-mcp: run_command isolation = none (trusted mode; set PROCTOR_ISOLATION + PROCTOR_TRUST=untrusted for autonomy)");
+            eprintln!("keyward-mcp: run_command isolation = none (trusted mode; set KEYWARD_ISOLATION + KEYWARD_TRUST=untrusted for autonomy)");
         }
     } else {
-        eprintln!("proctor-mcp: run_command isolation = {}", isolation.label());
+        eprintln!("keyward-mcp: run_command isolation = {}", isolation.label());
     }
 
-    let vault = std::env::var("PROCTOR_VAULT").map(PathBuf::from);
+    let vault = std::env::var("KEYWARD_VAULT").map(PathBuf::from);
     let master = read_master();
 
     if let (Ok(path), Some(master)) = (&vault, &master) {
         if path.exists() {
-            match proctor_vault::load_from_file(path, master.as_bytes()) {
+            match keyward_vault::load_from_file(path, master.as_bytes()) {
                 Ok(items) => {
                     let mut refs = Vec::new();
                     let mut secrets = HashMap::new();
@@ -995,28 +995,28 @@ fn build_server() -> ProctorServer {
                     }
                     let approved = approved_origins(&refs);
                     eprintln!(
-                        "proctor-mcp: loaded vault {} ({} items)",
+                        "keyward-mcp: loaded vault {} ({} items)",
                         path.display(),
                         refs.len()
                     );
-                    return ProctorServer::with(
+                    return KeywardServer::with(
                         refs, secrets, providers, minter, minters, executor, profiles, isolation,
                         &approved, audit,
                     )
                     .with_require_isolation(require_isolation);
                 }
                 Err(e) => {
-                    eprintln!("proctor-mcp: failed to open vault ({e}); falling back to demo items")
+                    eprintln!("keyward-mcp: failed to open vault ({e}); falling back to demo items")
                 }
             }
         } else {
             eprintln!(
-                "proctor-mcp: vault {} not found; using demo items",
+                "keyward-mcp: vault {} not found; using demo items",
                 path.display()
             );
         }
     } else {
-        eprintln!("proctor-mcp: PROCTOR_VAULT/PROCTOR_MASTER not set; using demo items");
+        eprintln!("keyward-mcp: KEYWARD_VAULT/KEYWARD_MASTER not set; using demo items");
     }
 
     // Demo fallback: metadata only, no secrets (minting reports "no base secret").
@@ -1035,7 +1035,7 @@ fn build_server() -> ProctorServer {
         },
     ];
     let approved = approved_origins(&items);
-    ProctorServer::with(
+    KeywardServer::with(
         items,
         HashMap::new(),
         HashMap::new(),
@@ -1050,21 +1050,21 @@ fn build_server() -> ProctorServer {
     .with_require_isolation(require_isolation)
 }
 
-/// Parse run_command isolation from $PROCTOR_ISOLATION:
+/// Parse run_command isolation from $KEYWARD_ISOLATION:
 ///   none (default) | bwrap | docker:<image> | podman:<image>
 ///
-/// Network egress: `$PROCTOR_ISOLATION_NETWORK` if set, else **"none" in
+/// Network egress: `$KEYWARD_ISOLATION_NETWORK` if set, else **"none" in
 /// untrusted mode** (deny egress so an injected credential can't be exfiltrated
 /// over the network) and "bridge" in trusted mode.
 fn isolation_from_env() -> Isolation {
-    let spec = std::env::var("PROCTOR_ISOLATION").unwrap_or_default();
+    let spec = std::env::var("KEYWARD_ISOLATION").unwrap_or_default();
     let untrusted = matches!(
-        std::env::var("PROCTOR_TRUST").unwrap_or_default().as_str(),
+        std::env::var("KEYWARD_TRUST").unwrap_or_default().as_str(),
         "untrusted" | "untrust"
     );
     let net_default = if untrusted { "none" } else { "bridge" };
     let network =
-        std::env::var("PROCTOR_ISOLATION_NETWORK").unwrap_or_else(|_| net_default.to_string());
+        std::env::var("KEYWARD_ISOLATION_NETWORK").unwrap_or_else(|_| net_default.to_string());
     let deny_net = network == "none";
     match spec.as_str() {
         "" | "none" => Isolation::None,
@@ -1079,25 +1079,25 @@ fn isolation_from_env() -> Isolation {
                     };
                 }
             }
-            eprintln!("proctor-mcp: unknown PROCTOR_ISOLATION '{other}'; using none");
+            eprintln!("keyward-mcp: unknown KEYWARD_ISOLATION '{other}'; using none");
             Isolation::None
         }
     }
 }
 
-/// Read the vault master secret. Prefers `$PROCTOR_MASTER_FILE` (a path) so the
-/// master isn't exposed via `/proc/<pid>/environ`; falls back to `$PROCTOR_MASTER`
+/// Read the vault master secret. Prefers `$KEYWARD_MASTER_FILE` (a path) so the
+/// master isn't exposed via `/proc/<pid>/environ`; falls back to `$KEYWARD_MASTER`
 /// with a warning.
 fn read_master() -> Option<String> {
-    if let Ok(path) = std::env::var("PROCTOR_MASTER_FILE") {
+    if let Ok(path) = std::env::var("KEYWARD_MASTER_FILE") {
         match std::fs::read_to_string(&path) {
             Ok(s) => return Some(s.trim_end_matches(['\n', '\r']).to_string()),
-            Err(e) => eprintln!("proctor-mcp: cannot read PROCTOR_MASTER_FILE {path}: {e}"),
+            Err(e) => eprintln!("keyward-mcp: cannot read KEYWARD_MASTER_FILE {path}: {e}"),
         }
     }
-    match std::env::var("PROCTOR_MASTER") {
+    match std::env::var("KEYWARD_MASTER") {
         Ok(m) if !m.is_empty() => {
-            eprintln!("proctor-mcp: PROCTOR_MASTER is set via env (readable via /proc); prefer PROCTOR_MASTER_FILE");
+            eprintln!("keyward-mcp: KEYWARD_MASTER is set via env (readable via /proc); prefer KEYWARD_MASTER_FILE");
             Some(m)
         }
         _ => None,
@@ -1109,29 +1109,29 @@ fn require_https(url: &str, what: &str) -> bool {
     if url.starts_with("https://") {
         true
     } else {
-        eprintln!("proctor-mcp: refusing non-https {what} endpoint '{url}'");
+        eprintln!("keyward-mcp: refusing non-https {what} endpoint '{url}'");
         false
     }
 }
 
-/// Load provider profiles from $PROCTOR_PROFILES (or ~/.proctor/profiles).
+/// Load provider profiles from $KEYWARD_PROFILES (or ~/.keyward/profiles).
 fn load_profiles() -> Registry {
-    let dir = std::env::var("PROCTOR_PROFILES")
+    let dir = std::env::var("KEYWARD_PROFILES")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".proctor/profiles"))
+                .map(|h| PathBuf::from(h).join(".keyward/profiles"))
                 .unwrap_or_else(|_| PathBuf::from("profiles"))
         });
     Registry::load_dir(&dir).unwrap_or_else(|e| {
-        eprintln!("proctor-mcp: profile load error ({e}); continuing with none");
+        eprintln!("keyward-mcp: profile load error ({e}); continuing with none");
         Registry::new()
     })
 }
 
 /// The auto-approve origin list: env override, else the union of item origins.
 fn approved_origins(items: &[ItemRef]) -> Vec<String> {
-    if let Ok(csv) = std::env::var("PROCTOR_APPROVED_ORIGINS") {
+    if let Ok(csv) = std::env::var("KEYWARD_APPROVED_ORIGINS") {
         return csv
             .split(',')
             .map(|s| s.trim().to_lowercase())
@@ -1146,7 +1146,7 @@ fn approved_origins(items: &[ItemRef]) -> Vec<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    eprintln!("proctor-mcp: credential broker starting on stdio");
+    eprintln!("keyward-mcp: credential broker starting on stdio");
     let service = build_server().serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
@@ -1178,7 +1178,7 @@ mod tests {
         }
     }
 
-    fn server(mintable: bool, secret: &str, approved: &[&str]) -> ProctorServer {
+    fn server(mintable: bool, secret: &str, approved: &[&str]) -> KeywardServer {
         let items = vec![ItemRef {
             id: "itm_github".into(),
             label: "GitHub".into(),
@@ -1188,7 +1188,7 @@ mod tests {
         let mut secrets = HashMap::new();
         secrets.insert("itm_github".to_string(), secret.to_string());
         let approved: Vec<String> = approved.iter().map(|s| s.to_string()).collect();
-        ProctorServer::with(
+        KeywardServer::with(
             items,
             secrets,
             HashMap::new(),
@@ -1202,12 +1202,12 @@ mod tests {
         )
     }
 
-    fn run_server() -> ProctorServer {
+    fn run_server() -> KeywardServer {
         run_server_m(false)
     }
 
     /// A server whose item has a provider profile, for run_command tests.
-    fn run_server_m(mintable: bool) -> ProctorServer {
+    fn run_server_m(mintable: bool) -> KeywardServer {
         let items = vec![ItemRef {
             id: "itm_cli".into(),
             label: "Demo CLI cred".into(),
@@ -1236,7 +1236,7 @@ mod tests {
         )
         .unwrap();
 
-        ProctorServer::with(
+        KeywardServer::with(
             items,
             secrets,
             providers,
@@ -1460,7 +1460,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap(); // allow_shell defaults false
-        let server = ProctorServer::with(
+        let server = KeywardServer::with(
             items,
             secrets,
             providers,
@@ -1515,12 +1515,12 @@ mod tests {
     // Multi-field minted credential (AWS STS trio) routed by profile.mint.
     struct FakeSts;
     #[async_trait::async_trait]
-    impl proctor_mint::aws::RawHttp for FakeSts {
+    impl keyward_mint::aws::RawHttp for FakeSts {
         async fn post_form_raw(
             &self,
             _url: &str,
             _form: &[(String, String)],
-        ) -> Result<String, proctor_mint::MintError> {
+        ) -> Result<String, keyward_mint::MintError> {
             Ok(r#"<r><Credentials><AccessKeyId>TKID_LIVE</AccessKeyId><SecretAccessKey>testsecretval</SecretAccessKey><SessionToken>testsessionval</SessionToken><Expiration>2026-07-12T12:00:00Z</Expiration></Credentials></r>"#.to_string())
         }
     }
@@ -1563,7 +1563,7 @@ mod tests {
             Arc::new(AwsWebIdentityMinter::new("arn:aws:iam::1:role/x", FakeSts)),
         );
 
-        let server = ProctorServer::with(
+        let server = KeywardServer::with(
             items,
             secrets,
             providers,

@@ -1,6 +1,6 @@
 [package]
 name = "passbook-cli"
-description = "Proctor Passbook CLI — manage the consumer vault from the terminal."
+description = "Keyward Passbook CLI — manage the consumer vault from the terminal."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,5 +10,5 @@ name = "passbook"
 path = "src/main.rs"
 
 [dependencies]
-proctor-passbook = { path = "../passbook" }
+keyward-passbook = { path = "../passbook" }
 serde_json = "1"

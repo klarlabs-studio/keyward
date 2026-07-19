@@ -15,13 +15,13 @@
 # have the image only package the result:
 #
 #   rustup target add x86_64-unknown-linux-musl
-#   cargo zigbuild --release --target x86_64-unknown-linux-musl -p proctor-sync-server
+#   cargo zigbuild --release --target x86_64-unknown-linux-musl -p keyward-sync-server
 #
 #   # Stage ONLY the binary as the build context (see note below):
 #   stage=$(mktemp -d)
-#   cp target/x86_64-unknown-linux-musl/release/proctor-sync-server "$stage"/
+#   cp target/x86_64-unknown-linux-musl/release/keyward-sync-server "$stage"/
 #   docker buildx build --platform linux/amd64 -f deploy/Dockerfile.static \
-#     -t ghcr.io/klarlabs-studio/proctor-sync-server:<version> --provenance=false "$stage"
+#     -t ghcr.io/klarlabs-studio/keyward-sync-server:<version> --provenance=false "$stage"
 #
 # (cargo-zigbuild supplies `zig cc` as the musl C compiler; a plain
 #  `cargo build --target x86_64-unknown-linux-musl` fails in cc-rs looking for
@@ -48,17 +48,17 @@
 # container-level HEALTHCHECK entirely.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:aef9602f8710ec12bde19d593fed1f76c708531bb7aba205110f1029786ead7b
 
-COPY --chmod=0755 proctor-sync-server /usr/local/bin/proctor-sync-server
+COPY --chmod=0755 keyward-sync-server /usr/local/bin/keyward-sync-server
 
 # TLS is terminated upstream by the ingress; the server is never exposed directly.
-ENV PROCTOR_SYNC_ADDR=0.0.0.0:8787 \
-    PROCTOR_SYNC_DIR=/data
+ENV KEYWARD_SYNC_ADDR=0.0.0.0:8787 \
+    KEYWARD_SYNC_DIR=/data
 
 # uid 65532 (distroless "nonroot"). The Deployment additionally pins
 # runAsUser/runAsGroup 10001 and readOnlyRootFilesystem: true — with
-# PROCTOR_SYNC_PG set, all state lives in Postgres and nothing is written to
+# KEYWARD_SYNC_PG set, all state lives in Postgres and nothing is written to
 # the filesystem, so no writable /data volume is required.
 USER 65532:65532
 EXPOSE 8787
 
-ENTRYPOINT ["/usr/local/bin/proctor-sync-server"]
+ENTRYPOINT ["/usr/local/bin/keyward-sync-server"]

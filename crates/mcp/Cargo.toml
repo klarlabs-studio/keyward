@@ -1,19 +1,19 @@
 [package]
-name = "proctor-mcp"
-description = "Proctor credential broker exposed as an MCP server (stdio) via rmcp."
+name = "keyward-mcp"
+description = "Keyward credential broker exposed as an MCP server (stdio) via rmcp."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "proctor-mcp"
+name = "keyward-mcp"
 path = "src/main.rs"
 
 [dependencies]
-proctor-broker = { path = "../broker" }
-proctor-vault = { path = "../vault" }
-proctor-mint = { path = "../mint" }
-proctor-profiles = { path = "../profiles" }
+keyward-broker = { path = "../broker" }
+keyward-vault = { path = "../vault" }
+keyward-mint = { path = "../mint" }
+keyward-profiles = { path = "../profiles" }
 rmcp = { version = "2", features = ["server", "macros", "transport-io", "elicitation", "schemars"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-std"] }
 serde = { version = "1", features = ["derive"] }

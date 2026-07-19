@@ -18,7 +18,7 @@ const fileName = ref('');
 const importing = ref(false);
 
 const FORMAT_LABEL: Record<ImportFormat, string> = {
-  proctor: 'Proctor (JSON)',
+  keyward: 'Keyward (JSON)',
   bitwarden: 'Bitwarden (JSON)',
   lastpass: 'LastPass (CSV)',
   '1password': '1Password (CSV)',
@@ -95,7 +95,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
             <span>Format</span>
             <select v-model="override">
               <option value="auto">Auto-detect</option>
-              <option value="proctor">Proctor</option>
+              <option value="keyward">Keyward</option>
               <option value="bitwarden">Bitwarden</option>
               <option value="lastpass">LastPass</option>
               <option value="1password">1Password</option>

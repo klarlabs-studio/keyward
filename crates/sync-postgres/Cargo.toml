@@ -1,12 +1,12 @@
 [package]
-name = "proctor-sync-postgres"
+name = "keyward-sync-postgres"
 description = "PostgreSQL adapters for the Sync ports — the managed-cloud backend (stateless API over a shared datastore)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-proctor-sync = { path = "../sync" }
+keyward-sync = { path = "../sync" }
 postgres = "0.19"
 r2d2 = "0.8"
 r2d2_postgres = "0.18"
@@ -14,4 +14,4 @@ rand = "0.8"
 sha2 = "0.10"
 
 [dev-dependencies]
-proctor-sync = { path = "../sync", features = ["testkit"] }
+keyward-sync = { path = "../sync", features = ["testkit"] }

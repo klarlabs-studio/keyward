@@ -38,7 +38,7 @@ impl<H: RawHttp> AwsWebIdentityMinter<H> {
         AwsWebIdentityMinter {
             sts_endpoint: "https://sts.amazonaws.com".to_string(),
             role_arn: role_arn.into(),
-            session_name: "proctor".to_string(),
+            session_name: "keyward".to_string(),
             duration_secs: 3600,
             http,
         }

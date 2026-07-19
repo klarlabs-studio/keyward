@@ -1,6 +1,6 @@
 # Ubiquitous Language
 
-The shared vocabulary of Proctor. Every term here maps to a concrete type or
+The shared vocabulary of Keyward. Every term here maps to a concrete type or
 module so business and code speak the same words. Terms are grouped by bounded
 context (see [context-map.md](context-map.md)).
 
@@ -28,17 +28,17 @@ context (see [context-map.md](context-map.md)).
 
 | Term | Meaning | In code |
 | --- | --- | --- |
-| **Item** | A brokered credential (contains the secret; never handed to the model). | `proctor-vault` `Item` |
-| **Item Ref** | The secret-free projection the broker may see. | `proctor-vault` `ItemRef` |
+| **Item** | A brokered credential (contains the secret; never handed to the model). | `keyward-vault` `Item` |
+| **Item Ref** | The secret-free projection the broker may see. | `keyward-vault` `ItemRef` |
 | **Origin-binding** | An item is usable only against its declared origins (anti-confused-deputy). | `Item::bound_origins` |
-| **Capability** | A scoped, time-boxed grant to *use* (not read) a credential. | `proctor-broker` |
-| **Propose-not-commit** | The broker proposes an action for user approval; it never acts unattended. | `proctor-broker` |
-| **Mint / Minter** | Produce a short-lived scoped token instead of exposing the durable secret. | `proctor-mint` |
-| **Profile** | External, pluggable provider config (aws, github, …) — a supporting subdomain. | `proctor-profiles`, `profiles/*.toml` |
-| **Audit** | The hash-chained (optionally HMAC-signed) record of every brokered action. | `proctor-broker` audit |
+| **Capability** | A scoped, time-boxed grant to *use* (not read) a credential. | `keyward-broker` |
+| **Propose-not-commit** | The broker proposes an action for user approval; it never acts unattended. | `keyward-broker` |
+| **Mint / Minter** | Produce a short-lived scoped token instead of exposing the durable secret. | `keyward-mint` |
+| **Profile** | External, pluggable provider config (aws, github, …) — a supporting subdomain. | `keyward-profiles`, `profiles/*.toml` |
+| **Audit** | The hash-chained (optionally HMAC-signed) record of every brokered action. | `keyward-broker` audit |
 
 ## Shared Kernel
 
 | Term | Meaning | In code |
 | --- | --- | --- |
-| **Crypto kernel** | The primitives both vault contexts agree on: Argon2id KDF + XChaCha20-Poly1305 AEAD + CSPRNG. | `proctor-crypto` |
+| **Crypto kernel** | The primitives both vault contexts agree on: Argon2id KDF + XChaCha20-Poly1305 AEAD + CSPRNG. | `keyward-crypto` |

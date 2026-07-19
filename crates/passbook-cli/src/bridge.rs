@@ -14,7 +14,7 @@
 //! The `list` reply carries NO secrets — only enough to render the picker.
 //! Passwords and TOTP codes cross the pipe only in a `get` reply, at fill time.
 
-use proctor_passbook::{totp, Content, Entry};
+use keyward_passbook::{totp, Content, Entry};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 
@@ -147,7 +147,7 @@ pub fn run(entries: &[Entry]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proctor_passbook::Entry;
+    use keyward_passbook::Entry;
     use std::io::Cursor;
 
     fn sample() -> Vec<Entry> {

@@ -11,7 +11,7 @@
 
 ## Context
 
-Proctor's server today is a **single-node, file-backed prototype**. It is correct
+Keyward's server today is a **single-node, file-backed prototype**. It is correct
 and it is genuinely zero-knowledge — but it is not a business, and it is not a
 cloud you could put a paying family on.
 
@@ -65,15 +65,15 @@ Four packages, three of them managed:
 
 | Package | Price | Hosting | What you get |
 |---|---|---|---|
-| **Self-host / on-device** | **Free forever** (AGPL) | Yours | Full clients + server, all core item types, Watchtower, family sharing if you run the relay yourself. Unlimited. No Proctor account. |
-| **Free (managed)** | **$0** | Proctor cloud | **Single user, personal vault only.** Core item types + Watchtower. Small **device cap (e.g. 2)**. **No** family sharing, **no** AI credential broker. The PLG on-ramp. |
-| **Individual** (paid) | placeholder | Proctor cloud | **Unlimited devices**, the **AI credential broker**, **priority sync**. |
-| **Family** (paid) | placeholder | Proctor cloud | Everything in Individual **+ family sharing**: shared vaults, **seats (e.g. up to 5–6)**, **guest single-item share**, **account / social recovery**. |
+| **Self-host / on-device** | **Free forever** (AGPL) | Yours | Full clients + server, all core item types, Watchtower, family sharing if you run the relay yourself. Unlimited. No Keyward account. |
+| **Free (managed)** | **$0** | Keyward cloud | **Single user, personal vault only.** Core item types + Watchtower. Small **device cap (e.g. 2)**. **No** family sharing, **no** AI credential broker. The PLG on-ramp. |
+| **Individual** (paid) | placeholder | Keyward cloud | **Unlimited devices**, the **AI credential broker**, **priority sync**. |
+| **Family** (paid) | placeholder | Keyward cloud | Everything in Individual **+ family sharing**: shared vaults, **seats (e.g. up to 5–6)**, **guest single-item share**, **account / social recovery**. |
 
 Prices are **placeholders, set later**, positioned **between Bitwarden (cheapest)
 and 1Password (premium)** per product-spec §9. The comparison we are threading:
 
-| | Bitwarden | 1Password | **Proctor** |
+| | Bitwarden | 1Password | **Keyward** |
 |---|---|---|---|
 | Open source | Yes | No | **Yes (AGPL core)** |
 | Self-host | Yes (free) | No | **Yes (free forever)** |
@@ -145,8 +145,8 @@ concurrent replicas need no coordination beyond the database row.
 
 > The migrated crate is being built now, in parallel, as **`crates/sync-postgres`**
 > (roadmap phase 1). It is additive: `sync-server`'s `main` already boxes the
-> three ports and selects an adapter by env var (`PROCTOR_SYNC_DIR` →
-> file/memory); a `PROCTOR_SYNC_DATABASE_URL` simply selects the Postgres trio.
+> three ports and selects an adapter by env var (`KEYWARD_SYNC_DIR` →
+> file/memory); a `KEYWARD_SYNC_DATABASE_URL` simply selects the Postgres trio.
 
 **Connection pooling with `r2d2` (synchronous), no async runtime.** The server is
 `tiny_http` — blocking. A **synchronous** Postgres client (`postgres` +
@@ -232,7 +232,7 @@ Nothing above changes the wire protocol or the clients.
 ## Threat model (STRIDE, custodian lens)
 
 Running the managed cloud means **becoming custodian of many encrypted vaults**,
-which makes Proctor a **high-value target** in a way a single self-hoster is not —
+which makes Keyward a **high-value target** in a way a single self-hoster is not —
 the concentration *is* the risk. Zero-knowledge means a server/DB breach yields
 **only ciphertext** *if the crypto holds* — but a host owns a set of **new** risks
 that a library does not. Enumerated:
@@ -290,7 +290,7 @@ The line, and the moat:
 - **Proprietary (the moat):** the cloud **control plane** — billing
   (Stripe integration + webhooks), multi-tenant operations and **entitlement
   tooling**, admin/support surfaces, fleet dashboards, and the abuse/anti-fraud
-  layer. None of this is needed to *use* Proctor; it is needed to *run the paid
+  layer. None of this is needed to *use* Keyward; it is needed to *run the paid
   cloud*.
 
 **Recommended structure (a decision to confirm):** keep the open server as the

@@ -1,7 +1,7 @@
 //! Generic subprocess execution with credential injected via the environment —
 //! the `op run` / vault-agent pattern. One runner covers every CLI-driven
 //! provider (aws, terraform, hcloud, gcloud, kubectl…); the per-provider part is
-//! a declarative profile (see `proctor-profiles`), not code here.
+//! a declarative profile (see `keyward-profiles`), not code here.
 //!
 //! SECURITY (see ADR-0002): env injection is *hygiene, not an isolation
 //! boundary* — the value is readable via `/proc/<pid>/environ`, `ps`, and by any
@@ -185,7 +185,7 @@ pub fn run_with_env(
     let mut cmd = Command::new(program);
     cmd.args(args);
     // Start from a CLEAN environment — never inherit the broker's own env
-    // (which holds PROCTOR_MASTER, endpoints, other secrets). Re-add only a
+    // (which holds KEYWARD_MASTER, endpoints, other secrets). Re-add only a
     // minimal safe baseline, then the injected credential(s).
     cmd.env_clear();
     for key in [
@@ -294,12 +294,12 @@ mod tests {
     #[test]
     fn env_baseline_excludes_broker_secrets() {
         // The child gets PATH etc. + injected creds, but NOT arbitrary parent env.
-        std::env::set_var("PROCTOR_TEST_SENTINEL", "should_not_be_inherited");
+        std::env::set_var("KEYWARD_TEST_SENTINEL", "should_not_be_inherited");
         let r = run_with_env(
             "sh",
             &[
                 "-c".into(),
-                "echo [${PROCTOR_TEST_SENTINEL:-absent}]".into(),
+                "echo [${KEYWARD_TEST_SENTINEL:-absent}]".into(),
             ],
             &BTreeMap::new(),
         )
@@ -309,7 +309,7 @@ mod tests {
             "parent env leaked to child: {}",
             r.stdout
         );
-        std::env::remove_var("PROCTOR_TEST_SENTINEL");
+        std::env::remove_var("KEYWARD_TEST_SENTINEL");
     }
 
     #[test]

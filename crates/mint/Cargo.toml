@@ -1,6 +1,6 @@
 [package]
-name = "proctor-mint"
-description = "Proctor credential minting — mint short-lived, narrowly-scoped tokens instead of handing out durable secrets."
+name = "keyward-mint"
+description = "Keyward credential minting — mint short-lived, narrowly-scoped tokens instead of handing out durable secrets."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

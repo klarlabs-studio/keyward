@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 #
-# Production image for the Proctor zero-knowledge sync + family-sharing relay.
+# Production image for the Keyward zero-knowledge sync + family-sharing relay.
 # SERVER ONLY — no demo seeder, no passbook CLI. Managed-cloud target: this runs
 # plain HTTP behind an ingress that terminates TLS (see deploy/README.md).
 #
 # Build context is the repository ROOT (the Cargo workspace), e.g.:
-#   docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/proctor-sync-server:1.30.0 .
+#   docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/keyward-sync-server:1.30.0 .
 
 # ---- build stage ---------------------------------------------------------
 # Pinned to the workspace's rust-version (1.90) on Debian bookworm so the
@@ -14,8 +14,8 @@ FROM rust:1.90-bookworm@sha256:3914072ca0c3b8aad871db9169a651ccfce30cf58303e5d6f
 WORKDIR /src
 COPY . .
 # LTO release build (profile.release in the workspace Cargo.toml). Server only.
-RUN cargo build --release -p proctor-sync-server \
- && strip target/release/proctor-sync-server
+RUN cargo build --release -p keyward-sync-server \
+ && strip target/release/keyward-sync-server
 
 # ---- runtime stage -------------------------------------------------------
 # debian:bookworm-slim (not distroless) so a HEALTHCHECK can curl /healthz.
@@ -33,12 +33,12 @@ RUN useradd --system --uid 10001 --user-group --home-dir /data --shell /usr/sbin
  && mkdir -p /data \
  && chown -R app:app /data
 
-COPY --from=build /src/target/release/proctor-sync-server /usr/local/bin/proctor-sync-server
+COPY --from=build /src/target/release/keyward-sync-server /usr/local/bin/keyward-sync-server
 
 # Sensible in-container defaults. The server binds all interfaces because TLS is
 # terminated upstream by the ingress; it is never exposed directly.
-ENV PROCTOR_SYNC_ADDR=0.0.0.0:8787 \
-    PROCTOR_SYNC_DIR=/data
+ENV KEYWARD_SYNC_ADDR=0.0.0.0:8787 \
+    KEYWARD_SYNC_DIR=/data
 
 USER app
 WORKDIR /data
@@ -49,4 +49,4 @@ EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8787/healthz || exit 1
 
-ENTRYPOINT ["/usr/local/bin/proctor-sync-server"]
+ENTRYPOINT ["/usr/local/bin/keyward-sync-server"]

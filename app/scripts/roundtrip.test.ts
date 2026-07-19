@@ -50,17 +50,17 @@ function check(name: string, cond: boolean, detail = '') {
   }
 }
 
-// Proctor JSON: full fidelity — same count, same categories, exact login password.
+// Keyward JSON: full fidelity — same count, same categories, exact login password.
 {
-  const out = buildExport(entries, 'proctor');
+  const out = buildExport(entries, 'keyward');
   const r = parseImport(out.content, now);
-  check('proctor format', r.format === 'proctor');
-  check('proctor count', r.entries.length === 4, `got ${r.entries.length}`);
+  check('keyward format', r.format === 'keyward');
+  check('keyward count', r.entries.length === 4, `got ${r.entries.length}`);
   const login = r.entries.find((e) => 'Login' in e.content);
   const pw = login && 'Login' in login.content ? login.content.Login.password : '';
-  check('proctor preserves tricky password', pw === 'p@ss,w"rd\nx', JSON.stringify(pw));
+  check('keyward preserves tricky password', pw === 'p@ss,w"rd\nx', JSON.stringify(pw));
   const cats = r.entries.map((e) => Object.keys(e.content)[0]).sort();
-  check('proctor all categories', cats.join(',') === 'Card,Identity,Login,SecureNote', cats.join(','));
+  check('keyward all categories', cats.join(',') === 'Card,Identity,Login,SecureNote', cats.join(','));
 }
 
 // Bitwarden JSON round-trip: same count, categories preserved.

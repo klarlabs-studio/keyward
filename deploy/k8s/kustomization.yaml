@@ -3,7 +3,7 @@ kind: Kustomization
 
 # Apply the whole set with:  kubectl apply -k deploy/k8s
 # (or apply the files individually with kubectl apply -f deploy/k8s/).
-namespace: proctor
+namespace: keyward
 
 resources:
   - namespace.yaml
@@ -14,7 +14,7 @@ resources:
   - hpa.yaml
   - networkpolicy.yaml
   - pdb.yaml
-# NOTE: no Secret manifest is committed — create the `proctor-sync-secrets`
+# NOTE: no Secret manifest is committed — create the `keyward-sync-secrets`
 # Secret out-of-band with `kubectl create secret` (see deploy/README.md § Secrets).
 
 # `labels` with includeSelectors:false — deliberately NOT the older
@@ -23,7 +23,7 @@ resources:
 #
 #   1. It broke ACME TLS issuance. commonLabels rewrote the
 #      allow-ingress-to-acme-solver policy's podSelector to also require
-#      `app.kubernetes.io/part-of: proctor`. cert-manager's HTTP-01 solver pods
+#      `app.kubernetes.io/part-of: keyward`. cert-manager's HTTP-01 solver pods
 #      are created by cert-manager and carry only their own
 #      `acme.cert-manager.io/*` labels, so the policy matched nothing, stayed
 #      inert, and the challenge failed with a 502 (observed on a live cluster).
@@ -37,12 +37,12 @@ resources:
 # has no business in a selector.
 labels:
   - pairs:
-      app.kubernetes.io/part-of: proctor
+      app.kubernetes.io/part-of: keyward
     includeSelectors: false
 
 # Override the image tag without editing deployment.yaml, e.g.:
 #   kubectl kustomize deploy/k8s | kubectl apply -f -
 # or set here:
 images:
-  - name: ghcr.io/klarlabs-studio/proctor-sync-server
+  - name: ghcr.io/klarlabs-studio/keyward-sync-server
     newTag: "1.42.0"

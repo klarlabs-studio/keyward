@@ -1,5 +1,5 @@
 // Exporters that serialize the vault to a portable file — so there's no lock-in.
-// Native Proctor JSON is full-fidelity; Bitwarden JSON round-trips back through
+// Native Keyward JSON is full-fidelity; Bitwarden JSON round-trips back through
 // our own importer and into Bitwarden; CSV is a lossy, universal fallback.
 //
 // Exports contain secrets in PLAINTEXT by design (that is the point of an
@@ -8,7 +8,7 @@
 import type { Entry } from './passbook-types';
 import { categoryOf } from './passbook-types';
 
-export type ExportFormat = 'proctor' | 'bitwarden' | 'csv';
+export type ExportFormat = 'keyward' | 'bitwarden' | 'csv';
 
 export interface ExportFile {
   filename: string;
@@ -16,9 +16,9 @@ export interface ExportFile {
   content: string;
 }
 
-/** Native, full-fidelity Proctor JSON — the exact entry model. */
-function toProctorJson(entries: Entry[]): string {
-  return JSON.stringify({ version: 1, exported: 'proctor-passbook', entries }, null, 2);
+/** Native, full-fidelity Keyward JSON — the exact entry model. */
+function toKeywardJson(entries: Entry[]): string {
+  return JSON.stringify({ version: 1, exported: 'keyward-passbook', entries }, null, 2);
 }
 
 /** Bitwarden-compatible JSON (unencrypted export shape), for portability. */
@@ -112,21 +112,21 @@ function toCsv(entries: Entry[]): string {
 
 export function buildExport(entries: Entry[], format: ExportFormat): ExportFile {
   switch (format) {
-    case 'proctor':
+    case 'keyward':
       return {
-        filename: 'proctor-passbook-export.json',
+        filename: 'keyward-passbook-export.json',
         mime: 'application/json',
-        content: toProctorJson(entries),
+        content: toKeywardJson(entries),
       };
     case 'bitwarden':
       return {
-        filename: 'proctor-passbook-bitwarden.json',
+        filename: 'keyward-passbook-bitwarden.json',
         mime: 'application/json',
         content: toBitwardenJson(entries),
       };
     case 'csv':
       return {
-        filename: 'proctor-passbook-export.csv',
+        filename: 'keyward-passbook-export.csv',
         mime: 'text/csv',
         content: toCsv(entries),
       };

@@ -5,7 +5,7 @@
 //! their attributes, not an identity. Secret-bearing fields zeroize on drop.
 
 use crate::PassbookError;
-use proctor_crypto::random_array;
+use keyward_crypto::random_array;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 

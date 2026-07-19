@@ -2258,7 +2258,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proctor-passbook-desktop"
+name = "keyward-passbook-desktop"
 version = "1.19.0"
 dependencies = [
  "serde",

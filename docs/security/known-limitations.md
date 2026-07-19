@@ -1,4 +1,4 @@
-# Proctor — Known Limitations
+# Keyward — Known Limitations
 
 > Read this first. It is the honest list. Every item is something we already
 > believe is true; a reviewer's job is to tell us which ones are *worse* than we
@@ -75,7 +75,7 @@ public key, the recipient's public key, the `member_id`, or the group id, and
 the salt is `None`.
 
 The reference construction for this shape — libsodium's `crypto_box_seal` —
-binds both the ephemeral and recipient public keys into the derivation. Proctor
+binds both the ephemeral and recipient public keys into the derivation. Keyward
 does not. Consequences we can see:
 
 - A wrap is not cryptographically bound to *which* recipient it was made for.
@@ -520,7 +520,7 @@ What does not exist:
 - **No property-based testing** of the rotation/reconcile state machine.
 - **No constant-time analysis** beyond the Stripe comparison. Token resolution
   compares hashes with `==` (`crates/sync/src/accounts.rs:290`), and the
-  `PROCTOR_SYNC_TOKENS` fallback is a plaintext `HashMap` lookup
+  `KEYWARD_SYNC_TOKENS` fallback is a plaintext `HashMap` lookup
   (`crates/sync-server/src/main.rs:592`). Both operate on 128-bit random
   preimages, so we assess the risk as low — but it has not been analyzed.
 
@@ -549,7 +549,7 @@ What does not exist:
   CSPRNG. Compounds §4.
 - **Any Member can overwrite `/keys` and `/vault`.** Those handlers gate on
   membership, not role (`crates/sync-server/src/main.rs:1339-1342`).
-- **`PROCTOR_SYNC_TOKENS`** accepts plaintext `token:account` pairs from an
+- **`KEYWARD_SYNC_TOKENS`** accepts plaintext `token:account` pairs from an
   environment variable and bypasses token hashing entirely
   (`crates/sync-server/src/main.rs:516-523, 587-596`). Intended for tests; it
   ships in the production binary.

@@ -13,20 +13,20 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 
 function downloadKit(): void {
   const body = [
-    'Proctor Passbook — Emergency Kit',
+    'Keyward Passbook — Emergency Kit',
     '',
     'Your Secret Key (keep this safe and offline):',
     props.secretKey,
     '',
     'You need this Secret Key together with your master password to unlock your',
-    'vault on a new device. Proctor cannot recover it for you.',
+    'vault on a new device. Keyward cannot recover it for you.',
     '',
     `Generated: ${new Date().toISOString()}`,
   ].join('\n');
   const url = URL.createObjectURL(new Blob([body], { type: 'text/plain' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'proctor-passbook-emergency-kit.txt';
+  a.download = 'keyward-passbook-emergency-kit.txt';
   a.click();
   URL.revokeObjectURL(url);
 }

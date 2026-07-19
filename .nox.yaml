@@ -1,7 +1,7 @@
-# nox configuration for Proctor.
+# nox configuration for Keyward.
 #
 # Without this file no plugins run at all — the core scan is deterministic and
-# offline, and plugin analyzers only join the pipeline when listed here. Proctor
+# offline, and plugin analyzers only join the pipeline when listed here. Keyward
 # had no .nox.yaml, so every scan before this one was core rules only.
 plugins:
   required:
@@ -25,7 +25,7 @@ plugins:
     #
     # MEASURED VALUE ON THIS REPO: currently zero. red-team matches 7 hardcoded
     # rule combinations (THREAT-001+004, THREAT-001+005, TAINT-001, TAINT-002,
-    # TAINT-003+THREAT-004, KRUNT-002+003, EXPLAIN-001+THREAT-001). Proctor's
+    # TAINT-003+THREAT-004, KRUNT-002+003, EXPLAIN-001+THREAT-001). Keyward's
     # findings include TAINT-006 and no THREAT-*/KRUNT-* pairs, so no chain
     # fires. Kept enabled because it is passive and free to run, and it starts
     # paying off the moment a matching pair appears -- but do not read a silent

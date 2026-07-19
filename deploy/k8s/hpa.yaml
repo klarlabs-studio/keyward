@@ -6,17 +6,17 @@
 # ("unable to fetch metrics from resource metrics API"), so the app never scales
 # and the failure is silent unless you look at the HPA. Most managed clusters
 # (GKE/EKS/AKS) ship metrics-server; a bare cluster does not. Verify with:
-#   kubectl top pods -n proctor
+#   kubectl top pods -n keyward
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: proctor-sync-server
-  namespace: proctor
+  name: keyward-sync-server
+  namespace: keyward
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: proctor-sync-server
+    name: keyward-sync-server
   minReplicas: 2
   maxReplicas: 10
   metrics:

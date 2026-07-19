@@ -1,6 +1,6 @@
 [package]
-name = "proctor-broker"
-description = "Proctor AI credential broker — the security model: capabilities, origin-binding, propose-not-commit, policy tiers, hash-chained audit."
+name = "keyward-broker"
+description = "Keyward AI credential broker — the security model: capabilities, origin-binding, propose-not-commit, policy tiers, hash-chained audit."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

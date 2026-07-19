@@ -20,7 +20,7 @@
 //!   the append-only JSON-lines file adapter.
 //!
 //! Note also the ports the broker only *names* rather than owns: the **Minter**
-//! (short-lived scoped tokens) and **Executor** are traits in `proctor-mint`;
+//! (short-lived scoped tokens) and **Executor** are traits in `keyward-mint`;
 //! the broker merely selects the [`crate::Primitive::Minted`] outcome and the
 //! executing host wires the concrete minter. See the context map.
 

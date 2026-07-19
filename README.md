@@ -1,15 +1,15 @@
-# Proctor
+# Keyward
 
 ![security grade A](docs/security/badge.svg)
 
 **The credential manager that's as polished as 1Password, as open as Bitwarden, and as private as you want it — because you decide where your vault lives.**
 
-Proctor is an **open-source, B2C credential manager** (passwords + passkeys + TOTP + email aliases + identities) built to close the two gaps the market leaves open:
+Keyward is an **open-source, B2C credential manager** (passwords + passkeys + TOTP + email aliases + identities) built to close the two gaps the market leaves open:
 
 - The best UX (**1Password**) is proprietary, has no free tier, and just got more expensive.
 - The best open option (**Bitwarden**) has a degraded browser extension and weak connectivity.
 
-Proctor refuses that trade-off, and adds three things no competitor offers together:
+Keyward refuses that trade-off, and adds three things no competitor offers together:
 
 - 🔐 **Choosable & migratable trust model** — keep your vault **on-device only**, in our **managed cloud**, on your **own self-hosted server**, or in **your own storage** (iCloud/Dropbox/WebDAV) — and **migrate between them seamlessly**, with no destructive re-encryption.
 - 👨‍👩‍👧 **Family-first sharing** — private + shared vaults, guest sharing, account recovery, mixed-skill onboarding.
@@ -34,16 +34,16 @@ switch — all driveable from Claude Code over MCP, all tested.
 
 ```
 crates/
-  crypto/   proctor-crypto  shared cryptographic kernel (Argon2id KDF + XChaCha20-Poly1305
+  crypto/   keyward-crypto  shared cryptographic kernel (Argon2id KDF + XChaCha20-Poly1305
                             AEAD + CSPRNG) — used by both vault contexts
-  vault/    proctor-vault   encrypted vault (on the shared kernel), file-backed — PROTOTYPE
-  broker/   proctor-broker  the security model: capabilities, origin-binding,
+  vault/    keyward-vault   encrypted vault (on the shared kernel), file-backed — PROTOTYPE
+  broker/   keyward-broker  the security model: capabilities, origin-binding,
                             propose-not-commit, risk-tiered policy, hash-chained audit
-  mint/     proctor-mint    mint short-lived scoped tokens + secretless execution
+  mint/     keyward-mint    mint short-lived scoped tokens + secretless execution
                             (MockMinter/MockExecutor + real GitHub App minter & executor)
-  profiles/ proctor-profiles external, pluggable provider profiles (TOML) — add a
+  profiles/ keyward-profiles external, pluggable provider profiles (TOML) — add a
                             provider by dropping a file; no recompile
-  passbook/ proctor-passbook consumer credential manager (Phase A): rich item model,
+  passbook/ keyward-passbook consumer credential manager (Phase A): rich item model,
                             TOTP (RFC 6238), Secret Key (2SKD), Watchtower,
                             family sharing (X25519 sealed-box), password generator +
                             HIBP k-anonymity breach check — PROTOTYPE
@@ -52,11 +52,11 @@ crates/
                             + `passbook bridge` — the browser native-messaging host
   passbook-wasm/ passbook-wasm  wasm-bindgen surface so the vault crypto/TOTP/Watchtower
                             runs client-side in the browser
-  mcp/      proctor-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
-  cli/      proctor         manage the vault (init/add/list) + list profiles + demo
-  sync/     proctor-sync    zero-knowledge sync domain: versioned push/pull of an
+  mcp/      keyward-mcp     the broker+vault+minting+execution as an MCP server (stdio) via rmcp
+  cli/      keyward         manage the vault (init/add/list) + list profiles + demo
+  sync/     keyward-sync    zero-knowledge sync domain: versioned push/pull of an
                             opaque sealed blob (SyncStore port + Memory/File adapters)
-  sync-server/ proctor-sync-server  tiny HTTP server for E2E sync — accounts +
+  sync-server/ keyward-sync-server  tiny HTTP server for E2E sync — accounts +
                             per-device tokens (stored as SHA-256 hashes) with
                             device list/revoke + CORS; stores only ciphertext
 ```
@@ -74,14 +74,14 @@ The consumer product (**Phase A**, the 1Password equivalent) also ships:
   the browser and all crypto runs in WebAssembly. Sealed with a device **Secret Key
   (2SKD)** + master password, with a one-time **Emergency Kit** and an add-a-device
   flow. **Import** from Bitwarden (JSON) or LastPass/1Password/CSV and **export**
-  (Proctor/Bitwarden JSON, CSV) — no lock-in.
+  (Keyward/Bitwarden JSON, CSV) — no lock-in.
   `cd app && npm install && npm run build:wasm && npm run dev`.
 - **[`extension/`](extension/)** — a Manifest V3 browser extension for autofill,
   wired to the real vault over Chrome **native messaging** (`passbook bridge`) with
   a demo fallback. The `list` reply carries no secrets; passwords cross only at
   fill time, origin-bound. See [`extension/native-host/`](extension/native-host/).
 
-The vault crypto core (`proctor-passbook`) compiles to WebAssembly so the same
+The vault crypto core (`keyward-passbook`) compiles to WebAssembly so the same
 tested Rust runs in the CLI, the MCP server, and the browser.
 
 **Architecture** follows Domain-Driven Design + hexagonal (ports & adapters): two
@@ -91,13 +91,13 @@ core, and I/O behind ports. See [context map](docs/architecture/context-map.md),
 [ADR-0003](docs/architecture/ADR-0003-ddd-hexagonal-structure.md).
 
 New providers are **external config**, not code. Drop a `<id>.toml` into
-`$PROCTOR_PROFILES` (see [`profiles/`](profiles/)) and `proctor profiles` picks it
+`$KEYWARD_PROFILES` (see [`profiles/`](profiles/)) and `keyward profiles` picks it
 up — GitLab, Azure, Cloudflare, whatever arises. See
 [ADR-0002](docs/architecture/ADR-0002-scaling-credential-use.md).
 
 ```bash
 cargo test --workspace              # 37 tests: origin-binding, step-up, propose-not-commit exec, secretless no-leak, audit chain…
-cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy attack, etc.
+cargo run -p keyward-cli -- demo    # watch the model block a confused-deputy attack, etc.
 ```
 
 ### Quickstart — dogfood it in Claude Code
@@ -105,18 +105,18 @@ cargo run -p proctor-cli -- demo    # watch the model block a confused-deputy at
 ```bash
 # 1. Build & create a vault
 cargo install --path crates/cli --path crates/mcp
-export PROCTOR_VAULT=~/.proctor/vault.json PROCTOR_MASTER='your master secret'
-mkdir -p ~/.proctor && proctor init
-# vault-read (default): store the token; Proctor reads and uses it directly
-proctor add itm_github "GitHub token" github.com "$(cat token.txt)"
+export KEYWARD_VAULT=~/.keyward/vault.json KEYWARD_MASTER='your master secret'
+mkdir -p ~/.keyward && keyward init
+# vault-read (default): store the token; Keyward reads and uses it directly
+keyward add itm_github "GitHub token" github.com "$(cat token.txt)"
 # or minting: store an App key and pass mintable=true
-# proctor add itm_ghapp "GitHub App" github.com "$(cat app.pem)" true apikey
+# keyward add itm_ghapp "GitHub App" github.com "$(cat app.pem)" true apikey
 
 # 2. Register the MCP server (it reads the same env)
-claude mcp add proctor -- proctor-mcp
+claude mcp add keyward -- keyward-mcp
 
 # 3. (optional) real GitHub App minting instead of the mock:
-#    export PROCTOR_GH_APP_ID=... PROCTOR_GH_INSTALLATION_ID=...
+#    export KEYWARD_GH_APP_ID=... KEYWARD_GH_INSTALLATION_ID=...
 ```
 
 The server exposes `list_credentials`, `use_credential`, `audit_log`. On an
@@ -165,11 +165,11 @@ license, default copyright reserves all rights).
 Open-core in practice: the tool is public and AGPL. The **managed cloud
 deployment** — cluster topology, ingress, RollOps config, ops runbooks — is a
 separate private repository. The server *code* is not private, and self-hosting
-needs no permission: `proctor-sync-server` runs file-backed with no Postgres and
+needs no permission: `keyward-sync-server` runs file-backed with no Postgres and
 no Stripe configured, which is the free self-host path.
 
 AGPL rather than GPL on the clients too, one consequence worth stating plainly:
-the crates (`proctor-crypto`, `proctor-passbook`, …) cannot be embedded in
+the crates (`keyward-crypto`, `keyward-passbook`, …) cannot be embedded in
 proprietary software. For a credential manager that is intended. If any of them
 should be reusable by others, that crate wants a permissive licence instead, and
 that is a per-crate decision this file does not foreclose.

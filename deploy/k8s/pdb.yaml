@@ -12,13 +12,13 @@
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: proctor-sync-server
-  namespace: proctor
+  name: keyward-sync-server
+  namespace: keyward
   labels:
-    app.kubernetes.io/name: proctor-sync-server
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/name: keyward-sync-server
+    app.kubernetes.io/part-of: keyward
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: proctor-sync-server
+      app.kubernetes.io/name: keyward-sync-server

@@ -154,7 +154,7 @@ impl AuditLog {
             if let Ok(line) = serde_json::to_string(&entry) {
                 if let Err(e) = sink.append_line(&line) {
                     self.write_failed = true;
-                    eprintln!("proctor: audit append failed: {e}");
+                    eprintln!("keyward: audit append failed: {e}");
                 }
             }
         }
@@ -197,17 +197,17 @@ mod tests {
     #[test]
     fn signed_chain_is_forgery_resistant() {
         let mut log = AuditLog::with_file_signed(
-            std::env::temp_dir().join("proctor-signed-audit.jsonl"),
+            std::env::temp_dir().join("keyward-signed-audit.jsonl"),
             b"secret-audit-key".to_vec(),
         );
-        let _ = std::fs::remove_file(std::env::temp_dir().join("proctor-signed-audit.jsonl"));
+        let _ = std::fs::remove_file(std::env::temp_dir().join("keyward-signed-audit.jsonl"));
         log.append("itm", "github.com", "Read", "ALLOW");
         log.append("itm", "bank.com", "MoveMoney", "STEPUP");
         assert!(log.verify());
         // Re-signing a forged entry needs the key — verifying with a DIFFERENT key fails.
         log.key = Some(b"attacker-guessed-key".to_vec());
         assert!(!log.verify(), "chain verified under the wrong key");
-        let _ = std::fs::remove_file(std::env::temp_dir().join("proctor-signed-audit.jsonl"));
+        let _ = std::fs::remove_file(std::env::temp_dir().join("keyward-signed-audit.jsonl"));
     }
 
     #[test]
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn file_sink_appends_json_lines() {
-        let path = std::env::temp_dir().join(format!("proctor-audit-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!("keyward-audit-{}.jsonl", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let mut log = AuditLog::with_file(path.clone());
         log.append("itm_a", "github.com", "Read", "ALLOW");

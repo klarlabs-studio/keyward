@@ -1,7 +1,7 @@
-# Proctor Passbook — Browser Extension (Prototype)
+# Keyward Passbook — Browser Extension (Prototype)
 
 A Manifest V3 browser extension that autofills login credentials into web pages,
-styled to match the Proctor Passbook brand.
+styled to match the Keyward Passbook brand.
 
 > **This is a PROTOTYPE.** It now reads real vault items from a local **native
 > messaging bridge** (`passbook bridge`), but the host wrapper unlocks the vault
@@ -33,7 +33,7 @@ styled to match the Proctor Passbook brand.
 2. Toggle **Developer mode** on (top-right).
 3. Click **Load unpacked**.
 4. Select this `extension/` directory.
-5. Pin **Proctor Passbook** from the extensions menu, then open any site with a
+5. Pin **Keyward Passbook** from the extensions menu, then open any site with a
    login form (e.g. `github.com/login`) and click the icon.
 
 To pick up code changes, click the **reload** (↻) button on the extension card.
@@ -61,7 +61,7 @@ namespace but aliases `chrome.*`, so these scripts work as-is.
 popup.js  ──(runtime.sendMessage {type:"native", payload:{type:"list", origin}})──►  background.js
                                                                                           │
                           chrome.runtime.sendNativeMessage(                              │
-                            "com.klarlabs.proctor.passbook", …)                          ▼
+                            "com.klarlabs.keyward.passbook", …)                          ▼
                                                                               native host: passbook bridge
                                                                                           │
                               {items:[{id,title,username,url,hasTotp}]}  (no secrets)     ▼
@@ -119,7 +119,7 @@ content.js  ──(sendResponse {ok, filledUsername, filledPassword, origin})─
 | `activeTab` | Interact with the tab the user is currently on when they click the icon |
 | `storage` | Reserved for preferences (no secrets are stored) |
 | `scripting` | Inject `content.js` into pages that loaded before the extension so fill still works |
-| `nativeMessaging` | Talk to the local Passbook bridge (`com.klarlabs.proctor.passbook`) for `list`/`get` |
+| `nativeMessaging` | Talk to the local Passbook bridge (`com.klarlabs.keyward.passbook`) for `list`/`get` |
 | `host_permissions: ["<all_urls>"]` | Autofill must work on any login page the user visits |
 
 ## Prototype note

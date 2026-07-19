@@ -478,7 +478,7 @@
       "rule_id": "CONT-001",
       "file_path": "demo/Dockerfile",
       "severity": "medium",
-      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose KEYWARD_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
       "created_at": "2026-07-17T11:58:18.804646Z"
     },
     {
@@ -486,7 +486,7 @@
       "rule_id": "CONT-001",
       "file_path": "demo/Dockerfile",
       "severity": "medium",
-      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose KEYWARD_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
       "created_at": "2026-07-17T11:58:18.804646Z"
     },
     {
@@ -494,7 +494,7 @@
       "rule_id": "DATA-001",
       "file_path": "demo/seed.sh",
       "severity": "medium",
-      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose KEYWARD_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
       "created_at": "2026-07-17T11:58:18.804646Z"
     },
     {
@@ -502,7 +502,7 @@
       "rule_id": "DATA-001",
       "file_path": "demo/seed.sh",
       "severity": "medium",
-      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose KEYWARD_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
       "created_at": "2026-07-17T11:58:18.804646Z"
     },
     {
@@ -510,7 +510,7 @@
       "rule_id": "DATA-005",
       "file_path": "demo/docker-compose.demo.yml",
       "severity": "medium",
-      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose PROCTOR_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
+      "reason": "All in the isolated demo/ environment (never shipped to production): seed.sh uses example.com demo emails; docker-compose KEYWARD_SYNC_ADDR 0.0.0.0 is bind-all (not a public IP); the demo Dockerfile's rust/debian base images are unpinned — digest-pinning is left to a real deployment to keep the throwaway demo simple.",
       "created_at": "2026-07-17T11:58:18.804646Z"
     },
     {
@@ -630,7 +630,7 @@
       "rule_id": "DATA-005",
       "file_path": "deploy/Dockerfile",
       "severity": "medium",
-      "reason": "False positive: deploy/Dockerfile sets PROCTOR_SYNC_ADDR=0.0.0.0:8787 — 0.0.0.0 is the intended bind-all address for a containerized server (behind the k8s ingress), not a hardcoded public IP or PII.",
+      "reason": "False positive: deploy/Dockerfile sets KEYWARD_SYNC_ADDR=0.0.0.0:8787 — 0.0.0.0 is the intended bind-all address for a containerized server (behind the k8s ingress), not a hardcoded public IP or PII.",
       "created_at": "2026-07-18T07:23:20.694309Z"
     },
     {
@@ -646,7 +646,7 @@
       "rule_id": "IAC-254",
       "file_path": "deploy/docker-compose.pg.yml",
       "severity": "critical",
-      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'keyward:keyward' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with KEYWARD_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
       "created_at": "2026-07-18T08:18:05.747181Z"
     },
     {
@@ -654,7 +654,7 @@
       "rule_id": "IAC-351",
       "file_path": "deploy/docker-compose.pg.yml",
       "severity": "critical",
-      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'keyward:keyward' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with KEYWARD_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
       "created_at": "2026-07-18T08:18:05.747181Z"
     },
     {
@@ -662,7 +662,7 @@
       "rule_id": "SEC-073",
       "file_path": "deploy/docker-compose.pg.yml",
       "severity": "critical",
-      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'keyward:keyward' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with KEYWARD_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
       "created_at": "2026-07-18T08:18:05.747181Z"
     },
     {
@@ -670,7 +670,7 @@
       "rule_id": "SEC-430",
       "file_path": "deploy/docker-compose.pg.yml",
       "severity": "high",
-      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'keyward:keyward' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with KEYWARD_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
       "created_at": "2026-07-18T08:18:05.747181Z"
     },
     {
@@ -678,7 +678,7 @@
       "rule_id": "DATA-005",
       "file_path": "deploy/docker-compose.pg.yml",
       "severity": "medium",
-      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'proctor:proctor' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with PROCTOR_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
+      "reason": "deploy/docker-compose.pg.yml is a LOCAL-DEV convenience file: throwaway 'keyward:keyward' Postgres creds guard an ephemeral local container with no real data — not a production secret (nothing to rotate). Production runs from deploy/k8s against a managed DB with KEYWARD_SYNC_PG injected from a k8s Secret (documented in the file header + ADR-0005). The 0.0.0.0:8787 is the intended container bind address, not a public IP.",
       "created_at": "2026-07-18T08:18:05.747181Z"
     },
     {

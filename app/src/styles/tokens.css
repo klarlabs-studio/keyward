@@ -1,4 +1,4 @@
-/* Proctor Passbook design tokens — the teal/emerald "Passbook" identity,
+/* Keyward Passbook design tokens — the teal/emerald "Passbook" identity,
    theme-aware. prefers-color-scheme is the default signal; the in-app theme
    toggle stamps data-theme on <html> and must win in both directions. */
 

@@ -1,4 +1,4 @@
-// Cloud-sync client for the Proctor Passbook vault. The server is zero-knowledge:
+// Cloud-sync client for the Keyward Passbook vault. The server is zero-knowledge:
 // it only ever stores the opaque sealed-vault blob (the exact localStorage
 // string), never plaintext. This module owns the sync configuration and the
 // HTTP contract with the sync server; the store decides *when* to push/pull.

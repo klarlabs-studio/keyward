@@ -4,7 +4,7 @@
 //! [`VaultRepository`]/[`Clock`] traits — swapping storage (a server, a keychain)
 //! means writing another adapter, not touching the domain.
 
-use proctor_passbook::{Clock, PassbookError, SealedVault, VaultRepository};
+use keyward_passbook::{Clock, PassbookError, SealedVault, VaultRepository};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 

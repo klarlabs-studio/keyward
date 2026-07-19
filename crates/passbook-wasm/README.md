@@ -1,14 +1,14 @@
 # passbook-wasm
 
-WebAssembly bindings for **Proctor Passbook**, so the vault crypto, TOTP, and
+WebAssembly bindings for **Keyward Passbook**, so the vault crypto, TOTP, and
 Watchtower security analysis can run entirely client-side in a browser — no
 server ever sees the master password or the plaintext entries.
 
-This crate is a thin [`wasm-bindgen`] layer over [`proctor-passbook`]. The public
+This crate is a thin [`wasm-bindgen`] layer over [`keyward-passbook`]. The public
 API takes and returns **JSON strings**, which keeps the JS interop boundary simple
 and framework-agnostic.
 
-> **Security note:** this exposes the *prototype* crypto in `proctor-passbook`
+> **Security note:** this exposes the *prototype* crypto in `keyward-passbook`
 > (Argon2id, XChaCha20-Poly1305, optional Secret Key). It needs a formal review
 > before real use. The browser prototype is **master-password only**; wiring the
 > device Secret Key (2SKD) through these bindings is a planned follow-up.
@@ -135,4 +135,4 @@ page over HTTP (e.g. `python3 -m http.server`) rather than opening it via
 
 [`wasm-bindgen`]: https://rustwasm.github.io/wasm-bindgen/
 [`wasm-pack`]: https://rustwasm.github.io/wasm-pack/
-[`proctor-passbook`]: ../passbook
+[`keyward-passbook`]: ../passbook

@@ -9,7 +9,7 @@
 The wedge (ADR-0001) performs actions on the agent's behalf so the credential
 never reaches the model. v1.0.0 does this for one provider over HTTP (GitHub). The
 open question: **how does this scale to AWS, GCP, Hetzner, Terraform, kubectl, and
-the long tail without turning Proctor into an ever-growing catalog of per-vendor
+the long tail without turning Keyward into an ever-growing catalog of per-vendor
 integrations?**
 
 Naïvely it looks O(N): a bespoke *minter* and a bespoke *executor* per provider.
@@ -19,7 +19,7 @@ independent axes, grounded in how the industry already solves each one.
 
 ## Decision
 
-**Proctor is a policy engine + a generic injector + a declarative profile
+**Keyward is a policy engine + a generic injector + a declarative profile
 registry — not a collection of vendor integrations.** The core does not grow with
 the number of providers. Three collapses:
 
@@ -78,7 +78,7 @@ the credential, reusing ADR-0001's reversibility × consequence machinery on arg
   step-up / propose-not-commit. Unknown ≠ broken; unknown = asks a human. Coverage
   is never blocked on classification.
 - **User allowlist patterns**: e.g. "`aws * ls|describe*|get*` unattended;
-  everything else asks." Zero Proctor knowledge required.
+  everything else asks." Zero Keyward knowledge required.
 - **Optional profiles** (shipped + community) add auto-allow for known-read
   invocations. Convenience scales with the registry; safety does not depend on it.
 
@@ -89,12 +89,12 @@ like Homebrew formulae. The core carries the engine and a small seed set; the lo
 tail lives in the registry and is safe to be incomplete (missing = gated).
 
 **Implemented (v1.1.0):** profiles are **external TOML files** loaded at runtime
-from `$PROCTOR_PROFILES` (or `~/.proctor/profiles`) by `proctor-profiles`. Adding a
+from `$KEYWARD_PROFILES` (or `~/.keyward/profiles`) by `keyward-profiles`. Adding a
 provider — GitLab, Azure, Cloudflare — is dropping a `<id>.toml` file; **no
 recompile**. Each profile declares the env mapping (`env_var` or `env_map`) and
 argv risk patterns (`read_patterns` / `mutate_patterns`, default-gate when
 unmatched). Seed profiles ship in [`profiles/`](../../profiles/) (aws, azure,
-github, gitlab, hetzner). `proctor profiles` lists what's loaded. See
+github, gitlab, hetzner). `keyward profiles` lists what's loaded. See
 [`profiles/README.md`](../../profiles/README.md).
 
 ## Security model — the load-bearing caveat
@@ -140,7 +140,7 @@ this explicit per credential/context, not paper over it.
 ## Consequences
 
 - The core stays provider-agnostic; what grows is a declarative registry, not code
-  Proctor maintains.
+  Keyward maintains.
 - Safety scales for free (default-gate); convenience scales with profiles.
 - The exec path's security is explicitly bounded by credential TTL + OS isolation
   + command gating — documented, not assumed.
@@ -156,8 +156,8 @@ this explicit per credential/context, not paper over it.
 2. ✅ **Seed profiles** (v1.1.0) — external TOML: aws, azure, github, gitlab,
    hetzner; add a provider by dropping a file.
 3. ✅ **Standard protocol minters** (v1.4.0) — RFC 8693 token-exchange minter
-   (`proctor-mint::exchange`), the mechanism behind OIDC WIF / generic STS, reusing
-   the `Minter` trait; wired via `PROCTOR_STS_ENDPOINT`. *(AWS AssumeRoleWithWebIdentity
+   (`keyward-mint::exchange`), the mechanism behind OIDC WIF / generic STS, reusing
+   the `Minter` trait; wired via `KEYWARD_STS_ENDPOINT`. *(AWS AssumeRoleWithWebIdentity
    multi-field output is a later variant.)*
 4. ✅ **OS isolation backend** (v1.3.0) + **prefer-minted short-TTL on exec path**
    (v1.4.0) — the full posture. `Isolation` (none / bubblewrap / container) contains

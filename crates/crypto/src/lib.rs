@@ -1,8 +1,8 @@
-//! Proctor shared cryptographic kernel.
+//! Keyward shared cryptographic kernel.
 //!
 //! In DDD terms this is a **shared kernel**: the small set of cryptographic
-//! primitives that both vault bounded contexts — the developer `proctor-vault`
-//! and the consumer `proctor-passbook` — agree to depend on, so the construction
+//! primitives that both vault bounded contexts — the developer `keyward-vault`
+//! and the consumer `keyward-passbook` — agree to depend on, so the construction
 //! is defined once and identically. Each context composes these primitives into
 //! its own sealing service (Passbook additionally folds in a device Secret Key
 //! for 2SKD); the primitives themselves make no policy decisions.

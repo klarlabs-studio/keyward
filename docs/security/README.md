@@ -1,7 +1,7 @@
-# Proctor — Security Review Package
+# Keyward — Security Review Package
 
 > **Status:** prepared for an external review that has **not yet happened.**
-> Nothing in this directory should be read as evidence that Proctor's
+> Nothing in this directory should be read as evidence that Keyward's
 > cryptography has been audited. It has not. The sharing module says so about
 > itself (`crates/passbook/src/sharing.rs:23-24`: *"prototype crypto of the
 > *shape*. Needs a formal review before real use"*), and this package exists to
@@ -9,7 +9,7 @@
 
 ## What this is
 
-A self-contained briefing for a cryptography reviewer engaging with Proctor's
+A self-contained briefing for a cryptography reviewer engaging with Keyward's
 consumer password manager (**Passbook**), its **family sharing** protocol, and
 the **zero-knowledge relay** that carries them. It is written from the code, not
 from the design intent — where the two diverge, the divergence is recorded.
@@ -25,9 +25,9 @@ from the design intent — where the two diverge, the divergence is recorded.
 
 There is also an **older, separate** document in this directory,
 [`THREAT-MODEL.md`](THREAT-MODEL.md), which covers a *different* bounded context:
-the AI **credential broker** (`proctor-broker` / `proctor-mcp`). It is not part of
+the AI **credential broker** (`keyward-broker` / `keyward-mcp`). It is not part of
 this engagement and is not superseded by these files. Where the two overlap
-(shared `proctor-crypto` kernel) this package is the more current description.
+(shared `keyward-crypto` kernel) this package is the more current description.
 
 ## How to use it
 
@@ -47,7 +47,7 @@ this engagement and is not superseded by these files. Where the two overlap
 > `THREAT-MODEL.md` (the credential-broker document, described below). The
 > Passbook/sharing threat model therefore carries the longer name.
 
-**If you are a Proctor contributor:** these documents are normative for what we
+**If you are a Keyward contributor:** these documents are normative for what we
 claim publicly. If you change a construction, a parameter, a label, or a wire
 format, update `cryptography-spec.md` in the same change. If you find a weakness,
 add it to `known-limitations.md` rather than to a private issue.

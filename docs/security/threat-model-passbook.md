@@ -1,4 +1,4 @@
-# Proctor — Threat Model (Passbook, family sharing, and the relay)
+# Keyward — Threat Model (Passbook, family sharing, and the relay)
 
 > **Filename note.** This document would naturally be `threat-model.md`, but on a
 > case-insensitive filesystem that collides with the pre-existing

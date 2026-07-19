@@ -1,7 +1,7 @@
 {
-  "name": "com.klarlabs.proctor.passbook",
-  "description": "Proctor Passbook native bridge",
-  "path": "/ABSOLUTE/PATH/TO/proctor-passbook-bridge.sh",
+  "name": "com.klarlabs.keyward.passbook",
+  "description": "Keyward Passbook native bridge",
+  "path": "/ABSOLUTE/PATH/TO/keyward-passbook-bridge.sh",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://EXTENSION_ID_HERE/"]
 }

@@ -10,7 +10,7 @@
 # configuration rather than as a placeholder, and nothing fails to remind you.
 #
 # In production the database is a managed instance (Cloud SQL / RDS / a Postgres
-# operator) and the server runs from deploy/k8s with PROCTOR_SYNC_PG set from a
+# operator) and the server runs from deploy/k8s with KEYWARD_SYNC_PG set from a
 # Secret. Zero-knowledge is unchanged: Postgres only ever holds ciphertext blobs,
 # public keys, and hashed tokens/invite codes.
 
@@ -18,16 +18,16 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: proctor
+      POSTGRES_USER: keyward
       # No default. `docker compose` fails with the message below if it is unset,
       # rather than silently starting with a password that is public knowledge in
       # an open-source repository. See deploy/.env.example.
-      POSTGRES_PASSWORD: ${PROCTOR_DB_PASSWORD:?set PROCTOR_DB_PASSWORD (see deploy/.env.example)}
-      POSTGRES_DB: proctor
+      POSTGRES_PASSWORD: ${KEYWARD_DB_PASSWORD:?set KEYWARD_DB_PASSWORD (see deploy/.env.example)}
+      POSTGRES_DB: keyward
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U proctor"]
+      test: ["CMD-SHELL", "pg_isready -U keyward"]
       interval: 3s
       timeout: 3s
       retries: 10
@@ -37,13 +37,13 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     environment:
-      PROCTOR_SYNC_ADDR: 0.0.0.0:8787
+      KEYWARD_SYNC_ADDR: 0.0.0.0:8787
       # The Postgres backend takes precedence over the file store; the server
       # applies the schema on startup.
-      PROCTOR_SYNC_PG: postgres://proctor:${PROCTOR_DB_PASSWORD:?set PROCTOR_DB_PASSWORD (see deploy/.env.example)}@db:5432/proctor
-      PROCTOR_SYNC_PG_POOL: "8"
-      PROCTOR_SYNC_TOKEN_TTL: "2592000"
-      PROCTOR_SYNC_RATELIMIT_PER_MIN: "30"
+      KEYWARD_SYNC_PG: postgres://keyward:${KEYWARD_DB_PASSWORD:?set KEYWARD_DB_PASSWORD (see deploy/.env.example)}@db:5432/keyward
+      KEYWARD_SYNC_PG_POOL: "8"
+      KEYWARD_SYNC_TOKEN_TTL: "2592000"
+      KEYWARD_SYNC_RATELIMIT_PER_MIN: "30"
     ports:
       - "8787:8787"
     depends_on:

@@ -1,50 +1,50 @@
-//! Proctor CLI — manage a real on-disk vault and demonstrate the broker.
+//! Keyward CLI — manage a real on-disk vault and demonstrate the broker.
 //!
 //! Config via env:
-//!   PROCTOR_VAULT   path to the vault file (default: ./proctor-vault.json)
-//!   PROCTOR_MASTER  master secret used to seal/open the vault (required for
+//!   KEYWARD_VAULT   path to the vault file (default: ./keyward-vault.json)
+//!   KEYWARD_MASTER  master secret used to seal/open the vault (required for
 //!                   init/add/list). In production this is master-password +
 //!                   device Secret Key; here a passphrase stands in.
 //!
 //! Commands:
-//!   proctor init
-//!   proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind]
-//!   proctor list
-//!   proctor profiles (list loaded provider profiles from $PROCTOR_PROFILES)
-//!   proctor demo     (in-memory broker walkthrough)
+//!   keyward init
+//!   keyward add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind]
+//!   keyward list
+//!   keyward profiles (list loaded provider profiles from $KEYWARD_PROFILES)
+//!   keyward demo     (in-memory broker walkthrough)
 
-use proctor_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy};
-use proctor_vault::{load_from_file, save_to_file, Item, ItemKind};
+use keyward_broker::{Action, ActionVerb, Broker, Denied, Grant, ItemRef, Mode, Policy};
+use keyward_vault::{load_from_file, save_to_file, Item, ItemKind};
 use std::path::PathBuf;
 use std::process::exit;
 use std::time::SystemTime;
 
 fn vault_path() -> PathBuf {
-    std::env::var("PROCTOR_VAULT")
-        .unwrap_or_else(|_| "proctor-vault.json".to_string())
+    std::env::var("KEYWARD_VAULT")
+        .unwrap_or_else(|_| "keyward-vault.json".to_string())
         .into()
 }
 
 fn master() -> Vec<u8> {
-    // Prefer a file (PROCTOR_MASTER_FILE) so the master isn't exposed via /proc.
-    if let Ok(path) = std::env::var("PROCTOR_MASTER_FILE") {
+    // Prefer a file (KEYWARD_MASTER_FILE) so the master isn't exposed via /proc.
+    if let Ok(path) = std::env::var("KEYWARD_MASTER_FILE") {
         match std::fs::read_to_string(&path) {
             Ok(s) => return s.trim_end_matches(['\n', '\r']).as_bytes().to_vec(),
             Err(e) => {
-                eprintln!("error: cannot read PROCTOR_MASTER_FILE {path}: {e}");
+                eprintln!("error: cannot read KEYWARD_MASTER_FILE {path}: {e}");
                 exit(2);
             }
         }
     }
-    match std::env::var("PROCTOR_MASTER") {
+    match std::env::var("KEYWARD_MASTER") {
         Ok(m) if !m.is_empty() => {
             eprintln!(
-                "note: PROCTOR_MASTER via env is readable via /proc; prefer PROCTOR_MASTER_FILE."
+                "note: KEYWARD_MASTER via env is readable via /proc; prefer KEYWARD_MASTER_FILE."
             );
             m.into_bytes()
         }
         _ => {
-            eprintln!("error: set PROCTOR_MASTER_FILE (preferred) or PROCTOR_MASTER.");
+            eprintln!("error: set KEYWARD_MASTER_FILE (preferred) or KEYWARD_MASTER.");
             exit(2);
         }
     }
@@ -69,25 +69,25 @@ fn main() {
         "profiles" => cmd_profiles(),
         "demo" => demo(),
         other => {
-            eprintln!("unknown command: {other}\nusage: proctor <init|add|list|profiles|demo>");
+            eprintln!("unknown command: {other}\nusage: keyward <init|add|list|profiles|demo>");
             exit(2);
         }
     }
 }
 
 fn profiles_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("PROCTOR_PROFILES") {
+    if let Ok(p) = std::env::var("KEYWARD_PROFILES") {
         return p.into();
     }
     match std::env::var("HOME") {
-        Ok(home) => PathBuf::from(home).join(".proctor/profiles"),
+        Ok(home) => PathBuf::from(home).join(".keyward/profiles"),
         Err(_) => PathBuf::from("profiles"),
     }
 }
 
 fn cmd_profiles() {
     let dir = profiles_dir();
-    let reg = proctor_profiles::Registry::load_dir(&dir).unwrap_or_else(|e| {
+    let reg = keyward_profiles::Registry::load_dir(&dir).unwrap_or_else(|e| {
         eprintln!("failed to load profiles from {}: {e}", dir.display());
         exit(1);
     });
@@ -125,8 +125,8 @@ fn cmd_init() {
 
 fn cmd_add(rest: &[String]) {
     if rest.len() < 4 {
-        eprintln!("usage: proctor add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind] [provider]");
-        eprintln!("  mintable defaults to false — Proctor stores and uses the token directly (no minting).");
+        eprintln!("usage: keyward add <id> <label> <origins-csv> <secret> [mintable:true|false=false] [kind] [provider]");
+        eprintln!("  mintable defaults to false — Keyward stores and uses the token directly (no minting).");
         eprintln!("  provider links the item to a profile (e.g. aws, github) for run_command.");
         exit(2);
     }
@@ -197,7 +197,7 @@ fn cmd_list() {
 }
 
 fn demo() {
-    println!("== Proctor broker demo ==\n");
+    println!("== Keyward broker demo ==\n");
 
     let github = ItemRef {
         id: "itm_github".into(),

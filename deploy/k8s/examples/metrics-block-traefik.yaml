@@ -30,7 +30,7 @@ apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: block-metrics
-  namespace: proctor
+  namespace: keyward
 spec:
   # Only loopback is allowed — i.e. nothing reaching Traefik from outside the
   # node can pass. This is a deny-all in practice; it is expressed as an
@@ -42,11 +42,11 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: proctor-sync-server-metrics
-  namespace: proctor
+  name: keyward-sync-server-metrics
+  namespace: keyward
   annotations:
     # <namespace>-<name>@kubernetescrd is the required reference form.
-    traefik.ingress.kubernetes.io/router.middlewares: proctor-block-metrics@kubernetescrd
+    traefik.ingress.kubernetes.io/router.middlewares: keyward-block-metrics@kubernetescrd
   # NOTE: deliberately NO cert-manager.io/cluster-issuer annotation here. This
   # Ingress reuses the certificate the primary Ingress already obtained; adding
   # the annotation would make cert-manager open a SECOND order for the same
@@ -55,16 +55,16 @@ spec:
   ingressClassName: traefik
   tls:
     - hosts:
-        - proctor.example.com
-      secretName: proctor-sync-tls
+        - keyward.example.com
+      secretName: keyward-sync-tls
   rules:
-    - host: proctor.example.com
+    - host: keyward.example.com
       http:
         paths:
           - path: /metrics
             pathType: Prefix
             backend:
               service:
-                name: proctor-sync-server
+                name: keyward-sync-server
                 port:
                   name: http

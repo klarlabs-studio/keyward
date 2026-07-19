@@ -1,11 +1,11 @@
-//! Proctor Passbook CLI — manage a real on-disk consumer vault from the terminal.
+//! Keyward Passbook CLI — manage a real on-disk consumer vault from the terminal.
 //!
 //! Config via env:
-//!   PROCTOR_PASSBOOK             vault file path (default: ~/.proctor/passbook.json)
-//!   PROCTOR_PASSBOOK_MASTER_FILE master password read from a file (preferred —
+//!   KEYWARD_PASSBOOK             vault file path (default: ~/.keyward/passbook.json)
+//!   KEYWARD_PASSBOOK_MASTER_FILE master password read from a file (preferred —
 //!                                keeps it out of /proc/<pid>/environ)
-//!   PROCTOR_PASSBOOK_MASTER      master password via env (fallback)
-//!   PROCTOR_PASSBOOK_SECRETKEY_FILE  device Secret Key in Emergency-Kit format
+//!   KEYWARD_PASSBOOK_MASTER      master password via env (fallback)
+//!   KEYWARD_PASSBOOK_SECRETKEY_FILE  device Secret Key in Emergency-Kit format
 //!                                (optional — enables 2SKD when present)
 //!
 //! Commands:
@@ -20,7 +20,7 @@
 //!   passbook emergency-kit
 //!   passbook bridge              (Chrome native-messaging host)
 
-use proctor_passbook::{
+use keyward_passbook::{
     generate_passphrase, generate_password, open, seal, totp, watchtower, Category, Clock, Content,
     Entry, Issue, Login, PassbookError, PasswordOptions, SealedVault, SecretKey, VaultRepository,
 };
@@ -90,34 +90,34 @@ fn expand_home(path: &str) -> PathBuf {
 }
 
 fn vault_path() -> PathBuf {
-    match std::env::var("PROCTOR_PASSBOOK") {
+    match std::env::var("KEYWARD_PASSBOOK") {
         Ok(p) if !p.is_empty() => expand_home(&p),
-        _ => expand_home("~/.proctor/passbook.json"),
+        _ => expand_home("~/.keyward/passbook.json"),
     }
 }
 
-/// Read the master password from `PROCTOR_PASSBOOK_MASTER_FILE` (preferred) or
-/// `PROCTOR_PASSBOOK_MASTER`. Exits(2) with a clear message if neither is set.
+/// Read the master password from `KEYWARD_PASSBOOK_MASTER_FILE` (preferred) or
+/// `KEYWARD_PASSBOOK_MASTER`. Exits(2) with a clear message if neither is set.
 fn master() -> Vec<u8> {
-    if let Ok(path) = std::env::var("PROCTOR_PASSBOOK_MASTER_FILE") {
+    if let Ok(path) = std::env::var("KEYWARD_PASSBOOK_MASTER_FILE") {
         match std::fs::read_to_string(&path) {
             Ok(s) => return s.trim_end_matches(['\n', '\r']).as_bytes().to_vec(),
             Err(e) => {
-                eprintln!("error: cannot read PROCTOR_PASSBOOK_MASTER_FILE {path}: {e}");
+                eprintln!("error: cannot read KEYWARD_PASSBOOK_MASTER_FILE {path}: {e}");
                 exit(2);
             }
         }
     }
-    match std::env::var("PROCTOR_PASSBOOK_MASTER") {
+    match std::env::var("KEYWARD_PASSBOOK_MASTER") {
         Ok(m) if !m.is_empty() => {
             eprintln!(
-                "note: PROCTOR_PASSBOOK_MASTER via env is readable via /proc; prefer PROCTOR_PASSBOOK_MASTER_FILE."
+                "note: KEYWARD_PASSBOOK_MASTER via env is readable via /proc; prefer KEYWARD_PASSBOOK_MASTER_FILE."
             );
             m.into_bytes()
         }
         _ => {
             eprintln!(
-                "error: set PROCTOR_PASSBOOK_MASTER_FILE (preferred) or PROCTOR_PASSBOOK_MASTER."
+                "error: set KEYWARD_PASSBOOK_MASTER_FILE (preferred) or KEYWARD_PASSBOOK_MASTER."
             );
             exit(2);
         }
@@ -125,7 +125,7 @@ fn master() -> Vec<u8> {
 }
 
 fn secret_key_path() -> Option<PathBuf> {
-    std::env::var("PROCTOR_PASSBOOK_SECRETKEY_FILE")
+    std::env::var("KEYWARD_PASSBOOK_SECRETKEY_FILE")
         .ok()
         .filter(|s| !s.is_empty())
         .map(|s| expand_home(&s))
@@ -137,7 +137,7 @@ fn load_secret_key() -> Option<SecretKey> {
     let path = secret_key_path()?;
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         eprintln!(
-            "error: cannot read PROCTOR_PASSBOOK_SECRETKEY_FILE {}: {e}",
+            "error: cannot read KEYWARD_PASSBOOK_SECRETKEY_FILE {}: {e}",
             path.display()
         );
         exit(2);
@@ -282,7 +282,7 @@ fn cmd_init() {
         }
         println!("================================================");
     } else {
-        println!("note: no PROCTOR_PASSBOOK_SECRETKEY_FILE set — vault is master-only (no 2SKD).");
+        println!("note: no KEYWARD_PASSBOOK_SECRETKEY_FILE set — vault is master-only (no 2SKD).");
     }
 }
 
@@ -568,7 +568,7 @@ fn cmd_emergency_kit() {
         }
         None => {
             eprintln!(
-                "error: no Secret Key configured — set PROCTOR_PASSBOOK_SECRETKEY_FILE (this vault may be master-only)."
+                "error: no Secret Key configured — set KEYWARD_PASSBOOK_SECRETKEY_FILE (this vault may be master-only)."
             );
             exit(1);
         }
@@ -587,8 +587,8 @@ mod tests {
     fn expand_home_replaces_tilde() {
         std::env::set_var("HOME", "/home/tester");
         assert_eq!(
-            expand_home("~/.proctor/x.json"),
-            PathBuf::from("/home/tester/.proctor/x.json")
+            expand_home("~/.keyward/x.json"),
+            PathBuf::from("/home/tester/.keyward/x.json")
         );
         assert_eq!(expand_home("/abs/path"), PathBuf::from("/abs/path"));
     }

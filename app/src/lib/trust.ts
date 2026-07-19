@@ -27,11 +27,25 @@
 
 import type { Entry } from './passbook-types';
 
-/** Reserved entry id/title holding this account's trust state. */
-const TRUST_ENTRY_ID = 'proctor-trust-state';
+/** Reserved entry id/title holding this account's trust state.
+ *
+ * The id changed with the rename and that is safe, unlike the storage keys
+ * below: `isTrustEntry` matches on the TITLE as well, so an entry written under
+ * the old id is still recognised, and the write path replaces every trust entry
+ * it finds rather than appending. An old vault therefore converges on the new
+ * id the first time anything is written, with no migration step. The title is
+ * the stable identifier here; do not make matching id-only. */
+const TRUST_ENTRY_ID = 'keyward-trust-state';
 const TRUST_TITLE = '__trust__';
 
-/** Cache key. Bumped from the four separate v1/v2 keys this replaces. */
+/** Cache key. Bumped from the four separate v1/v2 keys this replaces.
+ *
+ * FROZEN — the `keyward.` prefix is deliberate and must not be renamed. These
+ * keys address data already sitting in real browsers; renaming them orphans
+ * every pin and floor on every existing device, which is exactly the silent
+ * re-TOFU that `knowsNothingAbout` exists to catch. The prefix records what the
+ * product was called when the key was written, which is what a storage key is
+ * supposed to do. */
 const CACHE = 'proctor.passbook.trust.v1';
 
 /** What we have accepted for one member: their X25519 and Ed25519 public keys. */

@@ -1,17 +1,17 @@
-//! Proctor encrypted vault core — **PROTOTYPE**.
+//! Keyward encrypted vault core — **PROTOTYPE**.
 //!
-//! Demonstrates the real cryptographic shape of a Proctor vault: an Argon2id
+//! Demonstrates the real cryptographic shape of a Keyward vault: an Argon2id
 //! key-derivation over the user's secret material sealing the serialized item
 //! store with XChaCha20-Poly1305 AEAD. The item *secrets* never leave this
 //! crate as plaintext to the broker; the broker only ever sees [`ItemRef`]
-//! metadata (see `proctor-broker`).
+//! metadata (see `keyward-broker`).
 //!
 //! SECURITY NOTE: this is a prototype of the *shape*, not an audited
 //! implementation. Before any real use it needs: a device-generated Secret Key
 //! folded into KDF (two-secret key derivation), tuned Argon2 parameters,
 //! per-item keys, authenticated associated data, and a formal review.
 
-use proctor_crypto::{
+use keyward_crypto::{
     aead_open, aead_seal, derive_key_argon2id, random_array, NONCE_LEN, SALT_LEN,
 };
 use serde::{Deserialize, Serialize};
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn file_roundtrip() {
         let dir = std::env::temp_dir();
-        let path = dir.join(format!("proctor-test-vault-{}.json", std::process::id()));
+        let path = dir.join(format!("keyward-test-vault-{}.json", std::process::id()));
         save_to_file(&path, &sample(), b"master").unwrap();
         let opened = load_from_file(&path, b"master").unwrap();
         assert_eq!(opened.len(), 1);

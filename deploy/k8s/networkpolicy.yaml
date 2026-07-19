@@ -1,4 +1,4 @@
-# Network hardening for the `proctor` namespace (GA / CONT-001).
+# Network hardening for the `keyward` namespace (GA / CONT-001).
 #
 # Strategy: DEFAULT-DENY INGRESS for the whole namespace, then explicit allows
 # for the only two flows that must exist:
@@ -29,9 +29,9 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-ingress
-  namespace: proctor
+  namespace: keyward
   labels:
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/part-of: keyward
 spec:
   podSelector: {}
   policyTypes:
@@ -42,7 +42,7 @@ spec:
 #      (b) a monitoring namespace (Prometheus scraping /metrics).
 #
 #    Least privilege: nothing else may reach the app. If you run Prometheus (or
-#    any scraper) INSIDE the `proctor` namespace, add a `- podSelector: {}` entry
+#    any scraper) INSIDE the `keyward` namespace, add a `- podSelector: {}` entry
 #    to the `from` list below — note that allows every pod in this namespace.
 #
 #    PER-CLUSTER ADJUSTMENTS — change these namespaceSelector labels to match
@@ -57,13 +57,13 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-ingress-to-app
-  namespace: proctor
+  namespace: keyward
   labels:
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/part-of: keyward
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: proctor-sync-server
+      app.kubernetes.io/name: keyward-sync-server
   policyTypes:
     - Ingress
   # TWO SEPARATE RULES, not one rule with two `from` entries.
@@ -108,7 +108,7 @@ spec:
 #     http://<host>/.well-known/acme-challenge/<token> through them. That solver
 #     pod lands in THIS namespace, but it is labelled
 #     `acme.cert-manager.io/http01-solver=true` — it does NOT carry
-#     `app.kubernetes.io/name: proctor-sync-server`, so rule (2) does not select
+#     `app.kubernetes.io/name: keyward-sync-server`, so rule (2) does not select
 #     it and the default-deny in rule (1) drops the traffic.
 #
 #     The failure is quiet and easy to misread: the Ingress answers, so you get
@@ -124,9 +124,9 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-ingress-to-acme-solver
-  namespace: proctor
+  namespace: keyward
   labels:
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/part-of: keyward
 spec:
   podSelector:
     matchLabels:
@@ -149,20 +149,20 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-app-to-postgres
-  namespace: proctor
+  namespace: keyward
   labels:
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/part-of: keyward
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: proctor-postgres
+      app.kubernetes.io/name: keyward-postgres
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: proctor-sync-server
+              app.kubernetes.io/name: keyward-sync-server
       ports:
         - protocol: TCP
           port: 5432

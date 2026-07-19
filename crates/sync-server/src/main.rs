@@ -1,6 +1,6 @@
 //! Zero-knowledge sync server.
 //!
-//! A tiny HTTP API over [`proctor_sync`]. It stores an opaque sealed-vault blob
+//! A tiny HTTP API over [`keyward_sync`]. It stores an opaque sealed-vault blob
 //! per account and never inspects it — no plaintext, master password, or Secret
 //! Key ever reaches this process. Per-device bearer tokens map to accounts via
 //! the [`AccountStore`], which stores only the SHA-256 hash of each token (a
@@ -8,29 +8,29 @@
 //! (`If-Match`), so a stale push gets 409 and must pull first.
 //!
 //! Config (env):
-//!   PROCTOR_SYNC_ADDR             listen address (default 127.0.0.1:8787)
-//!   PROCTOR_SYNC_PG              PostgreSQL URL → the scalable managed-cloud backend
-//!                               (takes precedence over PROCTOR_SYNC_DIR)
-//!   PROCTOR_SYNC_PG_POOL        Postgres pool size per replica (default 8)
-//!   PROCTOR_STRIPE_WEBHOOK_SECRET  Stripe webhook signing secret; unset → webhook 503
-//!   PROCTOR_STRIPE_SECRET_KEY    Stripe API secret key (server-side only)
-//!   PROCTOR_STRIPE_PRICE_FAMILY  Stripe price id for the Family plan
+//!   KEYWARD_SYNC_ADDR             listen address (default 127.0.0.1:8787)
+//!   KEYWARD_SYNC_PG              PostgreSQL URL → the scalable managed-cloud backend
+//!                               (takes precedence over KEYWARD_SYNC_DIR)
+//!   KEYWARD_SYNC_PG_POOL        Postgres pool size per replica (default 8)
+//!   KEYWARD_STRIPE_WEBHOOK_SECRET  Stripe webhook signing secret; unset → webhook 503
+//!   KEYWARD_STRIPE_SECRET_KEY    Stripe API secret key (server-side only)
+//!   KEYWARD_STRIPE_PRICE_FAMILY  Stripe price id for the Family plan
 //!                               (both required for POST /v1/billing/checkout; else 503)
-//!   PROCTOR_STRIPE_SUCCESS_URL / PROCTOR_STRIPE_CANCEL_URL  post-checkout redirects
-//!   PROCTOR_SYNC_DIR              storage dir (FileStore + FileAccountStore); unset → in-memory
-//!   PROCTOR_SYNC_TOKENS           optional pre-seed "token1:account1,token2:account2"
+//!   KEYWARD_STRIPE_SUCCESS_URL / KEYWARD_STRIPE_CANCEL_URL  post-checkout redirects
+//!   KEYWARD_SYNC_DIR              storage dir (FileStore + FileAccountStore); unset → in-memory
+//!   KEYWARD_SYNC_TOKENS           optional pre-seed "token1:account1,token2:account2"
 //!                                 (the registry is the source of truth; this is a fallback
 //!                                 for tests/bootstrapping)
-//!   PROCTOR_SYNC_TOKEN_TTL        optional device-token lifetime in seconds, applied on
+//!   KEYWARD_SYNC_TOKEN_TTL        optional device-token lifetime in seconds, applied on
 //!                                 register / add-device (unset or 0 → tokens never expire,
 //!                                 the backward-compatible default)
-//!   PROCTOR_SYNC_RATELIMIT_PER_MIN  per-client-IP fixed-window rate limit for the
+//!   KEYWARD_SYNC_RATELIMIT_PER_MIN  per-client-IP fixed-window rate limit for the
 //!                                 abuse-prone unauthenticated/expensive endpoints
 //!                                 (POST /v1/register, POST /v1/groups/{id}/invites).
 //!                                 Unset → 30/min; 0 disables limiting. Over the limit → 429.
 //!
 //! Abuse controls: the endpoints above are rate-limited per client IP (see
-//! `PROCTOR_SYNC_RATELIMIT_PER_MIN`) to close the DoS item in ADR-0004's threat
+//! `KEYWARD_SYNC_RATELIMIT_PER_MIN`) to close the DoS item in ADR-0004's threat
 //! model (invite/register spam). The limiter is in-memory and dependency-free.
 //!
 //! Health + observability (no auth; keep /metrics cluster-internal):
@@ -76,8 +76,8 @@
 //!   hashed invite codes — never a vault key, master password, or Secret Key.
 
 use hmac::{Hmac, Mac};
-use proctor_sync::groups::{self, GroupInvite, GroupMember};
-use proctor_sync::{
+use keyward_sync::groups::{self, GroupInvite, GroupMember};
+use keyward_sync::{
     AccountStore, FileAccountStore, FileShareGroupStore, FileStore, MemoryAccountStore,
     MemoryShareGroupStore, MemoryStore, Plan, RedeemOutcome, Role, ShareGroupStore, SyncError,
     SyncStore, TokenIdentity,
@@ -131,11 +131,11 @@ impl RateLimiter {
         }
     }
 
-    /// Read `PROCTOR_SYNC_RATELIMIT_PER_MIN`. Unset/unparseable → 30/min (a
+    /// Read `KEYWARD_SYNC_RATELIMIT_PER_MIN`. Unset/unparseable → 30/min (a
     /// sensible default that protects the managed cloud out of the box); an
     /// explicit `0` disables limiting.
     fn from_env() -> Self {
-        let limit = std::env::var("PROCTOR_SYNC_RATELIMIT_PER_MIN")
+        let limit = std::env::var("KEYWARD_SYNC_RATELIMIT_PER_MIN")
             .ok()
             .and_then(|v| v.trim().parse::<u32>().ok())
             .unwrap_or(30);
@@ -188,7 +188,7 @@ struct App {
     token_ttl: Option<u64>,
     /// Per-client-IP rate limiter for the abuse-prone endpoints (register + invite mint).
     limiter: RateLimiter,
-    /// Stripe webhook signing secret (`PROCTOR_STRIPE_WEBHOOK_SECRET`). `None`
+    /// Stripe webhook signing secret (`KEYWARD_STRIPE_WEBHOOK_SECRET`). `None`
     /// disables the billing webhook (returns 503).
     stripe_secret: Option<String>,
     /// Stripe Checkout config for `POST /v1/billing/checkout`. `None` (missing
@@ -318,45 +318,45 @@ fn render_metrics(m: &MetricsSnapshot) -> String {
         funnel: f,
     } = m;
     format!(
-        "# HELP proctor_requests_total Total HTTP requests handled.\n\
-         # TYPE proctor_requests_total counter\n\
-         proctor_requests_total {requests_total}\n\
-         # HELP proctor_uptime_seconds Seconds since server start.\n\
-         # TYPE proctor_uptime_seconds gauge\n\
-         proctor_uptime_seconds {uptime_secs}\n\
-         # HELP proctor_build_info Static build/runtime info (always 1).\n\
-         # TYPE proctor_build_info gauge\n\
-         proctor_build_info{{backend=\"{backend}\",version=\"{version}\"}} 1\n\
-         # HELP proctor_accounts_registered_total Accounts successfully registered.\n\
-         # TYPE proctor_accounts_registered_total counter\n\
-         proctor_accounts_registered_total {accounts_registered}\n\
-         # HELP proctor_groups_created_total Family vaults successfully created.\n\
-         # TYPE proctor_groups_created_total counter\n\
-         proctor_groups_created_total {groups_created}\n\
-         # HELP proctor_invites_minted_total Share invites successfully minted.\n\
-         # TYPE proctor_invites_minted_total counter\n\
-         proctor_invites_minted_total {invites_minted}\n\
-         # HELP proctor_invites_redeemed_total Share invites successfully redeemed (a member joined).\n\
-         # TYPE proctor_invites_redeemed_total counter\n\
-         proctor_invites_redeemed_total {invites_redeemed}\n\
-         # HELP proctor_invites_rejected_total Invite redemptions rejected, by reason.\n\
-         # TYPE proctor_invites_rejected_total counter\n\
-         proctor_invites_rejected_total{{reason=\"invalid_or_used\"}} {invalid_or_used}\n\
-         proctor_invites_rejected_total{{reason=\"expired\"}} {expired}\n\
-         proctor_invites_rejected_total{{reason=\"no_such_group\"}} {no_such_group}\n\
-         # HELP proctor_group_keys_writes_total Wrapped-key blobs successfully written (access granted or rotated).\n\
-         # TYPE proctor_group_keys_writes_total counter\n\
-         proctor_group_keys_writes_total {group_keys_writes}\n\
-         # HELP proctor_group_content_writes_total Shared-content blobs successfully written (an item was shared).\n\
-         # TYPE proctor_group_content_writes_total counter\n\
-         proctor_group_content_writes_total {group_content_writes}\n\
-         # HELP proctor_members_removed_total Group members successfully removed.\n\
-         # TYPE proctor_members_removed_total counter\n\
-         proctor_members_removed_total {members_removed}\n\
-         # HELP proctor_entitlement_denied_total Requests refused with 402 by an entitlement gate, by reason.\n\
-         # TYPE proctor_entitlement_denied_total counter\n\
-         proctor_entitlement_denied_total{{reason=\"device_limit\"}} {device_limit}\n\
-         proctor_entitlement_denied_total{{reason=\"family_plan\"}} {family_plan}\n",
+        "# HELP keyward_requests_total Total HTTP requests handled.\n\
+         # TYPE keyward_requests_total counter\n\
+         keyward_requests_total {requests_total}\n\
+         # HELP keyward_uptime_seconds Seconds since server start.\n\
+         # TYPE keyward_uptime_seconds gauge\n\
+         keyward_uptime_seconds {uptime_secs}\n\
+         # HELP keyward_build_info Static build/runtime info (always 1).\n\
+         # TYPE keyward_build_info gauge\n\
+         keyward_build_info{{backend=\"{backend}\",version=\"{version}\"}} 1\n\
+         # HELP keyward_accounts_registered_total Accounts successfully registered.\n\
+         # TYPE keyward_accounts_registered_total counter\n\
+         keyward_accounts_registered_total {accounts_registered}\n\
+         # HELP keyward_groups_created_total Family vaults successfully created.\n\
+         # TYPE keyward_groups_created_total counter\n\
+         keyward_groups_created_total {groups_created}\n\
+         # HELP keyward_invites_minted_total Share invites successfully minted.\n\
+         # TYPE keyward_invites_minted_total counter\n\
+         keyward_invites_minted_total {invites_minted}\n\
+         # HELP keyward_invites_redeemed_total Share invites successfully redeemed (a member joined).\n\
+         # TYPE keyward_invites_redeemed_total counter\n\
+         keyward_invites_redeemed_total {invites_redeemed}\n\
+         # HELP keyward_invites_rejected_total Invite redemptions rejected, by reason.\n\
+         # TYPE keyward_invites_rejected_total counter\n\
+         keyward_invites_rejected_total{{reason=\"invalid_or_used\"}} {invalid_or_used}\n\
+         keyward_invites_rejected_total{{reason=\"expired\"}} {expired}\n\
+         keyward_invites_rejected_total{{reason=\"no_such_group\"}} {no_such_group}\n\
+         # HELP keyward_group_keys_writes_total Wrapped-key blobs successfully written (access granted or rotated).\n\
+         # TYPE keyward_group_keys_writes_total counter\n\
+         keyward_group_keys_writes_total {group_keys_writes}\n\
+         # HELP keyward_group_content_writes_total Shared-content blobs successfully written (an item was shared).\n\
+         # TYPE keyward_group_content_writes_total counter\n\
+         keyward_group_content_writes_total {group_content_writes}\n\
+         # HELP keyward_members_removed_total Group members successfully removed.\n\
+         # TYPE keyward_members_removed_total counter\n\
+         keyward_members_removed_total {members_removed}\n\
+         # HELP keyward_entitlement_denied_total Requests refused with 402 by an entitlement gate, by reason.\n\
+         # TYPE keyward_entitlement_denied_total counter\n\
+         keyward_entitlement_denied_total{{reason=\"device_limit\"}} {device_limit}\n\
+         keyward_entitlement_denied_total{{reason=\"family_plan\"}} {family_plan}\n",
         accounts_registered = f.accounts_registered,
         groups_created = f.groups_created,
         invites_minted = f.invites_minted,
@@ -384,18 +384,18 @@ fn handle_metrics(request: Request, app: &App) {
     respond(request, text(&body, 200));
 }
 
-/// Read `PROCTOR_SYNC_TOKEN_TTL` as an optional lifetime in seconds. Unset,
+/// Read `KEYWARD_SYNC_TOKEN_TTL` as an optional lifetime in seconds. Unset,
 /// unparseable, or `0` all mean "no expiry".
 fn token_ttl_from_env() -> Option<u64> {
-    std::env::var("PROCTOR_SYNC_TOKEN_TTL")
+    std::env::var("KEYWARD_SYNC_TOKEN_TTL")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|&ttl| ttl > 0)
 }
 
-/// Postgres connection-pool size per replica (`PROCTOR_SYNC_PG_POOL`, default 8).
+/// Postgres connection-pool size per replica (`KEYWARD_SYNC_PG_POOL`, default 8).
 fn pg_pool_size() -> u32 {
-    std::env::var("PROCTOR_SYNC_PG_POOL")
+    std::env::var("KEYWARD_SYNC_PG_POOL")
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
         .filter(|&n| n > 0)
@@ -408,33 +408,33 @@ type BoxedAccountStore = Box<dyn AccountStore + Send + Sync>;
 type BoxedGroupStore = Box<dyn ShareGroupStore + Send + Sync>;
 
 fn main() {
-    let addr = std::env::var("PROCTOR_SYNC_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
-    let seed_tokens = parse_tokens(&std::env::var("PROCTOR_SYNC_TOKENS").unwrap_or_default());
+    let addr = std::env::var("KEYWARD_SYNC_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let seed_tokens = parse_tokens(&std::env::var("KEYWARD_SYNC_TOKENS").unwrap_or_default());
     let token_ttl = token_ttl_from_env();
 
     // Backend precedence: PostgreSQL (the managed-cloud, horizontally-scalable
     // backend) → filesystem (self-host) → in-memory (dev/tests).
-    let pg_url = std::env::var("PROCTOR_SYNC_PG").unwrap_or_default();
+    let pg_url = std::env::var("KEYWARD_SYNC_PG").unwrap_or_default();
     let (store, accounts, groups, backend): (
         BoxedSyncStore,
         BoxedAccountStore,
         BoxedGroupStore,
         &str,
     ) = if !pg_url.is_empty() {
-        let pool = proctor_sync_postgres::connect(&pg_url, pg_pool_size()).unwrap_or_else(|e| {
-            eprintln!("error: cannot connect to PROCTOR_SYNC_PG: {e}");
+        let pool = keyward_sync_postgres::connect(&pg_url, pg_pool_size()).unwrap_or_else(|e| {
+            eprintln!("error: cannot connect to KEYWARD_SYNC_PG: {e}");
             std::process::exit(1);
         });
         (
-            Box::new(proctor_sync_postgres::PostgresSyncStore::new(pool.clone())),
-            Box::new(proctor_sync_postgres::PostgresAccountStore::new(
+            Box::new(keyward_sync_postgres::PostgresSyncStore::new(pool.clone())),
+            Box::new(keyward_sync_postgres::PostgresAccountStore::new(
                 pool.clone(),
             )),
-            Box::new(proctor_sync_postgres::PostgresShareGroupStore::new(pool)),
+            Box::new(keyward_sync_postgres::PostgresShareGroupStore::new(pool)),
             "postgres",
         )
     } else {
-        match std::env::var("PROCTOR_SYNC_DIR") {
+        match std::env::var("KEYWARD_SYNC_DIR") {
             Ok(dir) if !dir.is_empty() => (
                 Box::new(FileStore::new(&dir)),
                 Box::new(FileAccountStore::new(&dir)),
@@ -449,26 +449,26 @@ fn main() {
             ),
         }
     };
-    eprintln!("proctor-sync-server backend: {backend}");
+    eprintln!("keyward-sync-server backend: {backend}");
 
     let limiter = RateLimiter::from_env();
 
-    let stripe_secret = std::env::var("PROCTOR_STRIPE_WEBHOOK_SECRET")
+    let stripe_secret = std::env::var("KEYWARD_STRIPE_WEBHOOK_SECRET")
         .ok()
         .filter(|s| !s.trim().is_empty());
 
     // Checkout needs both a secret key and a Family price id; otherwise it is off.
     let nonempty = |k: &str| std::env::var(k).ok().filter(|s| !s.trim().is_empty());
     let stripe_checkout = match (
-        nonempty("PROCTOR_STRIPE_SECRET_KEY"),
-        nonempty("PROCTOR_STRIPE_PRICE_FAMILY"),
+        nonempty("KEYWARD_STRIPE_SECRET_KEY"),
+        nonempty("KEYWARD_STRIPE_PRICE_FAMILY"),
     ) {
         (Some(secret_key), Some(price_family)) => Some(StripeCheckout {
             secret_key,
             price_family,
-            success_url: nonempty("PROCTOR_STRIPE_SUCCESS_URL")
+            success_url: nonempty("KEYWARD_STRIPE_SUCCESS_URL")
                 .unwrap_or_else(|| "https://example.com/billing/success".to_string()),
-            cancel_url: nonempty("PROCTOR_STRIPE_CANCEL_URL")
+            cancel_url: nonempty("KEYWARD_STRIPE_CANCEL_URL")
                 .unwrap_or_else(|| "https://example.com/billing/cancel".to_string()),
         }),
         _ => None,
@@ -496,7 +496,7 @@ fn main() {
         std::process::exit(1);
     });
     eprintln!(
-        "proctor-sync-server listening on {addr} ({} pre-seeded token(s), token ttl: {}, rate limit: {})",
+        "keyward-sync-server listening on {addr} ({} pre-seeded token(s), token ttl: {}, rate limit: {})",
         app.seed_tokens.len(),
         match app.token_ttl {
             Some(ttl) => format!("{ttl}s"),
@@ -606,7 +606,7 @@ fn identity_for(request: &Request, app: &App) -> Option<TokenIdentity> {
 /// exhaust for everyone. `X-Forwarded-For` carries the real client.
 ///
 /// That header is attacker-controlled, so it is honoured ONLY when
-/// `PROCTOR_SYNC_TRUST_PROXY` is set — a deployment fact the operator asserts,
+/// `KEYWARD_SYNC_TRUST_PROXY` is set — a deployment fact the operator asserts,
 /// not something inferred. A server exposed directly must not trust it, or
 /// clients would forge a fresh identity per request and bypass limiting
 /// entirely.
@@ -616,7 +616,7 @@ fn identity_for(request: &Request, app: &App) -> Option<TokenIdentity> {
 /// last element is appended by the nearest trusted proxy and is the peer that
 /// actually connected to it. Taking the leftmost would re-introduce the spoof.
 fn client_ip(request: &Request) -> String {
-    if std::env::var("PROCTOR_SYNC_TRUST_PROXY").is_ok_and(|v| v != "0" && !v.is_empty()) {
+    if std::env::var("KEYWARD_SYNC_TRUST_PROXY").is_ok_and(|v| v != "0" && !v.is_empty()) {
         let forwarded = request
             .headers()
             .iter()
@@ -659,7 +659,7 @@ const MAX_BODY_BYTES: u64 = 16 * 1024 * 1024;
 /// Reads ONLY the ids. Those are public — the same server hands them out in the
 /// membership directory — so no ciphertext, key or plaintext is inspected and
 /// the zero-knowledge property is untouched. Deliberately parsed structurally
-/// with `serde_json` rather than by depending on `proctor-passbook`, so the
+/// with `serde_json` rather than by depending on `keyward-passbook`, so the
 /// server keeps no compile-time knowledge of the crypto types.
 ///
 /// `None` (unrecognised shape) means the caller SKIPS the orphan check rather
@@ -1867,9 +1867,9 @@ mod tests {
     #[test]
     fn metrics_render_is_valid_prometheus() {
         let out = render_metrics(&sample_snapshot());
-        assert!(out.contains("proctor_requests_total 42\n"));
-        assert!(out.contains("proctor_uptime_seconds 100\n"));
-        assert!(out.contains("proctor_build_info{backend=\"postgres\",version=\"1.33.0\"} 1\n"));
+        assert!(out.contains("keyward_requests_total 42\n"));
+        assert!(out.contains("keyward_uptime_seconds 100\n"));
+        assert!(out.contains("keyward_build_info{backend=\"postgres\",version=\"1.33.0\"} 1\n"));
         // Every metric is preceded by its HELP/TYPE lines: 3 base + 9 funnel metrics
         // (the two labelled families each declare TYPE once, as Prometheus requires).
         assert_eq!(out.matches("# TYPE").count(), 12);
@@ -1880,13 +1880,13 @@ mod tests {
     fn funnel_counters_render_with_help_and_type() {
         let out = render_metrics(&sample_snapshot());
         for (name, value) in [
-            ("proctor_accounts_registered_total", 1),
-            ("proctor_groups_created_total", 2),
-            ("proctor_invites_minted_total", 3),
-            ("proctor_invites_redeemed_total", 4),
-            ("proctor_group_keys_writes_total", 8),
-            ("proctor_group_content_writes_total", 9),
-            ("proctor_members_removed_total", 10),
+            ("keyward_accounts_registered_total", 1),
+            ("keyward_groups_created_total", 2),
+            ("keyward_invites_minted_total", 3),
+            ("keyward_invites_redeemed_total", 4),
+            ("keyward_group_keys_writes_total", 8),
+            ("keyward_group_content_writes_total", 9),
+            ("keyward_members_removed_total", 10),
         ] {
             assert!(
                 out.contains(&format!("# HELP {name} ")),
@@ -1908,19 +1908,19 @@ mod tests {
         let out = render_metrics(&sample_snapshot());
         // One HELP/TYPE per metric family, then one sample line per label value.
         assert_eq!(
-            out.matches("# TYPE proctor_invites_rejected_total").count(),
+            out.matches("# TYPE keyward_invites_rejected_total").count(),
             1
         );
         assert_eq!(
-            out.matches("# TYPE proctor_entitlement_denied_total")
+            out.matches("# TYPE keyward_entitlement_denied_total")
                 .count(),
             1
         );
-        assert!(out.contains("proctor_invites_rejected_total{reason=\"invalid_or_used\"} 5\n"));
-        assert!(out.contains("proctor_invites_rejected_total{reason=\"expired\"} 6\n"));
-        assert!(out.contains("proctor_invites_rejected_total{reason=\"no_such_group\"} 7\n"));
-        assert!(out.contains("proctor_entitlement_denied_total{reason=\"device_limit\"} 11\n"));
-        assert!(out.contains("proctor_entitlement_denied_total{reason=\"family_plan\"} 12\n"));
+        assert!(out.contains("keyward_invites_rejected_total{reason=\"invalid_or_used\"} 5\n"));
+        assert!(out.contains("keyward_invites_rejected_total{reason=\"expired\"} 6\n"));
+        assert!(out.contains("keyward_invites_rejected_total{reason=\"no_such_group\"} 7\n"));
+        assert!(out.contains("keyward_entitlement_denied_total{reason=\"device_limit\"} 11\n"));
+        assert!(out.contains("keyward_entitlement_denied_total{reason=\"family_plan\"} 12\n"));
     }
 
     #[test]
@@ -1937,7 +1937,7 @@ mod tests {
                 "non-numeric sample value in {line:?}"
             );
             assert!(
-                series.starts_with("proctor_"),
+                series.starts_with("keyward_"),
                 "unexpected series {series:?}"
             );
             // Only these label keys exist anywhere in the exposition. `backend` and

@@ -5,7 +5,7 @@
 
 ## Context
 
-Proctor's wedge (Phase B) is an MCP credential broker that lets AI agents *act*
+Keyward's wedge (Phase B) is an MCP credential broker that lets AI agents *act*
 with credentials without ever possessing the plaintext. The naive framing —
 "keep the secret out of the model's context" — is necessary but the easy 20%.
 Two harder threats define the design:
@@ -118,7 +118,7 @@ bound-but-not-pre-approved origin, attended) prompts the user through the MCP
 client via elicitation (`peer.elicit`). Approve → perform + tag
 `approved_via: human elicitation`; reject → deny; no elicitation support → fall
 back to a step-up note. An `Approver` abstraction keeps the path unit-tested.
-Audit is persistent (`PROCTOR_AUDIT`), and a `revoke_all` kill switch clears all
+Audit is persistent (`KEYWARD_AUDIT`), and a `revoke_all` kill switch clears all
 held tokens.
 
 **Not yet built:** OAuth Token Exchange (RFC 8693) / cloud STS minters,

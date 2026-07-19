@@ -973,6 +973,148 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyward-broker"
+version = "2.0.0"
+dependencies = [
+ "hmac 0.12.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "uuid",
+]
+
+[[package]]
+name = "keyward-cli"
+version = "2.0.0"
+dependencies = [
+ "keyward-broker",
+ "keyward-profiles",
+ "keyward-vault",
+]
+
+[[package]]
+name = "keyward-crypto"
+version = "2.0.0"
+dependencies = [
+ "argon2",
+ "chacha20poly1305",
+ "rand 0.8.7",
+ "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
+name = "keyward-mcp"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "keyward-broker",
+ "keyward-mint",
+ "keyward-profiles",
+ "keyward-vault",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "zeroize",
+]
+
+[[package]]
+name = "keyward-mint"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "jsonwebtoken",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "keyward-passbook"
+version = "2.0.0"
+dependencies = [
+ "base32",
+ "chacha20poly1305",
+ "ed25519-dalek",
+ "hkdf",
+ "hmac 0.12.1",
+ "keyward-crypto",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "keyward-profiles"
+version = "2.0.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "toml",
+]
+
+[[package]]
+name = "keyward-sync"
+version = "2.0.0"
+dependencies = [
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "keyward-sync-postgres"
+version = "2.0.0"
+dependencies = [
+ "keyward-sync",
+ "postgres",
+ "r2d2",
+ "r2d2_postgres",
+ "rand 0.8.7",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "keyward-sync-server"
+version = "2.0.0"
+dependencies = [
+ "hmac 0.12.1",
+ "keyward-sync",
+ "keyward-sync-postgres",
+ "serde_json",
+ "sha2 0.10.9",
+ "tiny_http",
+ "ureq",
+]
+
+[[package]]
+name = "keyward-vault"
+version = "2.0.0"
+dependencies = [
+ "keyward-crypto",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1140,18 +1282,18 @@ dependencies = [
 
 [[package]]
 name = "passbook-cli"
-version = "1.43.0"
+version = "2.0.0"
 dependencies = [
- "proctor-passbook",
+ "keyward-passbook",
  "serde_json",
 ]
 
 [[package]]
 name = "passbook-wasm"
-version = "1.43.0"
+version = "2.0.0"
 dependencies = [
  "getrandom 0.2.17",
- "proctor-passbook",
+ "keyward-passbook",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
@@ -1301,148 +1443,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "proctor-broker"
-version = "1.43.0"
-dependencies = [
- "hmac 0.12.1",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "uuid",
-]
-
-[[package]]
-name = "proctor-cli"
-version = "1.43.0"
-dependencies = [
- "proctor-broker",
- "proctor-profiles",
- "proctor-vault",
-]
-
-[[package]]
-name = "proctor-crypto"
-version = "1.43.0"
-dependencies = [
- "argon2",
- "chacha20poly1305",
- "rand 0.8.7",
- "thiserror 1.0.69",
- "zeroize",
-]
-
-[[package]]
-name = "proctor-mcp"
-version = "1.43.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "proctor-broker",
- "proctor-mint",
- "proctor-profiles",
- "proctor-vault",
- "rmcp",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "zeroize",
-]
-
-[[package]]
-name = "proctor-mint"
-version = "1.43.0"
-dependencies = [
- "async-trait",
- "jsonwebtoken",
- "reqwest",
- "roxmltree",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "zeroize",
-]
-
-[[package]]
-name = "proctor-passbook"
-version = "1.43.0"
-dependencies = [
- "base32",
- "chacha20poly1305",
- "ed25519-dalek",
- "hkdf",
- "hmac 0.12.1",
- "proctor-crypto",
- "rand 0.8.7",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.10.9",
- "thiserror 1.0.69",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
-name = "proctor-profiles"
-version = "1.43.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "toml",
-]
-
-[[package]]
-name = "proctor-sync"
-version = "1.43.0"
-dependencies = [
- "rand 0.8.7",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "proctor-sync-postgres"
-version = "1.43.0"
-dependencies = [
- "postgres",
- "proctor-sync",
- "r2d2",
- "r2d2_postgres",
- "rand 0.8.7",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "proctor-sync-server"
-version = "1.43.0"
-dependencies = [
- "hmac 0.12.1",
- "proctor-sync",
- "proctor-sync-postgres",
- "serde_json",
- "sha2 0.10.9",
- "tiny_http",
- "ureq",
-]
-
-[[package]]
-name = "proctor-vault"
-version = "1.43.0"
-dependencies = [
- "proctor-crypto",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "zeroize",
 ]
 
 [[package]]

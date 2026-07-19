@@ -1,4 +1,4 @@
-# Proctor Passbook — demo environment
+# Keyward Passbook — demo environment
 
 The production app ships **no demo data**: a fresh device creates a real, empty
 vault. This directory spins up a throwaway demo whose data lives entirely in a
@@ -7,7 +7,7 @@ the sync server.
 
 ## What it runs
 
-- **sync** — the zero-knowledge `proctor-sync-server` (stores only ciphertext).
+- **sync** — the zero-knowledge `keyward-sync-server` (stores only ciphertext).
 - **seeder** — a one-shot job that builds a **real 2SKD-sealed** demo vault with
   the `passbook` CLI (several logins with generated passwords + a TOTP), registers
   a demo account, and uploads the sealed blob. It writes the demo credentials to

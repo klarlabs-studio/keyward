@@ -1,10 +1,10 @@
 {
-  "name": "proctor-passbook-app",
+  "name": "keyward-passbook-app",
   "private": true,
-  "version": "1.43.0",
+  "version": "2.0.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
-  "description": "Proctor Passbook \u2014 web vault (Vue 3 + Vite), backed by the passbook-wasm crypto core.",
+  "description": "Keyward Passbook \u2014 web vault (Vue 3 + Vite), backed by the passbook-wasm crypto core.",
   "scripts": {
     "build:wasm": "wasm-pack build --release --target web --out-dir \"$PWD/src/wasm/pkg\" ../crates/passbook-wasm",
     "dev": "vite",

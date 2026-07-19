@@ -1,6 +1,6 @@
 [package]
-name = "proctor-profiles"
-description = "Proctor provider profiles — external, pluggable TOML descriptors (env mapping + command-risk) so new providers need no code."
+name = "keyward-profiles"
+description = "Keyward provider profiles — external, pluggable TOML descriptors (env mapping + command-risk) so new providers need no code."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

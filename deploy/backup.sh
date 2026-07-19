@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Back up / restore the Proctor Postgres database.
+# Back up / restore the Keyward Postgres database.
 #
 # The dump holds ONLY ciphertext vault blobs, X25519 public keys, and hashed
 # tokens/invite codes — never plaintext, master passwords, or Secret Keys (the
@@ -12,8 +12,8 @@
 #   PG_URL=<your-postgres-url> ./deploy/backup.sh restore file.sql.gz
 #
 # Against the in-cluster StatefulSet without exposing Postgres:
-#   kubectl -n proctor exec -i statefulset/proctor-postgres -- \
-#     pg_dump -U proctor proctor | gzip > proctor-backup.sql.gz
+#   kubectl -n keyward exec -i statefulset/keyward-postgres -- \
+#     pg_dump -U keyward keyward | gzip > keyward-backup.sql.gz
 set -euo pipefail
 
 cmd="${1:-backup}"
@@ -24,7 +24,7 @@ case "$cmd" in
     outdir="${2:-.}"
     mkdir -p "$outdir"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    out="$outdir/proctor-$stamp.sql.gz"
+    out="$outdir/keyward-$stamp.sql.gz"
     pg_dump "$PG_URL" | gzip >"$out"
     echo "wrote $out"
     ;;

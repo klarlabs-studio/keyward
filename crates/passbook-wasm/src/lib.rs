@@ -1,11 +1,11 @@
-//! Proctor Passbook — WebAssembly bindings.
+//! Keyward Passbook — WebAssembly bindings.
 //!
-//! Thin `#[wasm_bindgen]` surface over [`proctor_passbook`] so the vault crypto,
+//! Thin `#[wasm_bindgen]` surface over [`keyward_passbook`] so the vault crypto,
 //! TOTP, and Watchtower analysis can run entirely client-side in a browser. The
 //! public functions take and return JSON strings (parsed with `serde_json`),
 //! which keeps the JS interop boundary simple and framework-agnostic.
 //!
-//! SECURITY NOTE: this exposes the prototype crypto in `proctor-passbook`
+//! SECURITY NOTE: this exposes the prototype crypto in `keyward-passbook`
 //! (Argon2id, XChaCha20-Poly1305, optional Secret Key). It needs a formal review
 //! before real use.
 //!
@@ -15,7 +15,7 @@
 //! takes the Secret Key. The comment pointed readers at code that contradicted
 //! it.)
 
-use proctor_passbook::{
+use keyward_passbook::{
     generate_passphrase, generate_password, new_vault_key, open, open_content, open_sealed,
     safety_number, seal, seal_content, seal_to, sha1_hex, strength_bits, totp, watchtower,
     ContentBlob, Entry, Issue, Member, MemberPublic, PasswordOptions, SealedBox, SealedVault,

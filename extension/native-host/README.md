@@ -1,6 +1,6 @@
-# Proctor Passbook — Native Messaging Host
+# Keyward Passbook — Native Messaging Host
 
-This directory holds the **native-messaging host** that lets the Proctor Passbook
+This directory holds the **native-messaging host** that lets the Keyward Passbook
 browser extension read real vault items from your local machine instead of the
 hardcoded demo data.
 
@@ -38,7 +38,7 @@ The extension requests `list` when the popup opens (titles/usernames only) and
 | File | Role |
 |------|------|
 | `com.klarlabs.proctor.passbook.json` | Native-host manifest **template**. Copy it into the browser's `NativeMessagingHosts` directory and fill in the two placeholders. |
-| `proctor-passbook-bridge.sh` | Wrapper Chrome executes. Sets the vault env, then `exec`s `passbook bridge`. Already `chmod +x`. |
+| `keyward-passbook-bridge.sh` | Wrapper Chrome executes. Sets the vault env, then `exec`s `passbook bridge`. Already `chmod +x`. |
 
 ## Install
 
@@ -57,25 +57,25 @@ itself. To use `PATH`, either copy the binary somewhere on your `PATH` or add
 
 ### 2. Point the wrapper at your vault
 
-Edit `proctor-passbook-bridge.sh` (or export these before Chrome launches) so the
+Edit `keyward-passbook-bridge.sh` (or export these before Chrome launches) so the
 vault environment variables match your setup:
 
-- `PROCTOR_PASSBOOK` — path to the vault file/directory.
-- `PROCTOR_PASSBOOK_MASTER_FILE` — path to a file containing the master password
+- `KEYWARD_PASSBOOK` — path to the vault file/directory.
+- `KEYWARD_PASSBOOK_MASTER_FILE` — path to a file containing the master password
   (**prototype only** — see caveat).
-- `PROCTOR_PASSBOOK_SECRETKEY_FILE` — path to a file with the vault secret key, if
+- `KEYWARD_PASSBOOK_SECRETKEY_FILE` — path to a file with the vault secret key, if
   your vault uses a separate key.
 
 ### 3. Fill in the host manifest
 
 Edit `com.klarlabs.proctor.passbook.json`:
 
-- **`path`** → the **absolute** path to `proctor-passbook-bridge.sh`, e.g.
-  `/Users/you/dev/proctor/extension/native-host/proctor-passbook-bridge.sh`.
+- **`path`** → the **absolute** path to `keyward-passbook-bridge.sh`, e.g.
+  `/Users/you/dev/keyward/extension/native-host/keyward-passbook-bridge.sh`.
   (Chrome requires an absolute path; a relative path will silently fail.)
 - **`allowed_origins`** → replace `EXTENSION_ID_HERE` with the real extension ID.
   Load the extension unpacked (see `../README.md`), open `chrome://extensions`,
-  enable Developer mode, and copy the **ID** shown on the Proctor Passbook card.
+  enable Developer mode, and copy the **ID** shown on the Keyward Passbook card.
   Keep the trailing slash: `chrome-extension://<id>/`.
 
 ### 4. Install the manifest for your browser + OS
@@ -120,19 +120,19 @@ data.
 - **Still seeing demo items?** Confirm the manifest filename, the absolute
   `path`, and that the `allowed_origins` ID exactly matches
   `chrome://extensions`. Restart the browser after any change.
-- **Host not found / access denied.** Ensure `proctor-passbook-bridge.sh` is
+- **Host not found / access denied.** Ensure `keyward-passbook-bridge.sh` is
   executable (`chmod +x`) and the `passbook` binary exists and is runnable.
 - **Test the host directly** (native messaging frames a 4-byte little-endian
   length before the JSON):
 
   ```bash
-  printf '\x0f\x00\x00\x00{"type":"ping"}' | ./proctor-passbook-bridge.sh
+  printf '\x0f\x00\x00\x00{"type":"ping"}' | ./keyward-passbook-bridge.sh
   ```
 
 ## Security caveat
 
 The wrapper unlocks the vault from a plaintext **master-password file**
-(`PROCTOR_PASSBOOK_MASTER_FILE`). This is a prototype convenience only.
+(`KEYWARD_PASSBOOK_MASTER_FILE`). This is a prototype convenience only.
 
 A production host would instead:
 

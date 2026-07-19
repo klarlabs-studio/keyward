@@ -1,17 +1,17 @@
-# Proctor — Product Specification (PRD)
+# Keyward — Product Specification (PRD)
 
 > **Status:** Spec v2 (post-strategy session) · **Date:** July 2026 · **Owner:** Felix Geelhaar / klarlabs
 > **Companion:** [Market & Feature Research](../research/market-and-feature-research.md)
-> **Repo:** `klarlabs/oss/proctor` · **Model:** open-core
+> **Repo:** `klarlabs/oss/keyward` · **Model:** open-core
 > **v2 note:** Reflects the Socratic strategy session — wedge-first sequencing, hardened broker security model, propose-not-commit autonomy floor, and choosable-hosting reframed as a trust instrument. See §14 decisions log.
 
 ---
 
 ## 1. Vision & thesis
 
-**Proctor is the credential manager that's as polished as 1Password, as open as Bitwarden, and as private as you want it — because you decide where your vault lives.**
+**Keyward is the credential manager that's as polished as 1Password, as open as Bitwarden, and as private as you want it — because you decide where your vault lives.**
 
-It closes two structural gaps: the best UX (1Password) is proprietary and now expensive, and the best open option (Bitwarden) has degraded connectivity and organization. Proctor closes both, adds a first-class **passkey-era credential model** and **family-first sharing**, a **choosable/migratable cloud-or-on-device trust model**, and a category-defining capability for the agentic era: an **MCP credential broker that lets AI *act* with your credentials without ever possessing them.**
+It closes two structural gaps: the best UX (1Password) is proprietary and now expensive, and the best open option (Bitwarden) has degraded connectivity and organization. Keyward closes both, adds a first-class **passkey-era credential model** and **family-first sharing**, a **choosable/migratable cloud-or-on-device trust model**, and a category-defining capability for the agentic era: an **MCP credential broker that lets AI *act* with your credentials without ever possessing them.**
 
 **North-star outcome:** a person (and their family) protects every account with a manager they actually enjoy — hosted wherever they trust — while their agents can act on their behalf with a blast radius that stays small even when every human control fails.
 
@@ -23,7 +23,7 @@ It closes two structural gaps: the best UX (1Password) is proprietary and now ex
 Apple Passwords + Google Password Manager hold **55%+ of usage** by being free and built-in; only 36% of adults use a dedicated manager (see research §2). We are fighting *inertia*, not primarily other vendors.
 
 ### 2.2 Switching drivers: qualifiers vs. pulls
-- **Price and trust are *qualifiers*** — they get Proctor onto the shortlist and prevent rejection. They do **not** supply the energy to uproot a digital life. Every challenger claims them.
+- **Price and trust are *qualifiers*** — they get Keyward onto the shortlist and prevent rejection. They do **not** supply the energy to uproot a digital life. Every challenger claims them.
 - **Capability is the *pull*** — a must-have you can't get elsewhere. Amplified by **trigger events** (price hike, breach, new device) that put someone *in market*.
 - Therefore we lead with a **capability no one else has** and treat price/trust/openness as the qualifying foundation.
 
@@ -34,9 +34,9 @@ Apple Passwords + Google Password Manager hold **55%+ of usage** by being free a
 - **Non-negotiable bar for the *other* half at each phase:** in Phase B the vault under the broker must be trustworthy and unembarrassing; in Phase A "simple all-in-one" alone won't move anyone, so the family engine (§2.4) must carry it.
 
 ### 2.4 The family engine: delegated trust, not a feature
-Families do **not** switch as independent rational actors, and **no feature in Proctor speaks to a non-technical parent** — the broker is meaningless to them and "simple all-in-one" is table stakes 1Password already owns. Households switch through **delegated trust**: one competent, trusted person decides and does the work for everyone. That person is the **wedge-B developer** — already on Proctor for the broker, and the household's de-facto IT department.
+Families do **not** switch as independent rational actors, and **no feature in Keyward speaks to a non-technical parent** — the broker is meaningless to them and "simple all-in-one" is table stakes 1Password already owns. Households switch through **delegated trust**: one competent, trusted person decides and does the work for everyone. That person is the **wedge-B developer** — already on Keyward for the broker, and the household's de-facto IT department.
 
-**Engine = champion-led adoption + frictionless migration + trigger events.** The pull is felt by the *champion*, not the family; the family follows on trust in the person. Product implications (Phase A priorities): make the organizer's job trivial (bulk family setup, guided per-member onboarding for non-technical people, one-click CXP/CXF import, account recovery) and build a strong invite/virality loop. This is 1Password Families' quiet genius — Proctor must match and beat it.
+**Engine = champion-led adoption + frictionless migration + trigger events.** The pull is felt by the *champion*, not the family; the family follows on trust in the person. Product implications (Phase A priorities): make the organizer's job trivial (bulk family setup, guided per-member onboarding for non-technical people, one-click CXP/CXF import, account recovery) and build a strong invite/virality loop. This is 1Password Families' quiet genius — Keyward must match and beat it.
 
 ---
 
@@ -46,7 +46,7 @@ Families do **not** switch as independent rational actors, and **no feature in P
 - **Model:** **open-core** — fully open-source clients + server (self-host free forever); revenue from managed cloud, family/premium features, and the broker.
 - **Primary market:** B2C — **developers first (wedge), families second (mainstream).** Not enterprise PAM.
 - **Positioning statement:**
-  > *For people who want serious credential security without lock-in — and for the developers who want their agents to act without leaking secrets — Proctor is an open-source credential manager that delivers 1Password-grade polish, lets you choose where your vault lives, and lets your agents get hands, not secrets. Unlike 1Password (closed, no free tier) or Bitwarden (open but clunky), Proctor refuses the trade-off between polish and openness.*
+  > *For people who want serious credential security without lock-in — and for the developers who want their agents to act without leaking secrets — Keyward is an open-source credential manager that delivers 1Password-grade polish, lets you choose where your vault lives, and lets your agents get hands, not secrets. Unlike 1Password (closed, no free tier) or Bitwarden (open but clunky), Keyward refuses the trade-off between polish and openness.*
 - **Taglines:** "Your credentials, your rules." · For the broker: **"Give your agents hands, not your secrets."**
 
 ---
@@ -66,7 +66,7 @@ Families do **not** switch as independent rational actors, and **no feature in P
 ## 5. Choosable & migratable trust model (architecture)
 
 ### 5.1 Reframed: choice is a *trust instrument*, not a switching driver
-Users do not switch *for* "choose your storage backend." The value of choosability is **trust**: Proctor *can't* lock you in and *can't* be your single point of failure — you *could* self-host or go local anytime. Like open source, the *option* reassures the 95% who never exercise it (the Bitwarden/Proton effect). Therefore:
+Users do not switch *for* "choose your storage backend." The value of choosability is **trust**: Keyward *can't* lock you in and *can't* be your single point of failure — you *could* self-host or go local anytime. Like open source, the *option* reassures the 95% who never exercise it (the Bitwarden/Proton effect). Therefore:
 
 - **Opinionated default for everyone:** **cloud E2E + device-generated Secret Key** — simple, recoverable, 1Password-grade. This preserves the "super simple" north star; a family faces **no trust-model decision.**
 - **Progressive disclosure** for the minority who ask: on-device-only, self-hosted server, bring-your-own-storage (iCloud/Dropbox/WebDAV/S3). These mostly do their job just by *existing*.
@@ -74,10 +74,10 @@ Users do not switch *for* "choose your storage backend." The value of choosabili
 ### 5.2 Storage modes
 | Mode | Where data lives | Account? | For |
 |---|---|---|---|
-| **Managed cloud (default)** | Proctor hosted E2E sync | Yes | Everyone; families |
+| **Managed cloud (default)** | Keyward hosted E2E sync | Yes | Everyone; families |
 | **On-device only** | Local encrypted DB/file | No | Sovereignty/offline (advanced) |
-| **Self-hosted** | User's own Proctor server | Yes (theirs) | Homelab/full control |
-| **Bring-your-own storage** | User's cloud (iCloud/Dropbox/WebDAV/S3) | No Proctor account | Cross-device without our server |
+| **Self-hosted** | User's own Keyward server | Yes (theirs) | Homelab/full control |
+| **Bring-your-own storage** | User's cloud (iCloud/Dropbox/WebDAV/S3) | No Keyward account | Cross-device without our server |
 
 ### 5.3 Cryptography
 - **Cloud & self-host:** account password **+ device-generated Secret Key** (two-secret key derivation, à la 1Password) → a **server breach yields uncrackable data even against weak passwords.** The strongest posture in the category and a direct answer to the LastPass / ETH-Zürich trust climate.
@@ -231,7 +231,7 @@ Principles: **no free-tier removal games** (learn from Dashlane) · **transparen
 - **Architecture:** choosable hosting = trust instrument; opinionated cloud-E2E-+-Secret-Key default + progressive-disclosure sovereignty; migration surfaces the changed recovery model.
 
 ### Still open (owner: Felix)
-- **Brand/name** "Proctor" — trademark + domain check.
+- **Brand/name** "Keyward" — trademark + domain check.
 - **Mobile stack** — recommend shared Rust crypto/vault core + native UI shells.
 - **License** — recommend AGPL-3.0 server + GPL/MPL clients.
 - **Audit partner** — Cure53 / Trail of Bits before broker & crypto GA.

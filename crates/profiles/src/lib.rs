@@ -1,4 +1,4 @@
-//! Proctor provider profiles — **external, pluggable TOML descriptors**.
+//! Keyward provider profiles — **external, pluggable TOML descriptors**.
 //!
 //! A profile is pure data, keyed on the *credential type* (not the tool), that
 //! says two things: (1) how the credential is presented to a process (which env
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn load_dir_reads_toml_files() {
-        let dir = std::env::temp_dir().join(format!("proctor-prof-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-prof-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn missing_dir_is_empty_not_error() {
-        let reg = Registry::load_dir(Path::new("/no/such/proctor/dir")).unwrap();
+        let reg = Registry::load_dir(Path::new("/no/such/keyward/dir")).unwrap();
         assert!(reg.is_empty());
     }
 
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn world_writable_profile_is_rejected() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("proctor-perm-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-perm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("evil.toml");

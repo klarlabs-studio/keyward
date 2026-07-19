@@ -9,9 +9,9 @@ set -euo pipefail
 SYNC_URL="${SYNC_URL:-http://sync:8787}"
 MASTER="correct horse battery staple"
 
-export PROCTOR_PASSBOOK=/tmp/vault.json
-export PROCTOR_PASSBOOK_MASTER="$MASTER"
-export PROCTOR_PASSBOOK_SECRETKEY_FILE=/tmp/secret.key
+export KEYWARD_PASSBOOK=/tmp/vault.json
+export KEYWARD_PASSBOOK_MASTER="$MASTER"
+export KEYWARD_PASSBOOK_SECRETKEY_FILE=/tmp/secret.key
 
 echo "seed: building the demo vault…"
 passbook init >/dev/null
@@ -39,7 +39,7 @@ curl -fsS -X PUT "$SYNC_URL/v1/vault" \
 
 mkdir -p /out
 cat > /out/credentials.txt <<EOF
-Proctor Passbook — demo credentials
+Keyward Passbook — demo credentials
 ===================================
 Open the web vault:   http://localhost:8080
 

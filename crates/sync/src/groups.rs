@@ -4,7 +4,7 @@
 //! stores only public material: each member's display name + X25519 **public**
 //! key, pending invites (as SHA-256 *hashes* of the invite code — never the code
 //! itself), the opaque per-member **wrapped keys** (a serialized
-//! `proctor_passbook::sharing::SharedVault`, i.e. ciphertext of the vault key to
+//! `keyward_passbook::sharing::SharedVault`, i.e. ciphertext of the vault key to
 //! each member), and the opaque shared **content** blob. It never sees the vault
 //! key, any master password, or any Secret Key — the same zero-knowledge promise
 //! as the personal-vault path in [`crate`], extended to multiple people.
@@ -843,7 +843,7 @@ mod tests {
 
     #[test]
     fn file_group_store() {
-        let dir = std::env::temp_dir().join(format!("proctor-groups-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-groups-test-{}", std::process::id()));
         let store = FileShareGroupStore::new(&dir);
         suite(&store);
         std::fs::remove_dir_all(&dir).ok();
@@ -851,7 +851,7 @@ mod tests {
 
     #[test]
     fn group_id_is_sanitized_to_a_safe_path() {
-        let dir = std::env::temp_dir().join(format!("proctor-groups-safe-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-groups-safe-{}", std::process::id()));
         let store = FileShareGroupStore::new(&dir);
         store.create("../../etc/passwd", owner()).unwrap();
         assert!(!std::path::Path::new("/etc/passwd.json").exists());

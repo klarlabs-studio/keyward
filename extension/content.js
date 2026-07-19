@@ -1,4 +1,4 @@
-// Proctor Passbook — content script
+// Keyward Passbook — content script
 // Runs in the page. Detects login fields and fills them on request from the popup
 // (relayed through the background service worker).
 //
@@ -12,8 +12,8 @@
   // Guard against double registration: this file is declared as a content
   // script AND may be re-injected by the background worker via chrome.scripting.
   // Without this, two onMessage listeners would both try to sendResponse.
-  if (window.__proctorPassbookLoaded) return;
-  window.__proctorPassbookLoaded = true;
+  if (window.__keywardPassbookLoaded) return;
+  window.__keywardPassbookLoaded = true;
 
   // ---- Field detection -----------------------------------------------------
 

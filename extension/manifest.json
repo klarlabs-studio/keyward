@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Proctor Passbook",
+  "name": "Keyward Passbook",
   "version": "0.2.0",
-  "description": "Autofill credentials from your Proctor Passbook vault via a local native-messaging bridge (prototype; demo fallback).",
+  "description": "Autofill credentials from your Keyward Passbook vault via a local native-messaging bridge (prototype; demo fallback).",
   "permissions": ["activeTab", "storage", "scripting", "nativeMessaging"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Proctor Passbook",
+    "default_title": "Keyward Passbook",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/lock-16.png",

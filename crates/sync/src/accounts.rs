@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn file_store_full_lifecycle() {
-        let dir = std::env::temp_dir().join(format!("proctor-accounts-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-accounts-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         account_suite(&FileAccountStore::new(&dir));
         std::fs::remove_dir_all(&dir).ok();
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn tokens_are_stored_hashed_not_in_the_clear() {
-        let dir = std::env::temp_dir().join(format!("proctor-acct-hash-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-acct-hash-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let store = FileAccountStore::new(&dir);
         let acct = store.register(None, "Laptop", 1, None).unwrap();

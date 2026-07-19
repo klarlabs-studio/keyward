@@ -1,4 +1,4 @@
-// TypeScript mirror of the `proctor-passbook` serde model. These shapes must
+// TypeScript mirror of the `keyward-passbook` serde model. These shapes must
 // round-trip byte-for-byte through `seal_vault` / `open_vault`, so they mirror
 // the Rust `Entry` / `Content` derives exactly (Content is externally tagged).
 

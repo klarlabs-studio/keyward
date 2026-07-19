@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    proctor_passbook_desktop_lib::run()
+    keyward_passbook_desktop_lib::run()
 }

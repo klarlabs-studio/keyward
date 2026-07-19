@@ -1,6 +1,6 @@
-# Proctor sync server — managed-cloud deployment
+# Keyward sync server — managed-cloud deployment
 
-This directory deploys the Proctor **zero-knowledge sync + family-sharing relay**
+This directory deploys the Keyward **zero-knowledge sync + family-sharing relay**
 (`crates/sync-server`) to Kubernetes.
 
 > **Open-core note.** This Kubernetes deployment is the **paid, managed-cloud
@@ -25,11 +25,11 @@ never exposed directly — there is deliberately no TLS in the server process.
 client ─HTTPS─▶ nginx-ingress (TLS via cert-manager) ─HTTP─▶ Service ─▶ Pods :8787 (N replicas) ─▶ PostgreSQL
 ```
 
-The managed cloud uses the **PostgreSQL backend** (`PROCTOR_SYNC_PG`), so the API
+The managed cloud uses the **PostgreSQL backend** (`KEYWARD_SYNC_PG`), so the API
 is **stateless and horizontally scalable** — many replicas behind the Service, all
 reading one database (`k8s/postgres.yaml` bundles a simple in-cluster Postgres; for
-production point `PROCTOR_SYNC_PG` at a managed DB / operator instead). The
-file-backed path (`PROCTOR_SYNC_DIR`) remains for single-node self-hosting.
+production point `KEYWARD_SYNC_PG` at a managed DB / operator instead). The
+file-backed path (`KEYWARD_SYNC_DIR`) remains for single-node self-hosting.
 
 ## Prerequisites
 
@@ -41,8 +41,8 @@ file-backed path (`PROCTOR_SYNC_DIR`) remains for single-node self-hosting.
   create that issuer (or change the annotation to your issuer's name).
 - A default (or explicitly set) **StorageClass** (for the bundled Postgres PVC).
 - **PostgreSQL** — either the bundled in-cluster StatefulSet (`k8s/postgres.yaml`)
-  or a managed DB you point `PROCTOR_SYNC_PG` at (preferred for production).
-- The **`proctor-sync-secrets`** Secret (see [Secrets](#secrets) below).
+  or a managed DB you point `KEYWARD_SYNC_PG` at (preferred for production).
+- The **`keyward-sync-secrets`** Secret (see [Secrets](#secrets) below).
 - A DNS record pointing your host at the ingress controller's external address.
 
 ## Build & push the image
@@ -51,8 +51,8 @@ Build from the **repository root** (the Cargo workspace is the build context):
 
 ```bash
 # From the repo root:
-docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/proctor-sync-server:1.42.0 .
-docker push ghcr.io/klarlabs-studio/proctor-sync-server:1.42.0
+docker build -f deploy/Dockerfile -t ghcr.io/klarlabs-studio/keyward-sync-server:1.42.0 .
+docker push ghcr.io/klarlabs-studio/keyward-sync-server:1.42.0
 ```
 
 The image is **server only** (no demo seeder, no CLI), runs as a non-root user
@@ -74,9 +74,9 @@ docker buildx imagetools inspect <image>:<tag> --format '{{.Manifest.Digest}}'
 ## Configure the host & TLS
 
 Edit [`k8s/ingress.yaml`](k8s/ingress.yaml) and replace **both** occurrences of
-`sync.proctor.example` with your real hostname, and set the
+`sync.keyward.example` with your real hostname, and set the
 `cert-manager.io/cluster-issuer` annotation to your issuer. cert-manager will
-provision the cert into the `proctor-sync-tls` secret automatically.
+provision the cert into the `keyward-sync-tls` secret automatically.
 
 Pin the image tag in [`k8s/kustomization.yaml`](k8s/kustomization.yaml)
 (`images[].newTag`) or in [`k8s/deployment.yaml`](k8s/deployment.yaml).
@@ -84,11 +84,11 @@ Pin the image tag in [`k8s/kustomization.yaml`](k8s/kustomization.yaml)
 ## Secrets
 
 The Deployment reads the Postgres URL and (optional) Stripe webhook secret from a
-Secret named `proctor-sync-secrets`. **No Secret manifest is committed** (that would
+Secret named `keyward-sync-secrets`. **No Secret manifest is committed** (that would
 put credentials in version control) — create it out-of-band from real values:
 
 ```bash
-kubectl -n proctor create secret generic proctor-sync-secrets \
+kubectl -n keyward create secret generic keyward-sync-secrets \
   --from-literal=postgres-password="$PG_PASSWORD" \
   --from-literal=postgres-url="$PG_URL" \
   --from-literal=stripe-webhook-secret="$STRIPE_WEBHOOK_SECRET"
@@ -99,7 +99,7 @@ Required keys:
 | Key | Value |
 |---|---|
 | `postgres-password` | The Postgres password (must match the one inside `postgres-url`). |
-| `postgres-url` | The libpq URL, e.g. host `proctor-postgres`, port `5432`, db `proctor`. |
+| `postgres-url` | The libpq URL, e.g. host `keyward-postgres`, port `5432`, db `keyward`. |
 | `stripe-webhook-secret` | Optional; the `whsec_…` signing secret. Omit to leave billing disabled. |
 
 In production, manage this with sealed-secrets / external-secrets rather than by hand.
@@ -121,10 +121,10 @@ kubectl apply -f deploy/k8s/
 Verify:
 
 ```bash
-kubectl -n proctor rollout status deploy/proctor-sync-server
-kubectl -n proctor get pods,svc,ingress,pvc
+kubectl -n keyward rollout status deploy/keyward-sync-server
+kubectl -n keyward get pods,svc,ingress,pvc
 # cert-manager progress:
-kubectl -n proctor get certificate,order,challenge
+kubectl -n keyward get certificate,order,challenge
 ```
 
 Once the certificate is `Ready`, hit `https://<your-host>/healthz` — it should
@@ -136,22 +136,22 @@ Set on the container in `k8s/deployment.yaml`:
 
 | Env var | Default (image) | Meaning |
 |---|---|---|
-| `PROCTOR_SYNC_ADDR` | `0.0.0.0:8787` | Listen address (plain HTTP, behind the ingress). |
-| `PROCTOR_SYNC_PG` | from Secret | PostgreSQL URL → the scalable managed backend. Takes precedence over `PROCTOR_SYNC_DIR`. |
-| `PROCTOR_SYNC_PG_POOL` | `8` | Postgres connection-pool size per replica. |
-| `PROCTOR_STRIPE_WEBHOOK_SECRET` | from Secret (optional) | Stripe webhook signing secret. Unset ⇒ `POST /v1/billing/webhook` returns 503. |
-| `PROCTOR_STRIPE_SECRET_KEY` | from Secret (optional) | Stripe API secret key, used server-side to create Checkout sessions. Never sent to clients. |
-| `PROCTOR_STRIPE_PRICE_FAMILY` | optional | Stripe price id for the Family plan. Together with the secret key it enables `POST /v1/billing/checkout`; either missing ⇒ 503. |
-| `PROCTOR_STRIPE_SUCCESS_URL` / `PROCTOR_STRIPE_CANCEL_URL` | example.com defaults | Where Stripe redirects after checkout completes / is cancelled. |
-| `PROCTOR_SYNC_DIR` | unset here | File-backed store (single-node self-host path). Ignored when `PROCTOR_SYNC_PG` is set. |
-| `PROCTOR_SYNC_TOKEN_TTL` | unset → no expiry | Device-token lifetime in seconds. Manifest sets `2592000` (30 days). `0`/unset ⇒ tokens never expire. |
-| `PROCTOR_SYNC_RATELIMIT_PER_MIN` | `30` | Per-client-IP fixed-window rate limit for the abuse-prone endpoints (`POST /v1/register`, `POST /v1/groups/{id}/invites`). Over the limit ⇒ HTTP `429`. `0` disables. Closes the DoS item in ADR-0004's threat model. |
-| `PROCTOR_SYNC_TRUST_PROXY` | unset (off) | Honour `X-Forwarded-For` when deriving the client IP for rate limiting. **Set this if and only if traffic reaches the pod through a proxy.** Behind an ingress every connection appears to come from the controller pod, so without it the per-IP limit becomes one global bucket any single client can exhaust for everyone. The header is caller-supplied, so on a directly-exposed server trusting it would let clients mint a fresh identity per request and bypass limiting entirely. The rightmost entry is used — a client may prepend anything, but the last element is appended by the nearest trusted proxy. |
-| `PROCTOR_SYNC_TOKENS` | unset | Optional static `token:account,…` pre-seed (bootstrap/test only; the registry is authoritative). |
+| `KEYWARD_SYNC_ADDR` | `0.0.0.0:8787` | Listen address (plain HTTP, behind the ingress). |
+| `KEYWARD_SYNC_PG` | from Secret | PostgreSQL URL → the scalable managed backend. Takes precedence over `KEYWARD_SYNC_DIR`. |
+| `KEYWARD_SYNC_PG_POOL` | `8` | Postgres connection-pool size per replica. |
+| `KEYWARD_STRIPE_WEBHOOK_SECRET` | from Secret (optional) | Stripe webhook signing secret. Unset ⇒ `POST /v1/billing/webhook` returns 503. |
+| `KEYWARD_STRIPE_SECRET_KEY` | from Secret (optional) | Stripe API secret key, used server-side to create Checkout sessions. Never sent to clients. |
+| `KEYWARD_STRIPE_PRICE_FAMILY` | optional | Stripe price id for the Family plan. Together with the secret key it enables `POST /v1/billing/checkout`; either missing ⇒ 503. |
+| `KEYWARD_STRIPE_SUCCESS_URL` / `KEYWARD_STRIPE_CANCEL_URL` | example.com defaults | Where Stripe redirects after checkout completes / is cancelled. |
+| `KEYWARD_SYNC_DIR` | unset here | File-backed store (single-node self-host path). Ignored when `KEYWARD_SYNC_PG` is set. |
+| `KEYWARD_SYNC_TOKEN_TTL` | unset → no expiry | Device-token lifetime in seconds. Manifest sets `2592000` (30 days). `0`/unset ⇒ tokens never expire. |
+| `KEYWARD_SYNC_RATELIMIT_PER_MIN` | `30` | Per-client-IP fixed-window rate limit for the abuse-prone endpoints (`POST /v1/register`, `POST /v1/groups/{id}/invites`). Over the limit ⇒ HTTP `429`. `0` disables. Closes the DoS item in ADR-0004's threat model. |
+| `KEYWARD_SYNC_TRUST_PROXY` | unset (off) | Honour `X-Forwarded-For` when deriving the client IP for rate limiting. **Set this if and only if traffic reaches the pod through a proxy.** Behind an ingress every connection appears to come from the controller pod, so without it the per-IP limit becomes one global bucket any single client can exhaust for everyone. The header is caller-supplied, so on a directly-exposed server trusting it would let clients mint a fresh identity per request and bypass limiting entirely. The rightmost entry is used — a client may prepend anything, but the last element is appended by the nearest trusted proxy. |
+| `KEYWARD_SYNC_TOKENS` | unset | Optional static `token:account,…` pre-seed (bootstrap/test only; the registry is authoritative). |
 
 > The rate limiter is **in-memory and per-pod**. With multiple replicas each pod
 > keeps its own counter, so the effective limit is roughly `replicas ×
-> PROCTOR_SYNC_RATELIMIT_PER_MIN` — set the per-pod value with that in mind, or move
+> KEYWARD_SYNC_RATELIMIT_PER_MIN` — set the per-pod value with that in mind, or move
 > to a shared limiter (Redis) if you need a precise global cap. It is keyed by the
 > client IP as seen by the server — behind nginx-ingress that is typically the
 > proxy's address unless you enable real-client-IP forwarding
@@ -173,7 +173,7 @@ undrainable and block node drains; give Postgres real HA before budgeting it.
 ## Network hardening
 
 [`k8s/networkpolicy.yaml`](k8s/networkpolicy.yaml) applies a **default-deny
-ingress** posture for the `proctor` namespace plus the minimum explicit allows
+ingress** posture for the `keyward` namespace plus the minimum explicit allows
 (requires a NetworkPolicy-enforcing CNI such as Calico or Cilium; on other CNIs
 the objects are inert but harmless):
 
@@ -197,15 +197,15 @@ namespace label):
 | Ingress-controller namespace | `ingress-nginx` | wherever ingress-nginx runs (e.g. `kube-system`). |
 | Monitoring namespace | `monitoring` | wherever Prometheus runs (kube-prometheus-stack default is `monitoring`). |
 
-If you don't scrape from inside the `proctor` namespace, drop the same-namespace
+If you don't scrape from inside the `keyward` namespace, drop the same-namespace
 `podSelector: {}` block from `allow-ingress-to-app`.
 
 ## Health & metrics
 
 - `GET /healthz` → `200 {"status":"ok"}` — liveness (also the image `HEALTHCHECK`).
 - `GET /readyz` → `200 {"status":"ok"}` — readiness.
-- `GET /metrics` → Prometheus exposition (`proctor_requests_total`,
-  `proctor_uptime_seconds`, `proctor_build_info{backend,version}`). Aggregate
+- `GET /metrics` → Prometheus exposition (`keyward_requests_total`,
+  `keyward_uptime_seconds`, `keyward_build_info{backend,version}`). Aggregate
   counters only (no PII). The pod carries `prometheus.io/scrape` annotations, and
   Prometheus scrapes the pod **directly** on 8787 — that path does not traverse
   the ingress.
@@ -243,11 +243,11 @@ the baseline is a scheduled `pg_dump` via [`backup.sh`](backup.sh):
 ```bash
 # Dump / restore against any reachable Postgres (PG_URL is your connection URL):
 PG_URL='<your-postgres-url>' ./deploy/backup.sh backup ./backups
-PG_URL='<your-postgres-url>' ./deploy/backup.sh restore ./backups/proctor-<stamp>.sql.gz
+PG_URL='<your-postgres-url>' ./deploy/backup.sh restore ./backups/keyward-<stamp>.sql.gz
 
 # ...or against the bundled in-cluster StatefulSet without exposing Postgres:
-kubectl -n proctor exec -i statefulset/proctor-postgres -- \
-  pg_dump -U proctor proctor | gzip > proctor-backup.sql.gz
+kubectl -n keyward exec -i statefulset/keyward-postgres -- \
+  pg_dump -U keyward keyward | gzip > keyward-backup.sql.gz
 ```
 
 Take a dump before upgrades. Losing the database means every account must
@@ -259,5 +259,5 @@ re-register and re-upload its (client-encrypted) vault.
 kubectl delete -k deploy/k8s
 # The bundled Postgres StatefulSet's PVC is retained by default; delete it
 # explicitly to remove the data:
-kubectl -n proctor delete pvc -l app.kubernetes.io/name=proctor-postgres
+kubectl -n keyward delete pvc -l app.kubernetes.io/name=keyward-postgres
 ```

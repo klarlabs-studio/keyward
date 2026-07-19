@@ -1,6 +1,6 @@
 //! PostgreSQL adapters for the Sync ports — the **managed-cloud backend**.
 //!
-//! The file/memory adapters in [`proctor_sync`] are single-node. These implement
+//! The file/memory adapters in [`keyward_sync`] are single-node. These implement
 //! the same [`SyncStore`], [`AccountStore`], and [`ShareGroupStore`] ports over a
 //! shared PostgreSQL database, so the HTTP API becomes **stateless and
 //! horizontally scalable** (N replicas behind the ingress, all reading one
@@ -21,12 +21,12 @@ use sha2::{Digest, Sha256};
 use std::fmt::Display;
 use std::io;
 
-use proctor_sync::accounts::{Account, AccountStore, DeviceInfo, Plan, TokenIdentity};
-use proctor_sync::groups::{
+use keyward_sync::accounts::{Account, AccountStore, DeviceInfo, Plan, TokenIdentity};
+use keyward_sync::groups::{
     apply_redeem, apply_remove, GroupInvite, GroupMember, RedeemOutcome, Role, ShareGroup,
     ShareGroupStore,
 };
-use proctor_sync::{SyncEnvelope, SyncError, SyncStore};
+use keyward_sync::{SyncEnvelope, SyncError, SyncStore};
 
 type Pool = r2d2::Pool<PostgresConnectionManager<NoTls>>;
 
@@ -139,7 +139,7 @@ fn db_err<E: Display>(e: E) -> SyncError {
     SyncError::Io(io::Error::other(e.to_string()))
 }
 
-/// The optimistic-concurrency rule (mirrors `proctor_sync`'s private helper): a
+/// The optimistic-concurrency rule (mirrors `keyward_sync`'s private helper): a
 /// write is accepted only if the client's expected version matches the server's.
 fn next_version(current: Option<u64>, expected: Option<u64>) -> Result<u64, SyncError> {
     if expected == current {

@@ -1,15 +1,15 @@
 [package]
-name = "proctor-cli"
-description = "Proctor CLI — demonstrates the credential broker end-to-end."
+name = "keyward-cli"
+description = "Keyward CLI — demonstrates the credential broker end-to-end."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "proctor"
+name = "keyward"
 path = "src/main.rs"
 
 [dependencies]
-proctor-vault = { path = "../vault" }
-proctor-broker = { path = "../broker" }
-proctor-profiles = { path = "../profiles" }
+keyward-vault = { path = "../vault" }
+keyward-broker = { path = "../broker" }
+keyward-profiles = { path = "../profiles" }

@@ -1,4 +1,4 @@
-//! Proctor AI credential broker — the security model.
+//! Keyward AI credential broker — the security model.
 //!
 //! Design principle: **minimize blast radius by construction, not by vigilance.**
 //! Hiding plaintext from the model is necessary but the easy 20%. The hard part
@@ -23,7 +23,7 @@
 //!   `AuditLog::with_file`, so behaviour is unchanged).
 //!
 //! The **Minter**/**Executor** are *named* here (the [`Primitive::Minted`]
-//! outcome) but owned as ports by `proctor-mint`; the executing host wires the
+//! outcome) but owned as ports by `keyward-mint`; the executing host wires the
 //! concrete minter. See `docs/architecture/context-map.md` and
 //! `ADR-0003-ddd-hexagonal-structure.md`.
 

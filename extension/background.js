@@ -1,11 +1,11 @@
-// Proctor Passbook — background service worker (MV3)
+// Keyward Passbook — background service worker (MV3)
 // Two responsibilities:
 //   1. Relay fill/probe messages between the popup and the active tab's content
 //      script. The popup cannot reliably talk to a content script directly
 //      across all page states, so it asks the worker, which resolves the active
 //      tab and forwards.
 //   2. Proxy vault queries (`list`/`get`) to the local native-messaging host
-//      (`com.klarlabs.proctor.passbook`) so the popup can read real vault items
+//      (`com.klarlabs.keyward.passbook`) so the popup can read real vault items
 //      without embedding secrets in the extension.
 //
 // SECURITY: the native host only returns secrets for a `get` at fill time. This
@@ -14,7 +14,7 @@
 
 "use strict";
 
-const NATIVE_HOST = "com.klarlabs.proctor.passbook";
+const NATIVE_HOST = "com.klarlabs.keyward.passbook";
 
 // One-shot native-messaging request. Chrome spawns the host, delivers `msg`,
 // reads one reply, then tears the host down. `chrome.runtime.lastError` is set

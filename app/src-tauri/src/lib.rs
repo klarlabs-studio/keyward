@@ -1,4 +1,4 @@
-//! Native desktop shell for the Proctor Passbook web vault.
+//! Native desktop shell for the Keyward Passbook web vault.
 //!
 //! This crate is a thin Tauri v2 wrapper: it loads the exact same Vue 3 + Vite
 //! frontend that ships as the web vault (dev server on :5173, production build
@@ -10,5 +10,5 @@
 pub fn run() {
     tauri::Builder::default()
         .run(tauri::generate_context!())
-        .expect("error while running Proctor Passbook desktop application");
+        .expect("error while running Keyward Passbook desktop application");
 }

@@ -1,6 +1,6 @@
-# Proctor — B2C Password / Credential Manager: Market & Feature Research
+# Keyward — B2C Password / Credential Manager: Market & Feature Research
 
-> **Status:** Research report v1 · **Date:** July 2026 · **Author:** Proctor product research
+> **Status:** Research report v1 · **Date:** July 2026 · **Author:** Keyward product research
 > **Scope:** Consumer (B2C) password / credential management. Enterprise (SSO/SCIM/PAM) covered only as context.
 > **Sourcing note:** Market-size figures vary widely by analyst. Where sources disagree we present a **range**, not false precision. Inline citations refer to the source list at the end.
 
@@ -14,7 +14,7 @@ The consumer password-manager market is **large, growing, under-penetrated, and 
 - **Under-penetration:** only ~**36% of US adults (~94M people)** use a password manager, up just ~2 pts YoY [S2]. Critically, **75%+ of non-users say they would adopt one if it balanced security, cost, and usability** [S5] — the single most important demand signal in this report.
 - **Incumbent gravity:** Apple Passwords + Google Password Manager together hold **55%+ of usage** by being free and built-in [S5]. They are the real default, not the paid players.
 - **2026 turmoil:** Dashlane killed its free plan (Sep 2025); Bitwarden raised Premium **+98%** (Jan 2026); 1Password raised prices **+33%** (Mar 2026, its first consumer increase since 2016); Proton Pass *cut* prices; ETH Zürich researchers disclosed **25+ cryptographic flaws** across three major cloud managers [S8, S9, S12]. Trust and pricing are both in flux.
-- **The two structural gaps (and Proctor's thesis):**
+- **The two structural gaps (and Keyward's thesis):**
   1. **The best UX is proprietary and getting expensive.** 1Password is the consensus polish/UX/family leader — and now has *no free tier* plus a 33% price hike [S8, S13, S16].
   2. **The best open option has degraded UX and weak connectivity.** Bitwarden's 2024–25 browser-extension redesign produced a documented wave of complaints: 20–60s blank loads, added clicks, broken search, laggy autofill [S10, S11 GH#12698].
 - **The opening:** an **open-source, 1Password-grade, passkey-era, family-friendly credential manager** with a **user-choosable cloud/on-device trust model** and fair pricing. No incumbent occupies that intersection.
@@ -39,7 +39,7 @@ The consumer password-manager market is **large, growing, under-penetrated, and 
 - **The category is highly fragmented.** By some measures "Others" account for **~60%** of the paid market [S2] — i.e., no single paid vendor dominates consumers; the built-ins do.
 - **The willingness signal is the whole game.** The 75%+ "would adopt if it were the right balance" figure says the barrier is **product experience and value**, not awareness. Awareness of the *problem* is high; the products have failed to convert.
 
-**Implication for Proctor:** win the switchers *and* the not-yet-adopters by beating the built-ins on capability and beating the paid incumbents on the security/cost/usability balance the market says it wants.
+**Implication for Keyward:** win the switchers *and* the not-yet-adopters by beating the built-ins on capability and beating the paid incumbents on the security/cost/usability balance the market says it wants.
 
 ---
 
@@ -64,7 +64,7 @@ The consumer password-manager market is **large, growing, under-penetrated, and 
   - **Search degraded** (per-word filtering instead of phrase matching).
   - General lag/sluggishness; multi-step render "flashing"; endless loading when editing a login's URL [GitHub bitwarden/clients #12698].
   - Users publicly stating they are considering switching to 1Password "while I was always a huge fan of Bitwarden."
-- **Takeaway:** Bitwarden validates both the demand for open source *and* the exact functional gap (connectivity, autofill reliability, extension performance, organization) Proctor should own.
+- **Takeaway:** Bitwarden validates both the demand for open source *and* the exact functional gap (connectivity, autofill reliability, extension performance, organization) Keyward should own.
 
 ### 3.3 Proton Pass — the privacy challenger, rising fast
 - **Positioning:** Swiss, privacy-first, part of the Proton suite; increasingly the reviewer pick for *free* [S8, S18].
@@ -88,7 +88,7 @@ The consumer password-manager market is **large, growing, under-penetrated, and 
 | **Passbolt** | AGPL-3.0 | Team server, OpenPGP per-user keys | Fine-grained, GPG | Team/compliance focus; LDAP/SSO in CE [S3, S4] |
 | **`pass`** | GPL | Git tree of GPG files, CLI | Via git/GPG | Unix-philosophy; scriptable/auditable; poor consumer UX [S4] |
 
-**Takeaway:** the OSS tier proves demand for sovereignty and auditability, but every option trades away consumer-grade UX, seamless sync, or polished family sharing. That trade-off is precisely what Proctor removes.
+**Takeaway:** the OSS tier proves demand for sovereignty and auditability, but every option trades away consumer-grade UX, seamless sync, or polished family sharing. That trade-off is precisely what Keyward removes.
 
 ---
 
@@ -150,15 +150,15 @@ Legend: ✅ yes · ⚠️ partial/caveated · ❌ no. Prices are 2026 post-hike 
 - There is **no incumbent solution** for letting an agent *use* a credential (fill a field, run an authenticated command) without exposing the plaintext. This is a green-field wedge and directly aligned with the MCP-centric workflow this project already lives in.
 
 ### 6.4 Sovereignty & local-first demand
-- Steady growth of self-host (Vaultwarden 40K+ stars) and offline-first (KeePassXC) reflects real distrust of cloud custody and price/lock-in fear [S3, S4]. Users increasingly want to *choose* where their data lives — the core of Proctor's architecture.
+- Steady growth of self-host (Vaultwarden 40K+ stars) and offline-first (KeePassXC) reflects real distrust of cloud custody and price/lock-in fear [S3, S4]. Users increasingly want to *choose* where their data lives — the core of Keyward's architecture.
 
 ---
 
-## 7. The opening for Proctor
+## 7. The opening for Keyward
 
 Synthesis of the above: the market wants a product that no one currently ships — sitting at the intersection of five axes each incumbent only partially covers.
 
-| Axis | Best incumbent | Its gap | Proctor's move |
+| Axis | Best incumbent | Its gap | Keyward's move |
 |---|---|---|---|
 | UX / autofill / organization | 1Password | Proprietary, no free tier, pricey | Match the polish; open source; real free tier |
 | Openness / auditability | Bitwarden | Degraded UX, weak connectivity | Open + *actually excellent* extension & sync |
@@ -167,7 +167,7 @@ Synthesis of the above: the market wants a product that no one currently ships �
 | Family | 1Password | Locked behind proprietary premium | Family-first, mixed-skill, open-core pricing |
 | **Agent credential use** | **none** | **entirely unserved** | **MCP/CLI credential broker — "hands, not secrets"** |
 
-**Proctor's one-line thesis:** *the password manager that's as polished as 1Password, as open as Bitwarden, as private as you want it — and you decide where your vault lives.* Plus a category-defining capability for the agentic era: let AI use your credentials without ever seeing them.
+**Keyward's one-line thesis:** *the password manager that's as polished as 1Password, as open as Bitwarden, as private as you want it — and you decide where your vault lives.* Plus a category-defining capability for the agentic era: let AI use your credentials without ever seeing them.
 
 The product spec (`../product/product-spec.md`) turns this into positioning, architecture, feature set, pricing, and roadmap.
 

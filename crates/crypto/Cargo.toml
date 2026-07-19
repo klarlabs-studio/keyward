@@ -1,6 +1,6 @@
 [package]
-name = "proctor-crypto"
-description = "Proctor shared cryptographic kernel — Argon2id KDF + XChaCha20-Poly1305 AEAD primitives shared by the vault contexts."
+name = "keyward-crypto"
+description = "Keyward shared cryptographic kernel — Argon2id KDF + XChaCha20-Poly1305 AEAD primitives shared by the vault contexts."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

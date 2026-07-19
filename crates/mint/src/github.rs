@@ -186,7 +186,7 @@ impl TokenHttp for ReqwestHttp {
             .post(url)
             .header("Authorization", format!("Bearer {jwt}"))
             .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "proctor")
+            .header("User-Agent", "keyward")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .json(body)
             .send()

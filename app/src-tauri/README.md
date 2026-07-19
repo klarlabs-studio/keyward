@@ -1,6 +1,6 @@
-# Proctor Passbook — Desktop shell (Tauri v2)
+# Keyward Passbook — Desktop shell (Tauri v2)
 
-A native desktop wrapper around the **exact same** Proctor Passbook Vue 3 + Vite
+A native desktop wrapper around the **exact same** Keyward Passbook Vue 3 + Vite
 web vault that lives in `../` (the `app/` directory). It does not fork or modify
 the frontend: in development it loads the Vite dev server on
 `http://localhost:5173`, and in a production build it serves the compiled assets
@@ -15,8 +15,8 @@ from `../dist`. The crypto core continues to run in-browser via the
 from Tauri v2's Linux GTK backend** and are all *unmaintained*/*unsound*
 classifications, not remote-exploitable vulnerabilities. They affect only this
 detached desktop shell (its own Cargo workspace), never the core crates
-(`proctor-passbook`, `proctor-sync`, `proctor-crypto`, the broker) or the
-`proctor-sync-server`. On macOS the GTK backend isn't used at all (WebKit). They
+(`keyward-passbook`, `keyward-sync`, `keyward-crypto`, the broker) or the
+`keyward-sync-server`. On macOS the GTK backend isn't used at all (WebKit). They
 are tracked and will clear when Tauri bumps its gtk-rs pins; see the repo's nox
 baseline for the recorded rationale.
 
@@ -62,7 +62,7 @@ npm run tauri icon src-tauri/icons/icon.png
 ## Why a standalone Cargo workspace?
 
 `Cargo.toml` starts with an empty `[workspace]` table. That deliberately
-detaches this crate from the parent Proctor workspace at the repo root, so the
+detaches this crate from the parent Keyward workspace at the repo root, so the
 desktop shell's heavy GUI dependency tree is never pulled into — and cannot
 break — the parent `cargo build`. Build the desktop shell from within
 `app/src-tauri/` (or via the `npm run tauri` scripts), not from the repo root.

@@ -1,5 +1,5 @@
 [package]
-name = "proctor-sync"
+name = "keyward-sync"
 description = "Zero-knowledge sync domain — versioned push/pull of an opaque sealed-vault blob the server can never read."
 version.workspace = true
 edition.workspace = true

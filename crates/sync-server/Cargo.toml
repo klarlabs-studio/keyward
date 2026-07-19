@@ -1,17 +1,17 @@
 [package]
-name = "proctor-sync-server"
+name = "keyward-sync-server"
 description = "Zero-knowledge sync server — stores opaque sealed-vault blobs over a tiny HTTP API. Never sees plaintext."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "proctor-sync-server"
+name = "keyward-sync-server"
 path = "src/main.rs"
 
 [dependencies]
-proctor-sync = { path = "../sync" }
-proctor-sync-postgres = { path = "../sync-postgres" }
+keyward-sync = { path = "../sync" }
+keyward-sync-postgres = { path = "../sync-postgres" }
 hmac = "0.12"
 serde_json = "1"
 sha2 = "0.10"

@@ -1,4 +1,4 @@
-# Proctor Passbook — demo environment.
+# Keyward Passbook — demo environment.
 #
 # Demo data lives ENTIRELY here; the production app ships none. This spins up the
 # zero-knowledge sync server, a one-shot seeder that uploads a real 2SKD-sealed
@@ -10,17 +10,17 @@
 #   3. read demo/out/credentials.txt   and open http://localhost:8080
 #
 # Reset the demo:  docker compose -f demo/docker-compose.demo.yml down -v && rm -f demo/out/credentials.txt
-name: proctor-passbook-demo
+name: keyward-passbook-demo
 
 services:
   sync:
     build:
       context: ..
       dockerfile: demo/Dockerfile
-    command: ["proctor-sync-server"]
+    command: ["keyward-sync-server"]
     environment:
-      PROCTOR_SYNC_ADDR: 0.0.0.0:8787
-      PROCTOR_SYNC_DIR: /data
+      KEYWARD_SYNC_ADDR: 0.0.0.0:8787
+      KEYWARD_SYNC_DIR: /data
     volumes:
       - demo-data:/data
     ports:

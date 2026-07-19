@@ -1,11 +1,11 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: proctor-sync-server
-  namespace: proctor
+  name: keyward-sync-server
+  namespace: keyward
   labels:
-    app.kubernetes.io/name: proctor-sync-server
-    app.kubernetes.io/part-of: proctor
+    app.kubernetes.io/name: keyward-sync-server
+    app.kubernetes.io/part-of: keyward
   annotations:
     # cert-manager issues + renews the TLS cert for the host below. Replace with
     # your ClusterIssuer name (must already exist in the cluster).
@@ -17,17 +17,17 @@ spec:
   tls:
     - hosts:
         # CHANGE ME to your real hostname (cert-manager provisions this cert).
-        - sync.proctor.example
-      secretName: proctor-sync-tls
+        - sync.keyward.example
+      secretName: keyward-sync-tls
   rules:
     # CHANGE ME to match the host above.
-    - host: sync.proctor.example
+    - host: sync.keyward.example
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: proctor-sync-server
+                name: keyward-sync-server
                 port:
                   name: http

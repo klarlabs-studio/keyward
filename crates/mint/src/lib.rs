@@ -1,4 +1,4 @@
-//! Proctor credential minting — the "mint, don't inject" primitive.
+//! Keyward credential minting — the "mint, don't inject" primitive.
 //!
 //! Instead of handing an agent a durable secret, the broker asks a [`Minter`] to
 //! exchange it for a **short-lived, narrowly-scoped** token. A leaked minted

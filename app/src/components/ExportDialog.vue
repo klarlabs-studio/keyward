@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Export the vault to a portable file — no lock-in. Proctor JSON is full-fidelity
+// Export the vault to a portable file — no lock-in. Keyward JSON is full-fidelity
 // (and re-importable), Bitwarden JSON is portable, CSV is universal but lossy.
 // Exports are PLAINTEXT by design; the dialog says so plainly.
 
@@ -11,10 +11,10 @@ import { copyText, toast } from '@/composables/useToast';
 const vault = useVaultStore();
 const emit = defineEmits<{ (e: 'close'): void }>();
 
-const format = ref<ExportFormat>('proctor');
+const format = ref<ExportFormat>('keyward');
 
 const OPTIONS: { value: ExportFormat; label: string; note: string }[] = [
-  { value: 'proctor', label: 'Proctor (JSON)', note: 'Full fidelity — re-importable into Proctor.' },
+  { value: 'keyward', label: 'Keyward (JSON)', note: 'Full fidelity — re-importable into Keyward.' },
   { value: 'bitwarden', label: 'Bitwarden (JSON)', note: 'Unencrypted Bitwarden export shape.' },
   { value: 'csv', label: 'CSV', note: 'Universal, but lossy (logins map best).' },
 ];

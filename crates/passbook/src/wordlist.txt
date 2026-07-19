@@ -1,4 +1,4 @@
-# EFF Long Wordlist — passphrase word list for Proctor.
+# EFF Long Wordlist — passphrase word list for Keyward.
 #
 # Source:  https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
 # Author:  Electronic Frontier Foundation — https://www.eff.org/dice

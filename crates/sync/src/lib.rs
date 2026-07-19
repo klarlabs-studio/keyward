@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn file_store_roundtrip_and_conflict() {
-        let dir = std::env::temp_dir().join(format!("proctor-sync-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-sync-test-{}", std::process::id()));
         let store = FileStore::new(&dir);
         roundtrip_suite(&store);
         std::fs::remove_dir_all(&dir).ok();
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn account_name_is_sanitized_to_a_safe_path() {
-        let dir = std::env::temp_dir().join(format!("proctor-sync-safe-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("keyward-sync-safe-{}", std::process::id()));
         let store = FileStore::new(&dir);
         // A traversal-y account name must not escape the dir.
         store.put("../../etc/passwd", None, b"z".to_vec()).unwrap();

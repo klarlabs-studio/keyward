@@ -1,7 +1,7 @@
-// Proctor Passbook — popup logic
+// Keyward Passbook — popup logic
 //
 // Reads vault items from the local Passbook bridge over Chrome native messaging
-// (via the background service worker → host `com.klarlabs.proctor.passbook`).
+// (via the background service worker → host `com.klarlabs.keyward.passbook`).
 //
 // Flow:
 //   1. Resolve the active tab and derive its origin/host.

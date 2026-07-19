@@ -5,7 +5,7 @@
 
 import type { Card, Entry, Identity, Login } from './passbook-types';
 
-export type ImportFormat = 'proctor' | 'bitwarden' | 'lastpass' | '1password' | 'csv';
+export type ImportFormat = 'keyward' | 'bitwarden' | 'lastpass' | '1password' | 'csv';
 
 export interface ImportResult {
   format: ImportFormat;
@@ -84,7 +84,7 @@ export function detectFormat(text: string): ImportFormat {
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
     try {
       const data = JSON.parse(trimmed);
-      if (data && Array.isArray(data.entries)) return 'proctor';
+      if (data && Array.isArray(data.entries)) return 'keyward';
       if (data && Array.isArray(data.items)) return 'bitwarden';
     } catch {
       // fall through to CSV sniffing
@@ -134,11 +134,11 @@ interface BwItem {
 }
 
 // ---------------------------------------------------------------------------
-// Proctor native JSON — round-trips our own export. Entries are re-id'd so a
+// Keyward native JSON — round-trips our own export. Entries are re-id'd so a
 // re-import never collides with items already in the vault.
 // ---------------------------------------------------------------------------
 
-function parseProctor(text: string, now: number): ImportResult {
+function parseKeyward(text: string, now: number): ImportResult {
   const data = JSON.parse(text) as { entries?: unknown };
   const raw = Array.isArray(data.entries) ? data.entries : [];
   const entries: Entry[] = [];
@@ -158,7 +158,7 @@ function parseProctor(text: string, now: number): ImportResult {
       content: e.content,
     });
   }
-  return { format: 'proctor', entries, skipped };
+  return { format: 'keyward', entries, skipped };
 }
 
 function parseBitwarden(text: string, now: number): ImportResult {
@@ -312,7 +312,7 @@ export function parseImport(text: string, now: number, forced?: ImportFormat): I
   if (!text.trim()) throw new Error('Nothing to import — the file is empty.');
   const format = forced ?? detectFormat(text);
   try {
-    if (format === 'proctor') return parseProctor(text, now);
+    if (format === 'keyward') return parseKeyward(text, now);
     if (format === 'bitwarden') return parseBitwarden(text, now);
     const rows = parseCsv(text);
     if (rows.length < 2) throw new Error('No rows found below the header.');

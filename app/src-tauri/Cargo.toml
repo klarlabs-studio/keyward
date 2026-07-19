@@ -1,15 +1,15 @@
 # Standalone workspace: the empty [workspace] table below detaches this crate
-# from the parent Proctor Cargo workspace at the repo root, so the desktop
+# from the parent Keyward Cargo workspace at the repo root, so the desktop
 # shell builds independently and never perturbs the parent build.
 [workspace]
 
 [package]
-name = "proctor-passbook-desktop"
+name = "keyward-passbook-desktop"
 version = "1.19.0"
-description = "Native desktop shell for the Proctor Passbook web vault"
+description = "Native desktop shell for the Keyward Passbook web vault"
 authors = ["Klar Labs"]
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/klarlabs/proctor"
+repository = "https://github.com/klarlabs/keyward"
 edition = "2021"
 rust-version = "1.90"
 
@@ -17,11 +17,11 @@ rust-version = "1.90"
 # that calls into it — this split is what Tauri v2 expects and enables mobile
 # targets to reuse the same `run()` if ever needed.
 [lib]
-name = "proctor_passbook_desktop_lib"
+name = "keyward_passbook_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "proctor-passbook-desktop"
+name = "keyward-passbook-desktop"
 path = "src/main.rs"
 
 [build-dependencies]

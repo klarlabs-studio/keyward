@@ -146,7 +146,7 @@ secrets.
 ## Increment plan
 
 - **v1.28.0 — server relay + this ADR.** Additive `ShareGroupStore` port
-  (memory + file adapters) in `proctor-sync`, the group endpoints above in
+  (memory + file adapters) in `keyward-sync`, the group endpoints above in
   `sync-server`, full handler tests. No change to existing crypto → zero risk to
   shipped vaults. *(this increment)*
 - **v1.29.0 — client crypto surface.** Vault-key indirection in `sealing`

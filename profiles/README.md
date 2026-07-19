@@ -1,7 +1,7 @@
 # Provider profiles
 
 These are **external, pluggable descriptors** — pure data, no code. Each file
-tells Proctor two things about a credential type:
+tells Keyward two things about a credential type:
 
 1. **How the credential is presented** to a process (which env var(s)).
 2. **Which command invocations mutate** (for the risk gate).
@@ -12,8 +12,8 @@ OpenTofu, and SDKs alike. See [ADR-0002](../docs/architecture/ADR-0002-scaling-c
 
 ## Adding a provider (no recompile)
 
-Drop a `<id>.toml` file into your profiles directory (`$PROCTOR_PROFILES`, or
-`~/.proctor/profiles`). That's it — GitLab, Azure, Cloudflare, whatever arises.
+Drop a `<id>.toml` file into your profiles directory (`$KEYWARD_PROFILES`, or
+`~/.keyward/profiles`). That's it — GitLab, Azure, Cloudflare, whatever arises.
 
 ### Single-token providers
 

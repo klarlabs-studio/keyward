@@ -134,7 +134,7 @@ const trust = await import('../src/lib/trust');
 // ----- Hydration from a vault entry -----------------------------------------
 {
   const entry: Entry = {
-    id: 'proctor-trust-state',
+    id: 'keyward-trust-state',
     title: '__trust__',
     tags: [],
     favorite: false,
