@@ -41,7 +41,12 @@ jobs:
         env:
           POSTGRES_USER: keyward
           POSTGRES_PASSWORD: keyward
-          POSTGRES_DB: keyward_test
+          # Named `keyward`, matching POSTGRES_USER, and that is load-bearing.
+          # `cornucopia fresh` takes a server URL with NO database path (it
+          # appends its own temp database to it), which means libpq falls back
+          # to the default — the username. With POSTGRES_DB: keyward_test the
+          # drift gate died on `FATAL: database "keyward" does not exist`.
+          POSTGRES_DB: keyward
         ports:
           - 5432:5432
         # Without this the job races the container and fails on connection
@@ -99,7 +104,7 @@ jobs:
       # is distinguishable at a glance from a logic failure in the line above.
       - name: Postgres contract tests (real backend)
         env:
-          KEYWARD_TEST_PG: postgres://keyward:keyward@localhost:5432/keyward_test
+          KEYWARD_TEST_PG: postgres://keyward:keyward@localhost:5432/keyward
         run: cargo test -p keyward-sync-postgres --features keyward-sync/testkit
 
       # Guard the guard. The contract tests skip when KEYWARD_TEST_PG is unset,
@@ -108,7 +113,7 @@ jobs:
       # database is genuinely reachable rather than trusting that it was.
       - name: Assert the contract tests did not silently skip
         env:
-          KEYWARD_TEST_PG: postgres://keyward:keyward@localhost:5432/keyward_test
+          KEYWARD_TEST_PG: postgres://keyward:keyward@localhost:5432/keyward
         run: |
           out="$(cargo test -p keyward-sync-postgres --features keyward-sync/testkit -- --nocapture 2>&1)"
           echo "$out"
