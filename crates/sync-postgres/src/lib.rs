@@ -470,7 +470,11 @@ fn load_group(
             public_key: r.get(3),
             signing_key: r.get(4),
             role: Role::parse(&r.get::<_, String>(5)),
-            added_epoch: r.get::<_, i64>(5) as u64,
+            // Index 6, not 5. The SELECT above is member_id, account_id, name,
+            // public_key, signing_key, role, added_epoch — index 5 is `role`, a
+            // TEXT column. Reading it as i64 does not yield a wrong number, it
+            // PANICS, on every single group load.
+            added_epoch: r.get::<_, i64>(6) as u64,
         })
         .collect();
     let invites = client
@@ -573,7 +577,7 @@ fn insert_member(
         .execute(
             "INSERT INTO group_members \
              (group_id, member_id, account_id, name, public_key, signing_key, role, added_epoch) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             &[
                 &group_id,
                 &m.member_id,
