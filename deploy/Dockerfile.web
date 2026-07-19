@@ -1,0 +1,165 @@
+# syntax=docker/dockerfile:1
+#
+# Production image for the Keyward WEB VAULT — the Vue 3 + Vite SPA in app/,
+# served as static files by nginx.
+#
+# This is the client. Until it existed, deploy/ shipped only the sync server (an
+# API relay), `GET /` on the managed instance returned a literal "not found",
+# and the only way to actually use Keyward was to clone the repo and run
+# `npm run dev`. This image is what makes the product reachable.
+#
+# Build context is the repository ROOT — NOT app/. The WASM crypto core is
+# compiled from crates/passbook-wasm, so the build needs both trees:
+#   docker build -f deploy/Dockerfile.web -t ghcr.io/klarlabs-studio/keyward-web:2.0.0 .
+#
+# WHICH ORIGIN THIS IS MEANT TO BE SERVED FROM: its own hostname, separate from
+# the sync API (app.keyward.example vs sync.keyward.example). That is a security
+# decision with a written rationale — see deploy/README.md § "Which origin serves
+# the vault". The short version: localStorage on this origin holds the device
+# Secret Key, the member X25519 secret and the device token in PLAINTEXT
+# (docs/security/known-limitations.md §10), so anything that can execute script
+# here is a total vault compromise. Keeping the API on a different origin means
+# this one serves only bytes we authored and froze at release time.
+#
+# APPLE SILICON NOTE: unlike deploy/Dockerfile, this image CAN be built locally
+# on arm64 — for its native platform. Building `--platform linux/amd64` from an
+# Apple Silicon workstation still runs the Rust wasm compile under QEMU and hits
+# the same `qemu: uncaught target signal 11` rustc segfault documented in
+# deploy/Dockerfile.static. Build it natively to smoke-test; let the amd64 runner
+# in .github/workflows/release.yml produce the released image.
+
+# ---- build stage ---------------------------------------------------------
+# node:22-bookworm (not -slim, not alpine): the build needs a working Rust
+# toolchain and wasm-pack alongside npm, and the full Debian image already
+# carries the curl/build-essential/pkg-config that rustup and wasm-bindgen
+# expect. Node 22 matches the version .github/workflows/ci.yml type-checks with;
+# a build that succeeds here and fails in CI (or vice versa) is worth avoiding
+# for the sake of one extra layer that never reaches production.
+FROM node:22-bookworm@sha256:5647be709086c696ff32edaaf1c70cd26d1da6ab2b39c32f3c7b4c4a31957e37 AS build
+
+# Rust pinned to the workspace's rust-version, exactly as ci.yml and
+# deploy/Dockerfile do. The wasm32-unknown-unknown target is what
+# crates/passbook-wasm compiles to.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --default-toolchain 1.90 --target wasm32-unknown-unknown \
+ && rustc --version
+
+# wasm-pack, pinned to the version CI uses (jetli/wasm-pack-action v0.15.0).
+# Unpinned, a wasm-pack release could change the generated JS loader shape and
+# the image would silently diverge from what CI type-checked.
+#
+# TARGETARCH is set automatically by BuildKit. The two-path install is not
+# over-engineering — it is the difference between this image being buildable on
+# the maintainer's workstation or not:
+#
+#   amd64  — a prebuilt binary exists, so use it. This is the release path
+#            (.github/workflows/release.yml runs on an amd64 runner) and it
+#            keeps that build fast.
+#   others — wasm-pack publishes NO aarch64-unknown-linux-* binary, so there is
+#            nothing to download and the build must compile it from source.
+#            Slower (a few minutes, cached in a layer), but it is what lets an
+#            arm64 workstation build this image natively and smoke-test the
+#            result. `--locked` so the install resolves the versions wasm-pack
+#            shipped rather than whatever is newest today.
+ARG TARGETARCH
+RUN set -eux; \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
+      curl -sSfL "https://github.com/rustwasm/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz" -o /tmp/wasm-pack.tar.gz; \
+      tar -xzf /tmp/wasm-pack.tar.gz -C /tmp; \
+      mv /tmp/wasm-pack-v0.15.0-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/wasm-pack; \
+      chmod 0755 /usr/local/bin/wasm-pack; \
+      rm -rf /tmp/wasm-pack*; \
+    else \
+      cargo install wasm-pack --locked --version 0.15.0; \
+    fi; \
+    wasm-pack --version
+
+WORKDIR /src
+
+# Dependency layer first: package.json + lock only, so `npm ci` is cached and is
+# not re-run every time a .vue file changes.
+COPY app/package.json app/package-lock.json ./app/
+RUN cd app && npm ci
+
+# Now the sources. The Cargo workspace files come along because
+# app/package.json's `build:wasm` script reaches out to ../crates/passbook-wasm.
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+COPY app ./app
+
+# ORDER IS LOAD-BEARING — build:wasm MUST run before build.
+#
+# `npm run build` begins with `vue-tsc --noEmit`, and app/src/lib/passbook.ts and
+# app/src/lib/sharing.ts import '../wasm/pkg/passbook_wasm.js'. That module is
+# GENERATED by wasm-pack into app/src/wasm/pkg and is NOT committed, so running
+# the two in the other order fails type-checking with TS2307 ("Cannot find
+# module"). This is the same ordering .github/workflows/ci.yml documents and
+# relies on; if you change it in one place, change it in both.
+RUN cd app && npm run build:wasm
+RUN cd app && npm run build
+
+# ---- runtime stage -------------------------------------------------------
+# nginx-unprivileged: the stock nginx image starts as root to bind :80 and then
+# drops to nginx for workers. This variant never runs as root at all — it is
+# built to run as uid 101 and listens on 8080. That matters because the pod sets
+# runAsNonRoot: true and drops ALL capabilities (k8s/web-deployment.yaml); the
+# stock image would fail to start under that policy, and "just add
+# NET_BIND_SERVICE back" is the wrong fix for a container whose entire job is
+# handing out static files.
+FROM nginxinc/nginx-unprivileged:1.27-alpine@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0
+
+# Default CSP connect-src. Substituted into deploy/nginx/default.conf.template by
+# the base image's stock envsubst entrypoint at container start.
+#
+# THIS DEFAULT IS DELIBERATELY PERMISSIVE, and that is a real trade-off rather
+# than laziness. The sync server address is TYPED BY THE USER — see the input at
+# app/src/components/SyncDialog.vue and the validation in app/src/lib/sync.ts —
+# because a core promise of the project is that you can point the vault at your
+# own relay. Pinning connect-src to one API hostname would silently break every
+# self-hoster who does that, with a console CSP error as the only clue.
+#
+# What each source is for:
+#   https:                   any user-configured sync server over TLS.
+#   http://localhost:*  etc. loopback self-hosting, which app/src/lib/sync.ts
+#                            explicitly allows (and only loopback — it REFUSES
+#                            plain http to any other host, so the device token
+#                            cannot go out in the clear).
+#   https://api.pwnedpasswords.com
+#                            the Watchtower breach check
+#                            (app/src/lib/passbook.ts:202). Easy to miss; omit
+#                            it and breach-checking fails with a CSP error and
+#                            no user-visible explanation.
+#
+# A single-tenant deployment that does NOT need BYO-server support should
+# tighten this to its own API origin — see deploy/README.md § CONNECT-SRC and
+# the KEYWARD_CSP_CONNECT_SRC override in k8s/web-deployment.yaml. Understand
+# what you are giving up first: with `https:` present, an XSS on this origin can
+# POST the vault keys to any TLS endpoint it likes. Tightening connect-src is
+# the single highest-value hardening step available to a closed deployment.
+ENV KEYWARD_CSP_CONNECT_SRC="'self' https: http://localhost:* http://127.0.0.1:* https://api.pwnedpasswords.com"
+
+# Template, not a plain conf: /docker-entrypoint.d/20-envsubst-on-templates.sh
+# expands ${KEYWARD_CSP_CONNECT_SRC} and writes /etc/nginx/conf.d/default.conf.
+# Landing on that exact filename also REPLACES the base image's stock
+# default.conf server block, so there is no leftover catch-all listener.
+COPY deploy/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+
+# The built SPA. Ownership is left to the image default (root-owned,
+# world-readable) on purpose: nginx only ever READS these files, and files the
+# runtime user cannot modify are one less thing a compromised worker can rewrite.
+COPY --from=build /src/app/dist /usr/share/nginx/html
+
+# uid 101 is the `nginx` user in the nginx-unprivileged image. Stated explicitly
+# so the value the Deployment's runAsUser must match is visible here rather than
+# only in the base image.
+USER 101
+
+EXPOSE 8080
+
+# No HEALTHCHECK: the same reasoning as deploy/Dockerfile.static — Kubernetes
+# uses its own probes (k8s/web-deployment.yaml hits /healthz) and ignores the
+# container-level HEALTHCHECK entirely. The alpine base does have wget, so add
+# one if you run this under plain Docker.

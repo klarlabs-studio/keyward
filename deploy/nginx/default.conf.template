@@ -1,0 +1,261 @@
+# nginx server config for the Keyward WEB VAULT (the built Vue 3 SPA).
+#
+# This is a TEMPLATE, not a finished config. The nginx image's stock entrypoint
+# script /docker-entrypoint.d/20-envsubst-on-templates.sh runs `envsubst` over
+# every /etc/nginx/templates/*.template at container start and writes the result
+# to /etc/nginx/conf.d/ (same basename, minus `.template`). Only ${BRACED} names
+# are substituted; nginx's own `$variables` are written without braces and pass
+# through untouched. That is why every nginx variable below is `$foo` and the one
+# deploy-time knob is `${KEYWARD_CSP_CONNECT_SRC}`.
+#
+# Consequence worth knowing before you set `readOnlyRootFilesystem: true`: the
+# entrypoint WRITES to /etc/nginx/conf.d, and nginx itself writes to
+# /var/cache/nginx and /tmp. All three need to be writable emptyDir mounts. See
+# k8s/web-deployment.yaml, which mounts exactly those three and nothing else.
+#
+# WHAT THIS SERVER IS: a static file server for pre-built, immutable assets. It
+# proxies nothing, executes nothing, and reads no user input beyond a request
+# path. That is deliberate — see the origin-separation rationale in
+# deploy/README.md § "Which origin serves the vault". The whole security argument
+# for putting the vault on its own hostname is that this origin serves ONLY bytes
+# we authored and froze at release time.
+
+# ---------------------------------------------------------------------------
+# Cache policy, expressed as a map rather than per-location `add_header`.
+#
+# WHY A MAP: nginx's `add_header` inheritance is a well-known footgun — a child
+# block that declares ANY add_header discards EVERY add_header inherited from its
+# parent. So adding a per-location `Cache-Control` the obvious way would silently
+# drop the whole security-header set (CSP included) for exactly the responses
+# that matter most. Rather than repeat the header block in every location and
+# hope nobody adds a fourth one later, the varying value is computed here and
+# emitted by a single server-level `add_header`. There is then only one place
+# headers are set, and no inheritance to get wrong.
+map $uri $keyward_cache_control {
+    # Default for index.html and anything else: revalidate every time.
+    #
+    # This is load-bearing for a credential manager, not a performance tweak. The
+    # entry document is what pins which JS bundle a browser runs; if it is cached
+    # for any length of time, a client keeps executing the OLD bundle after a
+    # security fix ships and neither we nor the user can tell. `no-cache` means
+    # "you may store it, but revalidate before reuse", so a fix propagates on the
+    # next request while still allowing a cheap 304.
+    default   "no-cache, must-revalidate";
+
+    # Vite emits content-hashed filenames (index-B6jLpuAc.js, and the .wasm as
+    # passbook_wasm_bg-DPGDws45.wasm). The hash changes whenever the bytes do, so
+    # these URLs are genuinely immutable and can be cached hard and forever. This
+    # is safe ONLY because of the `no-cache` on the entry document above: the
+    # index.html always revalidates, and it is what names the hashed files.
+    ~^/assets/  "public, max-age=31536000, immutable";
+}
+
+server {
+    # 8080, not 80. The nginx-unprivileged image runs as uid 101 with no
+    # NET_BIND_SERVICE capability, and ports below 1024 are privileged. The pod
+    # additionally drops ALL capabilities, so a port <1024 here would fail to
+    # bind at startup rather than degrade gracefully.
+    listen       8080;
+    listen       [::]:8080;
+    server_name  _;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    # Don't advertise the exact nginx patch version. Minor, but it is free: the
+    # /metrics finding in deploy/README.md is the same class of issue (publishing
+    # a precise version makes CVE-matching a target trivial).
+    server_tokens off;
+
+    # -----------------------------------------------------------------------
+    # SECURITY HEADERS
+    #
+    # `always` on every one of these so they are emitted on error responses too
+    # (404, 405, 500). Without `always`, nginx only adds the header on 200/204/
+    # 301/302/303/304/307/308 — so an attacker who can provoke a 404 would get a
+    # response with no CSP at all.
+    # -----------------------------------------------------------------------
+
+    add_header Cache-Control $keyward_cache_control always;
+
+    # ---- Content-Security-Policy -------------------------------------------
+    #
+    # Every directive below was chosen against the ACTUAL production build
+    # output, not from a template. What that build contains (verified by building
+    # app/ and reading dist/):
+    #
+    #   * dist/index.html has NO inline <script> and NO inline <style>. Vite's
+    #     modulepreload polyfill — which WOULD be injected inline and would force
+    #     a hash or a nonce — is absent, because the app has a single entry chunk
+    #     and no dynamic imports needing preload. So plain `'self'` is enough and
+    #     no nonce machinery is required. If the app ever gains code-splitting,
+    #     that inline shim reappears and this CSP starts blocking it; the symptom
+    #     is a blank page plus a console CSP violation on an inline script.
+    #   * The bundle calls `WebAssembly.instantiate` (6 call sites) to load the
+    #     passbook-wasm crypto core. See 'wasm-unsafe-eval' below.
+    #   * The bundle contains no `eval(` and no `new Function(`.
+    #   * Stylesheets are extracted to a real .css file; Vue applies `:style`
+    #     bindings and static `style="..."` template attributes through the
+    #     CSSOM (element.style / cssText), which CSP does not govern. So
+    #     `style-src 'self'` holds WITHOUT 'unsafe-inline'.
+    #
+    # default-src 'none' — deny by default and enumerate. Anything not listed
+    #   (frames, media, prefetch, websockets) is refused outright.
+    #
+    # script-src 'self' 'wasm-unsafe-eval'
+    #   'wasm-unsafe-eval' is REQUIRED and is not the same thing as
+    #   'unsafe-eval'. Chrome (97+) refuses to compile ANY WebAssembly module
+    #   unless script-src carries one of the two, and the app's entire crypto
+    #   core — Argon2, XChaCha20-Poly1305, X25519 — is that WASM module. Without
+    #   this token the vault cannot decrypt anything. 'wasm-unsafe-eval' is the
+    #   narrow one: it permits WASM compilation ONLY and still blocks eval(),
+    #   new Function(), and setTimeout("string"). Do not "simplify" it to
+    #   'unsafe-eval'; that would hand an XSS a JS-string-to-code primitive on
+    #   the origin holding the Secret Key.
+    #
+    # style-src 'self' — see the CSSOM note above. Verified against a real
+    #   browser load, not assumed.
+    #
+    # img-src 'self' data: — `data:` because inline SVG/data-URI icons are a
+    #   normal Vue idiom and cost nothing here; images cannot execute.
+    #
+    # connect-src — the one genuinely deploy-specific directive, hence the
+    #   ${KEYWARD_CSP_CONNECT_SRC} substitution. Read the long note under
+    #   "CONNECT-SRC" in deploy/README.md before tightening it: the sync server
+    #   address is TYPED BY THE USER (app/src/components/SyncDialog.vue), so a
+    #   single hardcoded API host breaks every self-hoster pointing this app at
+    #   their own relay. The default is permissive on purpose.
+    #
+    # frame-ancestors 'none' — no framing, ever. This is the clickjacking
+    #   defence that actually matters for a vault UI; X-Frame-Options below is
+    #   the legacy duplicate.
+    #
+    # base-uri 'none' — an injected <base> tag can silently repoint every
+    #   relative asset URL at an attacker host. The app is built with Vite
+    #   `base: './'`, i.e. ALL its asset references are relative, which makes it
+    #   unusually sensitive to exactly this. Cheap and important.
+    #
+    # form-action 'none' — the app performs no form posts (everything goes
+    #   through fetch), so this closes a classic exfiltration channel outright.
+    #
+    # object-src 'none' — no <object>/<embed>/<applet>.
+    #
+    # NOT SET, deliberately: `upgrade-insecure-requests`. It rewrites http:// to
+    #   https:// for every subresource and fetch, which would break the
+    #   http://localhost:8787 sync server that app/src/lib/sync.ts explicitly
+    #   permits for loopback self-hosting. Adding it looks like free hardening
+    #   and would quietly break the documented local path.
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src ${KEYWARD_CSP_CONNECT_SRC}; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'" always;
+
+    # Legacy clickjacking defence. Redundant with frame-ancestors on any current
+    # browser, kept because it costs one line and still covers stragglers.
+    add_header X-Frame-Options "DENY" always;
+
+    # Stop content-type sniffing. Relevant here because the app serves a .wasm
+    # file; a sniffed MIME type is how "static asset" turns into "executed as
+    # something else".
+    add_header X-Content-Type-Options "nosniff" always;
+
+    # no-referrer, not the more common strict-origin-when-cross-origin. The app
+    # talks to api.pwnedpasswords.com and to whatever sync server the user
+    # configured; neither has any business learning which page called it. There
+    # is no analytics or affiliate flow that needs a Referer, so the strictest
+    # value has no cost.
+    add_header Referrer-Policy "no-referrer" always;
+
+    # Severs the window.opener relationship, so a page this app navigates to
+    # (e.g. the Stripe Checkout redirect) cannot reach back into the vault
+    # window. Note this is COOP only — COEP `require-corp` is deliberately NOT
+    # set: it exists to unlock SharedArrayBuffer, the app has no such
+    # requirement (Argon2 runs on the main thread), and require-corp breaks any
+    # cross-origin subresource lacking CORP headers. Real breakage risk, zero
+    # current benefit.
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+    # Refuse to be loaded as a subresource by another origin.
+    add_header Cross-Origin-Resource-Policy "same-origin" always;
+
+    # Turn off browser features the vault never uses, so an XSS cannot reach for
+    # them either.
+    #
+    # DO NOT ADD clipboard-write TO THIS LIST. The app copies passwords and TOTP
+    # codes with navigator.clipboard.writeText (app/src/composables/useToast.ts).
+    # Its Permissions-Policy default allowlist is already `self`, so leaving it
+    # unlisted is both correct and the behaviour we want; listing it as `()`
+    # would disable copy-to-clipboard and break the single most-used interaction
+    # in a password manager.
+    add_header Permissions-Policy "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), publickey-credentials-get=(), screen-wake-lock=(), usb=(), xr-spatial-tracking=()" always;
+
+    # HSTS. TLS is terminated at the ingress, but the header is generated here
+    # and passes through, so the vault origin carries its own policy rather than
+    # depending on ingress configuration staying correct.
+    #
+    # `includeSubDomains` is set; `preload` is NOT. Preloading is effectively
+    # PERMANENT — removal from the browser preload list takes months to
+    # propagate — and it would commit every current and future subdomain of the
+    # parent domain to HTTPS-only, including ones this repo does not own. That is
+    # a decision for whoever runs the domain, not a default an OSS manifest
+    # should make for them. Add `; preload` yourself once you are certain.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # -----------------------------------------------------------------------
+    # ROUTING
+    # -----------------------------------------------------------------------
+
+    # Probe endpoint for the kubelet. A dedicated location so liveness/readiness
+    # probes do not pull the full index.html (and its headers) every few seconds.
+    # `access_log off` keeps probe traffic out of the log — otherwise probes are
+    # the overwhelming majority of lines and real requests get lost in them.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type "text/plain" always;
+        return 200 "ok\n";
+    }
+
+    # NO SPA FALLBACK — this is intentional, and it is the opposite of the usual
+    # `try_files $uri /index.html` boilerplate.
+    #
+    # Two independent reasons:
+    #   1. The app has no client-side router. `vue-router` is not a dependency
+    #      (app/package.json); every view is a component swapped inside the one
+    #      page. There are no deep links for a fallback to rescue.
+    #   2. A fallback here would actively make things WORSE. The app is built
+    #      with Vite `base: './'`, so index.html references its bundle as
+    #      `./assets/index-<hash>.js`. Served as a fallback for /foo/bar, that
+    #      resolves to /foo/assets/index-<hash>.js, which does not exist — the
+    #      user gets HTTP 200 and a blank white page instead of an honest 404,
+    #      and the real error is buried in the network tab.
+    #
+    # So: serve what exists, 404 what does not.
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    # NOTE ON THE .wasm MIME TYPE — do NOT "fix" this with a `types { ... }`
+    # block here.
+    #
+    # The crypto core must be served as `application/wasm`; combined with the
+    # `nosniff` header above, anything else makes the browser refuse the module,
+    # and the vault then cannot decrypt with an error that surfaces nowhere near
+    # the cause. The obvious-looking fix is to add
+    #     types { application/wasm wasm; }
+    # inside this server block. That is a trap: nginx's `types` directive
+    # REPLACES the inherited type map wholesale rather than extending it, so that
+    # one line would leave .wasm correct and turn .js and .css into
+    # application/octet-stream — which `nosniff` then rejects, taking the entire
+    # app down instead of just the WASM.
+    #
+    # The stock /etc/nginx/mime.types in this base image already maps
+    # wasm -> application/wasm (nginx has shipped it since 1.21.x), and the
+    # Content-Type of the built .wasm asset is asserted in the smoke test
+    # documented in deploy/README.md § "Verifying the image locally".
+
+    # gzip on for the text assets. The .wasm is served as-is: it is already
+    # wasm-opt'd, and gzipping ~580 KB on every request costs CPU for a file the
+    # browser caches immutably anyway (see the map above).
+    gzip              on;
+    gzip_vary         on;
+    gzip_min_length   1024;
+    gzip_proxied      any;
+    gzip_types        text/plain text/css application/javascript application/json image/svg+xml;
+}
