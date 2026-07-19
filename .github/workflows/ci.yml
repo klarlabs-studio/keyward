@@ -1,0 +1,81 @@
+# Pull-request and main-branch checks.
+#
+# These are the same three gates the project treats as release-blocking:
+# formatting, clippy-as-errors, and the full test suite (Rust + the TypeScript
+# trust/round-trip checks). Nothing here publishes anything — see release.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref; a stale PR build gates nothing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the workspace's rust-version so CI cannot pass on a toolchain
+      # newer than the one deploy/Dockerfile compiles the release image with.
+      - name: Install Rust 1.90
+        run: rustup toolchain install 1.90 --profile minimal --component rustfmt,clippy --no-self-update
+      - run: rustup default 1.90
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  web:
+    name: Web vault (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install Rust 1.90 (wasm32 target)
+        run: rustup toolchain install 1.90 --profile minimal --target wasm32-unknown-unknown --no-self-update
+      - run: rustup default 1.90
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: 'v0.15.0'
+
+      - run: npm ci
+
+      # Round-trip and trust-merge checks. Neither imports the WASM bundle, so
+      # they run before the (slow) wasm build and fail fast if broken.
+      - run: npm test
+
+      # `npm run build` starts with `vue-tsc --noEmit`, and src/lib/passbook.ts
+      # and sharing.ts import ../wasm/pkg/passbook_wasm.js. That module is
+      # GENERATED, not committed, so type-checking fails with TS2307 unless the
+      # bundle is built first. Order matters here.
+      - run: npm run build:wasm
+      - run: npm run build
