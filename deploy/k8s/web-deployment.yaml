@@ -1,0 +1,189 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keyward-web
+  namespace: keyward
+  labels:
+    app.kubernetes.io/name: keyward-web
+    app.kubernetes.io/part-of: keyward
+spec:
+  # Static file serving — completely stateless, no database, no warm-up. Two
+  # replicas for availability during rolling updates and node drains, not for
+  # throughput; one nginx pod would saturate a link long before it saturates
+  # 200m of CPU. There is deliberately NO HPA for this workload (see
+  # deploy/README.md § Scaling): autoscaling on CPU would never trigger, and an
+  # inert HPA reporting `cpu: <unknown>/70%` is worse than no HPA at all.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  # Both labels listed EXPLICITLY, for the same reason as
+  # deployment.yaml: the kustomize `labels` transformer runs with
+  # includeSelectors:false, so anything that belongs in a selector must be
+  # written here. `spec.selector` is IMMUTABLE — once this ships, this list has
+  # to keep matching the deployed object exactly or the Deployment can only be
+  # changed by deleting and recreating it.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keyward-web
+      app.kubernetes.io/part-of: keyward
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: keyward-web
+        app.kubernetes.io/part-of: keyward
+      # NOTE: no prometheus.io/scrape annotations here, unlike the sync server.
+      # nginx exposes no Prometheus endpoint in this image, and adding the
+      # annotations would give Prometheus a target that answers every scrape
+      # with the SPA's index.html and a parse error.
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # 101 is the `nginx` user baked into the nginx-unprivileged base image.
+        # It must match, because the config and content are readable by that uid
+        # and the entrypoint's envsubst step writes as it. Note this differs from
+        # the sync server's 10001 — that is fine, they are different images; what
+        # matters is that each matches its own base.
+        runAsUser: 101
+        runAsGroup: 101
+        # fsGroup IS REQUIRED — this is not boilerplate, and leaving it out
+        # produces a failure that is much worse than a crash.
+        #
+        # Observed while smoke-testing this exact image with a read-only root
+        # filesystem: the base image's entrypoint tries to expand
+        # /etc/nginx/templates/*.template into /etc/nginx/conf.d, the mounted
+        # volume came up root-owned and NOT writable by uid 101, and the script
+        # gave up with
+        #     "ERROR: /etc/nginx/templates exists, but /etc/nginx/conf.d is not writable"
+        # and then — this is the bad part — CARRIED ON. nginx started happily,
+        # reported "start worker processes", and passed as a running container,
+        # but conf.d was empty so there was no server block at all: every
+        # request got a TCP reset, and NO security headers existed to be missing
+        # because nothing was ever served. A container that looks Up while
+        # serving nothing is exactly the state a readiness probe on /healthz
+        # will catch, which is why that probe is not optional either.
+        #
+        # fsGroup makes the kubelet chown the emptyDir volumes to this GID, so
+        # the entrypoint can write. Do not remove it without re-running the
+        # smoke test in deploy/README.md § "Verifying the image locally".
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      # No initContainers. The web tier has no dependency to wait for — it does
+      # not talk to Postgres and it does not talk to the sync server. The BROWSER
+      # talks to the sync server, directly, from the user's machine. That is a
+      # consequence of the origin split (see deploy/README.md § "Which origin
+      # serves the vault") and is why there is no proxy configuration anywhere in
+      # this manifest: this pod is not in the request path to the API at all.
+      containers:
+        - name: keyward-web
+          # Parameterize this image ref for your registry / release tag. The tag
+          # is overridden centrally in kustomization.yaml (images[].newTag).
+          image: ghcr.io/klarlabs-studio/keyward-web:2.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              # 8080, not 80: the nginx-unprivileged image cannot bind a
+              # privileged port, and this pod drops ALL capabilities (including
+              # NET_BIND_SERVICE) below.
+              containerPort: 8080
+          env:
+            # CSP connect-src for the vault origin, substituted into the nginx
+            # config at container start (see deploy/nginx/default.conf.template).
+            #
+            # THE VALUE BELOW IS THE PERMISSIVE, BRING-YOUR-OWN-SERVER DEFAULT,
+            # and it is the single most important security knob in this file.
+            # `https:` lets the vault talk to ANY TLS endpoint — which is what
+            # makes "point the hosted app at your own relay" work, and equally
+            # what lets an XSS on this origin exfiltrate the device Secret Key to
+            # an attacker's server.
+            #
+            # If your deployment does not need to support self-hosted relays,
+            # replace `https:` with your own API origin. That turns connect-src
+            # from a formality into a real exfiltration control:
+            #
+            #   value: "'self' https://sync.keyward.example https://api.pwnedpasswords.com"
+            #
+            # api.pwnedpasswords.com must stay in the list either way, or the
+            # Watchtower breach check (app/src/lib/passbook.ts) fails with a CSP
+            # error and no user-visible explanation.
+            - name: KEYWARD_CSP_CONNECT_SRC
+              value: "'self' https: http://localhost:* http://127.0.0.1:* https://api.pwnedpasswords.com"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # THE THREE WRITABLE PATHS BELOW ARE REQUIRED BY readOnlyRootFilesystem.
+          # This is not defensive padding — with the root filesystem read-only
+          # and any one of these missing, the container fails at STARTUP:
+          #
+          #   /etc/nginx/conf.d  the base image's stock entrypoint script
+          #                      20-envsubst-on-templates.sh expands
+          #                      /etc/nginx/templates/*.template and WRITES the
+          #                      result here. Read-only ⇒ the entrypoint errors
+          #                      and nginx never gets a server block.
+          #   /var/cache/nginx   nginx creates its proxy/fastcgi/scgi/uwsgi temp
+          #                      directories here during startup, even though
+          #                      this server proxies nothing.
+          #   /tmp               nginx's fallback scratch space (e.g. buffering a
+          #                      large request body).
+          #
+          # emptyDir, not a PVC: every one of these is regenerated on start and
+          # nothing in them needs to outlive the pod. memory-backed is avoided
+          # deliberately — an emptyDir with medium: Memory counts against the
+          # container's memory LIMIT, and the 64Mi limit below would then be
+          # shared with nginx's own working set.
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            # Sized for what this actually does: sendfile() on a handful of
+            # small, hot, page-cached files. The limits are low ON PURPOSE — if
+            # this container ever needs 500m of CPU, something is wrong (a
+            # request flood, or someone has added a proxy to it) and being
+            # throttled is the correct outcome rather than quietly absorbing it.
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 64Mi
+          # Probes hit the dedicated /healthz location in the nginx config
+          # rather than `/`. Probing `/` would ship the whole index.html — and
+          # its full security-header set — several times a minute for no reason,
+          # and would bury real traffic in the access log.
+          #
+          # No startupProbe here, unlike the sync server. nginx binds its socket
+          # in well under a second and has no database to wait for; the sync
+          # server needed one because a slow Postgres connect raced the liveness
+          # probe and got the container killed mid-startup. A generous
+          # failureThreshold on readiness covers the trivial boot window.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 5
+      volumes:
+        - name: nginx-conf
+          emptyDir: {}
+        - name: nginx-cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

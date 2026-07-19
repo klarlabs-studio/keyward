@@ -23,8 +23,8 @@ use std::io;
 
 use keyward_sync::accounts::{Account, AccountStore, DeviceInfo, Plan, TokenIdentity};
 use keyward_sync::groups::{
-    apply_redeem, apply_remove, GroupInvite, GroupMember, RedeemOutcome, Role, ShareGroup,
-    ShareGroupStore,
+    apply_account_erasure, apply_redeem, apply_remove, AccountErasure, GroupInvite, GroupMember,
+    RedeemOutcome, Role, ShareGroup, ShareGroupStore,
 };
 use keyward_sync::{SyncEnvelope, SyncError, SyncStore};
 
@@ -425,6 +425,32 @@ impl AccountStore for PostgresAccountStore {
             .map_err(db_err)?;
         Ok(n > 0)
     }
+
+    /// Erase the account and every device row it owns, in ONE transaction.
+    ///
+    /// The schema is deliberately FK-light (see [`SCHEMA`]), so `devices` has no
+    /// `ON DELETE CASCADE` to lean on — the cascade is expressed here instead.
+    /// Two separate statements outside a transaction would leave a window where
+    /// the account row is gone but its device tokens still resolve, i.e. live
+    /// bearer credentials for a deleted account. Devices go first so that
+    /// window cannot exist even if the transaction is torn down mid-flight.
+    ///
+    /// `deleted` is keyed off either table having yielded a row: an account
+    /// pre-dating the `accounts` table, or one whose row was already removed by a
+    /// half-finished earlier attempt, must still have its devices erased and must
+    /// still report that something was there.
+    fn delete_account(&self, account_id: &str) -> Result<bool, SyncError> {
+        let mut c = self.pool.get().map_err(db_err)?;
+        let mut tx = c.transaction().map_err(db_err)?;
+        let devices = tx
+            .execute("DELETE FROM devices WHERE account_id = $1", &[&account_id])
+            .map_err(db_err)?;
+        let accounts = tx
+            .execute("DELETE FROM accounts WHERE account_id = $1", &[&account_id])
+            .map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
+        Ok(devices > 0 || accounts > 0)
+    }
 }
 
 // ---- ShareGroupStore -------------------------------------------------------
@@ -556,6 +582,17 @@ fn replace_group_rows(
             )
             .map_err(db_err)?;
     }
+    // Deleted and rewritten, not merely upserted. `apply_remove` only ever ADDS
+    // to `removed_accounts`, so an insert-only sync was indistinguishable from a
+    // full replace — until `apply_account_erasure`, which REMOVES an entry.
+    // Upserting alone would silently keep the tombstone of an erased account,
+    // which is precisely the row account deletion has to get rid of.
+    client
+        .execute(
+            "DELETE FROM group_removed_accounts WHERE group_id = $1",
+            &[gid],
+        )
+        .map_err(db_err)?;
     for account_id in &g.removed_accounts {
         client
             .execute(
@@ -776,6 +813,69 @@ impl ShareGroupStore for PostgresShareGroupStore {
         c.execute("DELETE FROM share_groups WHERE group_id = $1", &[&group_id])
             .map_err(db_err)?;
         Ok(())
+    }
+
+    /// Erase an account from every group it touches, one locked transaction per
+    /// group — the same load / apply-shared-policy / persist shape as
+    /// [`remove_member`], and for the same reason: expressing erasure as bespoke
+    /// SQL is exactly how this adapter previously drifted from the file and
+    /// memory backends.
+    ///
+    /// The candidate groups are found from BOTH `group_members` and
+    /// `group_removed_accounts`. Only reading the former would leave the
+    /// tombstone rows of an account that had been removed from a group before it
+    /// deleted itself — a retained identifier of an erased user, which is the
+    /// precise thing this endpoint exists to eliminate.
+    ///
+    /// [`remove_member`]: ShareGroupStore::remove_member
+    fn erase_account(&self, account_id: &str) -> Result<usize, SyncError> {
+        let mut c = self.pool.get().map_err(db_err)?;
+        let candidates: Vec<String> = c
+            .query(
+                "SELECT group_id FROM group_members WHERE account_id = $1 \
+                 UNION \
+                 SELECT group_id FROM group_removed_accounts WHERE account_id = $1",
+                &[&account_id],
+            )
+            .map_err(db_err)?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+
+        let mut affected = 0;
+        for group_id in candidates {
+            let mut tx = c.transaction().map_err(db_err)?;
+            // Lock the group so the load-apply-persist cannot interleave with a
+            // concurrent redeem, removal, or a second erasure.
+            if tx
+                .query_opt(
+                    "SELECT 1 FROM share_groups WHERE group_id = $1 FOR UPDATE",
+                    &[&group_id],
+                )
+                .map_err(db_err)?
+                .is_none()
+            {
+                continue;
+            }
+            let Some(mut g) = load_group(&mut tx, &group_id)? else {
+                continue;
+            };
+            match apply_account_erasure(&mut g, account_id) {
+                AccountErasure::Untouched => continue,
+                AccountErasure::Updated => {
+                    replace_group_rows(&mut tx, &g)?;
+                }
+                AccountErasure::Emptied => {
+                    // FKs inside the group aggregate cascade the member, invite,
+                    // and removed-account rows with the head row.
+                    tx.execute("DELETE FROM share_groups WHERE group_id = $1", &[&group_id])
+                        .map_err(db_err)?;
+                }
+            }
+            tx.commit().map_err(db_err)?;
+            affected += 1;
+        }
+        Ok(affected)
     }
 }
 

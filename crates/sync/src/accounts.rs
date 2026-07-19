@@ -165,6 +165,26 @@ pub trait AccountStore {
     /// Set the account's plan (called by the billing webhook). Returns `false` if
     /// the account does not exist.
     fn set_plan(&self, account_id: &str, plan: Plan) -> Result<bool, SyncError>;
+
+    /// Erase the account and **every** device it owns — the identity half of
+    /// account deletion (GDPR Art. 17 right to erasure). Returns whether an
+    /// account actually existed; idempotent, so deleting an already-deleted
+    /// account is `Ok(false)`.
+    ///
+    /// This is the one operation that must leave nothing: a surviving device row
+    /// is a live bearer token for an account that is supposed to be gone, which
+    /// is worse than not having offered deletion at all. [`revoke_device`] is
+    /// therefore not a building block here — dropping devices one by one leaves a
+    /// window in which some are gone and some still authenticate.
+    ///
+    /// The vault blob ([`SyncStore::delete`]) and group membership
+    /// ([`ShareGroupStore::erase_account`]) are separate ports and are the
+    /// caller's responsibility to erase as well.
+    ///
+    /// [`revoke_device`]: AccountStore::revoke_device
+    /// [`SyncStore::delete`]: crate::SyncStore::delete
+    /// [`ShareGroupStore::erase_account`]: crate::ShareGroupStore::erase_account
+    fn delete_account(&self, account_id: &str) -> Result<bool, SyncError>;
 }
 
 /// Generate a random 128-bit identifier as lowercase hex (32 chars).
@@ -349,6 +369,13 @@ impl Registry {
             .unwrap_or_default()
     }
 
+    /// Drop the account record. Devices are stored inside it, so removing the
+    /// entry takes every device and token hash with it — there is no second
+    /// place a token could survive.
+    fn delete_account(&mut self, account_id: &str) -> bool {
+        self.accounts.remove(account_id).is_some()
+    }
+
     fn set_plan(&mut self, account_id: &str, plan: Plan) -> bool {
         match self.accounts.get_mut(account_id) {
             Some(account) => {
@@ -427,6 +454,10 @@ impl AccountStore for MemoryAccountStore {
 
     fn set_plan(&self, account_id: &str, plan: Plan) -> Result<bool, SyncError> {
         Ok(self.inner.lock().unwrap().set_plan(account_id, plan))
+    }
+
+    fn delete_account(&self, account_id: &str) -> Result<bool, SyncError> {
+        Ok(self.inner.lock().unwrap().delete_account(account_id))
     }
 }
 
@@ -543,6 +574,16 @@ impl AccountStore for FileAccountStore {
         }
         Ok(ok)
     }
+
+    fn delete_account(&self, account_id: &str) -> Result<bool, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        let mut registry = self.read()?;
+        let deleted = registry.delete_account(account_id);
+        if deleted {
+            self.write(&registry)?;
+        }
+        Ok(deleted)
+    }
 }
 
 #[cfg(test)]
@@ -601,9 +642,95 @@ mod tests {
             .is_none());
     }
 
+    /// Deleting an account must take every device and token with it, and touch
+    /// nothing else. Run against every adapter — a backend that leaves one device
+    /// row behind has left a live bearer credential for a deleted account.
+    fn delete_account_suite(store: &dyn AccountStore) {
+        let doomed = store
+            .register(Some("bye@example.com"), "Laptop", 100, None)
+            .unwrap();
+        let doomed_phone = store
+            .add_device(&doomed.device_token, "Phone", 100, None)
+            .unwrap()
+            .unwrap();
+        let survivor = store.register(None, "Laptop", 100, None).unwrap();
+
+        assert!(store.delete_account(&doomed.account_id).unwrap());
+
+        // EVERY device is gone, not just the one that would have asked.
+        assert!(store
+            .resolve_token(&doomed.device_token, 200)
+            .unwrap()
+            .is_none());
+        assert!(store
+            .resolve_token(&doomed_phone.device_token, 200)
+            .unwrap()
+            .is_none());
+        assert!(store.list_devices(&doomed.account_id).unwrap().is_empty());
+        // The account record itself is gone (set_plan finds nothing to update).
+        assert!(!store.delete_account(&doomed.account_id).unwrap());
+        assert!(!store.set_plan(&doomed.account_id, Plan::Family).unwrap());
+        // A dead token cannot mint a fresh device to climb back in.
+        assert!(store
+            .add_device(&doomed.device_token, "Sneaky", 200, None)
+            .unwrap()
+            .is_none());
+
+        // Blast radius: the other account is entirely unaffected.
+        assert!(store
+            .resolve_token(&survivor.device_token, 200)
+            .unwrap()
+            .is_some());
+        assert_eq!(store.list_devices(&survivor.account_id).unwrap().len(), 1);
+        assert!(!store.delete_account("no-such-account").unwrap());
+    }
+
     #[test]
     fn memory_store_full_lifecycle() {
         account_suite(&MemoryAccountStore::new());
+    }
+
+    #[test]
+    fn memory_store_deletes_an_account_and_all_its_devices() {
+        delete_account_suite(&MemoryAccountStore::new());
+    }
+
+    #[test]
+    fn file_store_deletes_an_account_and_all_its_devices() {
+        let dir = std::env::temp_dir().join(format!("keyward-acct-del-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        delete_account_suite(&FileAccountStore::new(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deleting_an_account_leaves_no_token_hash_on_disk() {
+        let dir = std::env::temp_dir().join(format!("keyward-acct-scrub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = FileAccountStore::new(&dir);
+        let acct = store
+            .register(Some("bye@example.com"), "Laptop", 1, None)
+            .unwrap();
+        let hash = token_hash(&acct.device_token);
+        assert!(std::fs::read_to_string(dir.join("accounts.json"))
+            .unwrap()
+            .contains(&hash));
+
+        assert!(store.delete_account(&acct.account_id).unwrap());
+
+        // Erasure is on-disk, not merely in the lookup path: neither the account
+        // id, the contact email, nor the token hash may survive in the file.
+        let on_disk = std::fs::read_to_string(dir.join("accounts.json")).unwrap();
+        assert!(!on_disk.contains(&hash), "token hash survived deletion");
+        assert!(
+            !on_disk.contains(&acct.account_id),
+            "account id survived deletion"
+        );
+        assert!(
+            !on_disk.contains("bye@example.com"),
+            "contact email survived deletion"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

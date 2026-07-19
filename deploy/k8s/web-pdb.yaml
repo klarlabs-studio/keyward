@@ -1,0 +1,23 @@
+# PodDisruptionBudget for the web vault, mirroring the sync server's (pdb.yaml).
+#
+# With replicas: 2 and maxUnavailable: 0 on the rolling update, minAvailable: 1
+# lets the cluster evict one pod at a time during VOLUNTARY disruptions (node
+# drains, cluster upgrades) without ever taking the vault UI to zero.
+#
+# This matters more than it might look for a static file server. The web tier is
+# the ONLY way a user reaches their vault in a browser — if every replica is
+# evicted at once during a node drain, the product is down even though the sync
+# API and database are perfectly healthy.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: keyward-web
+  namespace: keyward
+  labels:
+    app.kubernetes.io/name: keyward-web
+    app.kubernetes.io/part-of: keyward
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: keyward-web

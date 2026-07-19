@@ -1,16 +1,25 @@
-# Builds and publishes the sync-server image on a version tag.
+# Builds and publishes the release images on a version tag.
+#
+# TWO images, both required for a usable product:
+#   keyward-sync-server  the zero-knowledge relay (deploy/Dockerfile)
+#   keyward-web          the built Vue 3 vault SPA served by nginx
+#                        (deploy/Dockerfile.web)
 #
 # WHY THIS EXISTS: deploy/Dockerfile compiles inside the container and is the
 # canonical reproducible build, but it cannot be driven from an Apple Silicon
 # workstation — rustc segfaults compiling linux/amd64 under QEMU. The documented
 # workaround (deploy/Dockerfile.static + cargo-zigbuild) is a hand-run local
 # path. This workflow is the intended one: an amd64 runner builds natively, so
-# the released image comes from the canonical Dockerfile every time.
+# the released image comes from the canonical Dockerfile every time. The same
+# constraint applies to the web image, which also compiles Rust (the WASM crypto
+# core) as part of its build.
 #
 # Trigger:
 #   git tag -a v2.0.0 -m 'Keyward 2.0.0' && git push origin v2.0.0
 #
-# The tag drives the image tag: v2.0.0 -> ghcr.io/<owner>/keyward-sync-server:2.0.0
+# The tag drives both image tags:
+#   v2.0.0 -> ghcr.io/<owner>/keyward-sync-server:2.0.0
+#          -> ghcr.io/<owner>/keyward-web:2.0.0
 name: Release
 
 on:
@@ -22,9 +31,16 @@ permissions:
   packages: write
 
 jobs:
-  image:
-    name: Build & push sync-server image
+  # The version guard runs ONCE and both image jobs depend on it, rather than
+  # each re-deriving the version. Two copies of this check would be two things
+  # to keep in step, and a release where the images disagree about their own
+  # version is exactly the failure the guard exists to prevent.
+  version:
+    name: Check tag matches workspace version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      image_prefix: ${{ steps.check.outputs.image_prefix }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,6 +48,7 @@ jobs:
       # v2.0.0 from a tree that says 2.0.1 would publish an image whose /version
       # endpoint contradicts its own tag, and the cluster pins by tag.
       - name: Check tag matches workspace version
+        id: check
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
           cargo_version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
@@ -41,6 +58,18 @@ jobs:
             echo "::error::tag $tag_version does not match Cargo.toml ($cargo_version) / app ($app_version)"
             exit 1
           fi
+          # Lowercased owner: ghcr rejects uppercase path segments, and the org
+          # name is only lowercase by convention today.
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          echo "version=$tag_version" >> "$GITHUB_OUTPUT"
+          echo "image_prefix=ghcr.io/$owner" >> "$GITHUB_OUTPUT"
+
+  image:
+    name: Build & push sync-server image
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
@@ -49,15 +78,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Lowercased owner: ghcr rejects uppercase path segments, and the org name
-      # is only lowercase by convention today.
-      - name: Resolve image reference
-        id: ref
-        run: |
-          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
-          echo "image=ghcr.io/$owner/keyward-sync-server" >> "$GITHUB_OUTPUT"
-          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       # Build context is the repository ROOT (the Cargo workspace), matching the
       # invocation documented in deploy/README.md. linux/amd64 only: the cluster
@@ -68,11 +88,58 @@ jobs:
           file: deploy/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ needs.version.outputs.image_prefix }}/keyward-sync-server:${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=sync-server
+          cache-to: type=gha,mode=max,scope=sync-server
 
       - name: Report the digest to pin
         run: |
-          echo "Published ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}"
+          echo "Published ${{ needs.version.outputs.image_prefix }}/keyward-sync-server:${{ needs.version.outputs.version }}"
+          echo "Update images[].newTag in the keyward-cloud overlay to match."
+
+  web:
+    name: Build & push web vault image
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Context is the repository ROOT, not app/ — deploy/Dockerfile.web needs
+      # BOTH trees, because the SPA's crypto core is compiled from
+      # crates/passbook-wasm.
+      #
+      # The build ORDER that matters (`npm run build:wasm` before `npm run
+      # build`, or type-checking fails with TS2307 on the generated
+      # ../wasm/pkg/passbook_wasm.js — the same ordering ci.yml documents) is
+      # encoded in the Dockerfile itself rather than here, so a local
+      # `docker build` cannot get it wrong either.
+      #
+      # linux/amd64 only, for the same reason as the server image: the build
+      # compiles Rust (to wasm32), and emulating that under QEMU is the
+      # documented way to make rustc segfault.
+      #
+      # Separate cache scope from the sync-server job. Sharing one scope means
+      # two very different layer sets evicting each other, and buildx's gha
+      # backend has a modest quota.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.version.outputs.image_prefix }}/keyward-web:${{ needs.version.outputs.version }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Report the digest to pin
+        run: |
+          echo "Published ${{ needs.version.outputs.image_prefix }}/keyward-web:${{ needs.version.outputs.version }}"
           echo "Update images[].newTag in the keyward-cloud overlay to match."

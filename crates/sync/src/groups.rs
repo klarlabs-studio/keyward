@@ -286,6 +286,16 @@ pub trait ShareGroupStore {
 
     /// Delete a group entirely. Idempotent.
     fn delete(&self, group_id: &str) -> Result<(), SyncError>;
+
+    /// Erase every trace of `account_id` from every group in this store — the
+    /// group half of account deletion (GDPR Art. 17). Applies
+    /// [`apply_account_erasure`] to each group the account touches, deleting a
+    /// group outright when the erasure empties it. Returns how many groups were
+    /// changed or deleted.
+    ///
+    /// Must be atomic *per group*, like every other mutating method here.
+    /// Idempotent: erasing an account that is in no group is `Ok(0)`.
+    fn erase_account(&self, account_id: &str) -> Result<usize, SyncError>;
 }
 
 /// Apply an invite redemption to an already-loaded group. Pure so every adapter
@@ -411,6 +421,109 @@ pub fn apply_remove(group: &mut ShareGroup, member_id: &str) -> bool {
     true
 }
 
+/// What erasing an account did to one group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountErasure {
+    /// The account appears nowhere in this group; nothing was written.
+    Untouched,
+    /// The group still exists and was rewritten without the account.
+    Updated,
+    /// The account was the group's only remaining member. The caller must
+    /// DELETE the group: keeping a memberless group would leave exactly the
+    /// orphaned rows account deletion exists to remove, and nobody is left who
+    /// could ever read it.
+    Emptied,
+}
+
+/// Erase an account from a group as part of deleting that account. Pure, and
+/// shared by every adapter for the same reason as [`apply_redeem`].
+///
+/// This is deliberately NOT [`apply_remove`], for three reasons:
+///
+/// 1. **It cannot refuse.** `apply_remove` protects the last Owner, because a
+///    group with no Owner can never have a role granted again
+///    (`can_change_roles` is Owner-only) and is permanently stuck. That guard is
+///    right for "an Admin evicts someone" and wrong here: an Owner who deletes
+///    their account must not be told "no", and leaving their membership row
+///    behind would make erasure a lie. So when the departing account holds the
+///    last Owner role and other members remain, the longest-standing remaining
+///    member is **promoted to Owner** first. The group survives administrable,
+///    which is the whole point of considering group membership at all — deleting
+///    one member's account must not corrupt the group for everyone else.
+///
+/// 2. **It leaves no tombstone.** `apply_remove` records the account in
+///    `removed_accounts` so a stashed invite cannot readmit it. Here that row
+///    would be a retained identifier of an account that no longer exists — the
+///    exact thing Art. 17 forbids — and it is pointless: account ids are random
+///    128-bit values that are never re-issued, so there is no account left to
+///    bar. Any pre-existing tombstone for this account is scrubbed too.
+///
+/// 3. **It removes what the account left in the invite log.** Invites the erased
+///    member redeemed carry their `member_id` in `redeemed_by`, so those rows go.
+///    Pending invites are cancelled wholesale, for the same reason as in
+///    `apply_remove`: an invite names no recipient, so there is no way to tell
+///    which pending code the departing member is holding. Other members' already-
+///    redeemed invites are kept, so a reused code still resolves to "already
+///    redeemed" rather than becoming unknown.
+///
+/// What this deliberately does NOT do is rewrite `wrapped_keys`. That blob is
+/// opaque ciphertext the server must never interpret; the erased member's copy of
+/// the wrapped vault key stays in it until the remaining members' clients rotate,
+/// exactly as after an ordinary removal. The server cannot fix that without
+/// giving up zero knowledge, and it would not help anyway: the departing user
+/// already held the key.
+pub fn apply_account_erasure(group: &mut ShareGroup, account_id: &str) -> AccountErasure {
+    let member_id = group
+        .member_by_account(account_id)
+        .map(|m| m.member_id.clone());
+    let has_tombstone = group.removed_accounts.iter().any(|a| a == account_id);
+    if member_id.is_none() && !has_tombstone {
+        return AccountErasure::Untouched;
+    }
+
+    // Reason 2: the account is going away, so no record of it may remain.
+    group.removed_accounts.retain(|a| a != account_id);
+
+    let Some(member_id) = member_id else {
+        // Only a tombstone to scrub — membership is unaffected.
+        return AccountErasure::Updated;
+    };
+
+    // Sole member: nothing left to preserve, so the group goes with the account.
+    if group.members.iter().all(|m| m.account_id == account_id) {
+        return AccountErasure::Emptied;
+    }
+
+    // Reason 1: never leave the group Ownerless. `added_epoch` order makes the
+    // successor deterministic (longest-standing member) rather than dependent on
+    // whatever order an adapter happens to load rows in.
+    let loses_last_owner = group
+        .members
+        .iter()
+        .filter(|m| m.role == Role::Owner)
+        .all(|m| m.account_id == account_id);
+    if loses_last_owner {
+        if let Some(successor) = group
+            .members
+            .iter_mut()
+            .filter(|m| m.account_id != account_id)
+            .min_by_key(|m| (m.added_epoch, m.member_id.clone()))
+        {
+            successor.role = Role::Owner;
+        }
+    }
+
+    group.members.retain(|m| m.account_id != account_id);
+
+    // Reason 3.
+    group
+        .invites
+        .retain(|i| i.redeemed_by.as_deref() != Some(member_id.as_str()));
+    group.invites.retain(|i| i.redeemed_by.is_some());
+
+    AccountErasure::Updated
+}
+
 /// In-memory store (tests, and a stateless dev server).
 #[derive(Default)]
 pub struct MemoryShareGroupStore {
@@ -525,6 +638,23 @@ impl ShareGroupStore for MemoryShareGroupStore {
     fn delete(&self, group_id: &str) -> Result<(), SyncError> {
         self.inner.lock().unwrap().remove(group_id);
         Ok(())
+    }
+
+    fn erase_account(&self, account_id: &str) -> Result<usize, SyncError> {
+        let mut map = self.inner.lock().unwrap();
+        let mut changed = 0;
+        let mut emptied = Vec::new();
+        for (group_id, group) in map.iter_mut() {
+            match apply_account_erasure(group, account_id) {
+                AccountErasure::Untouched => {}
+                AccountErasure::Updated => changed += 1,
+                AccountErasure::Emptied => emptied.push(group_id.clone()),
+            }
+        }
+        for group_id in &emptied {
+            map.remove(group_id);
+        }
+        Ok(changed + emptied.len())
     }
 }
 
@@ -704,6 +834,46 @@ impl ShareGroupStore for FileShareGroupStore {
             Err(e) => Err(e.into()),
         }
     }
+
+    fn erase_account(&self, account_id: &str) -> Result<usize, SyncError> {
+        let _lock = self.guard.lock().unwrap();
+        // There is no index from account to group on disk, so every group file is
+        // scanned. Self-host installs hold a handful of groups and this runs once
+        // per account deletion, so a scan is the right trade against maintaining a
+        // second on-disk index that could drift out of sync with the group files.
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            // No storage dir yet → no groups → nothing to erase.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+            Err(e) => return Err(e.into()),
+        };
+        let mut affected = 0;
+        for entry in entries {
+            let path = entry?.path();
+            let is_group_file = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("group-") && n.ends_with(".json"));
+            if !is_group_file {
+                continue;
+            }
+            let mut group: ShareGroup = serde_json::from_slice(&std::fs::read(&path)?)?;
+            match apply_account_erasure(&mut group, account_id) {
+                AccountErasure::Untouched => {}
+                AccountErasure::Updated => {
+                    self.write(&group)?;
+                    affected += 1;
+                }
+                AccountErasure::Emptied => {
+                    // Remove the file we actually read, not a path re-derived from
+                    // the id — they agree today, but erasure must not depend on that.
+                    std::fs::remove_file(&path)?;
+                    affected += 1;
+                }
+            }
+        }
+        Ok(affected)
+    }
 }
 
 #[cfg(test)]
@@ -847,6 +1017,173 @@ mod tests {
         let store = FileShareGroupStore::new(&dir);
         suite(&store);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Erasing an account must remove every trace of it from the groups it
+    /// touches, while leaving those groups usable for everyone else.
+    fn erasure_suite(store: &dyn ShareGroupStore) {
+        let member = |mid: &str, acct: &str, role: Role, epoch: u64| GroupMember {
+            member_id: mid.into(),
+            account_id: acct.into(),
+            name: mid.into(),
+            public_key: format!("{mid}-pub"),
+            signing_key: String::new(),
+            role,
+            added_epoch: epoch,
+        };
+        let open = |h: &str| GroupInvite {
+            code_hash: h.into(),
+            created_epoch: 100,
+            expires_epoch: u64::MAX,
+            redeemed_by: None,
+        };
+
+        // A group with an owner and two members; the OWNER erases their account.
+        store
+            .create("eg", member("m-o", "acct-o", Role::Owner, 100))
+            .unwrap();
+        assert!(store.add_invite("eg", open("h-b")).unwrap());
+        assert_eq!(
+            store
+                .redeem_invite("eg", "h-b", member("m-b", "acct-b", Role::Member, 300), 200)
+                .unwrap(),
+            RedeemOutcome::Added
+        );
+        assert!(store.add_invite("eg", open("h-c")).unwrap());
+        assert_eq!(
+            store
+                .redeem_invite("eg", "h-c", member("m-c", "acct-c", Role::Member, 200), 200)
+                .unwrap(),
+            RedeemOutcome::Added
+        );
+        // Ordinary removal of the last owner is refused; erasure cannot be.
+        assert!(!store.remove_member("eg", "m-o").unwrap());
+        assert!(store.add_invite("eg", open("h-pending")).unwrap());
+
+        assert_eq!(store.erase_account("acct-o").unwrap(), 1);
+        let g = store.get("eg").unwrap().unwrap();
+        assert!(!g.is_member("acct-o"));
+        assert_eq!(g.members.len(), 2);
+        // The longest-standing survivor is promoted, so the group stays administrable.
+        assert!(g.is_owner("acct-c"));
+        assert!(g.can_change_roles("acct-c"));
+        // No tombstone for an account that no longer exists.
+        assert!(g.removed_accounts.is_empty());
+        // Pending invites are cancelled (no way to know which the leaver held).
+        assert_eq!(
+            store
+                .redeem_invite(
+                    "eg",
+                    "h-pending",
+                    member("m-d", "acct-d", Role::Member, 500),
+                    200
+                )
+                .unwrap(),
+            RedeemOutcome::InvalidOrUsed
+        );
+
+        // An account in no group is a no-op; erasure is idempotent.
+        assert_eq!(store.erase_account("acct-o").unwrap(), 0);
+        assert_eq!(store.erase_account("nobody").unwrap(), 0);
+
+        // A group whose LAST member erases their account is deleted outright —
+        // keeping a memberless group is the orphan this endpoint exists to avoid.
+        store
+            .create("eg-solo", member("m-s", "acct-s", Role::Owner, 100))
+            .unwrap();
+        assert_eq!(store.erase_account("acct-s").unwrap(), 1);
+        assert!(store.get("eg-solo").unwrap().is_none());
+
+        // A removed account's tombstone is scrubbed when that account is erased.
+        store
+            .create("eg-tomb", member("m-o2", "acct-o2", Role::Owner, 100))
+            .unwrap();
+        assert!(store.add_invite("eg-tomb", open("h-t")).unwrap());
+        assert_eq!(
+            store
+                .redeem_invite(
+                    "eg-tomb",
+                    "h-t",
+                    member("m-t", "acct-t", Role::Member, 200),
+                    150
+                )
+                .unwrap(),
+            RedeemOutcome::Added
+        );
+        assert!(store.remove_member("eg-tomb", "m-t").unwrap());
+        assert!(store
+            .get("eg-tomb")
+            .unwrap()
+            .unwrap()
+            .removed_accounts
+            .contains(&"acct-t".to_string()));
+        assert_eq!(store.erase_account("acct-t").unwrap(), 1);
+        let g = store.get("eg-tomb").unwrap().unwrap();
+        assert!(g.removed_accounts.is_empty());
+        assert!(g.is_owner("acct-o2"));
+
+        store.delete("eg").unwrap();
+        store.delete("eg-tomb").unwrap();
+    }
+
+    #[test]
+    fn memory_group_store_erases_an_account() {
+        erasure_suite(&MemoryShareGroupStore::new());
+    }
+
+    #[test]
+    fn file_group_store_erases_an_account() {
+        let dir = std::env::temp_dir().join(format!("keyward-erase-test-{}", std::process::id()));
+        let store = FileShareGroupStore::new(&dir);
+        erasure_suite(&store);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn erasure_of_an_unrelated_account_is_untouched() {
+        let mut g = ShareGroup {
+            group_id: "g".into(),
+            members: vec![owner()],
+            ..Default::default()
+        };
+        let before = g.clone();
+        assert_eq!(
+            apply_account_erasure(&mut g, "acct-stranger"),
+            AccountErasure::Untouched
+        );
+        assert_eq!(g, before, "an unrelated erasure must not rewrite the group");
+    }
+
+    #[test]
+    fn erasure_drops_invites_the_leaver_had_redeemed_but_keeps_others() {
+        let mut g = ShareGroup {
+            group_id: "g".into(),
+            members: vec![owner(), invitee()],
+            invites: vec![
+                GroupInvite {
+                    code_hash: "used-by-bob".into(),
+                    created_epoch: 1,
+                    expires_epoch: u64::MAX,
+                    redeemed_by: Some("m-bob".into()),
+                },
+                GroupInvite {
+                    code_hash: "used-by-owner".into(),
+                    created_epoch: 1,
+                    expires_epoch: u64::MAX,
+                    redeemed_by: Some("m-owner".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_account_erasure(&mut g, "acct-bob"),
+            AccountErasure::Updated
+        );
+        // Bob's redeemed invite carried his member_id — it goes with him. The
+        // owner's stays, so a reused code still reads as "already redeemed"
+        // rather than becoming an unknown one.
+        let hashes: Vec<&str> = g.invites.iter().map(|i| i.code_hash.as_str()).collect();
+        assert_eq!(hashes, vec!["used-by-owner"]);
     }
 
     #[test]
