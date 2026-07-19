@@ -135,19 +135,21 @@ pinning does not address §3a at all, which needs no grant from us.
 
 ---
 
-## 3a. Wraps carry no sender authentication — substitution now DETECTABLE, still not preventable
+## 3a. Wraps carry no sender authentication — CLOSED (forgery and rollback)
 
-**Partially closed. Read the distinction carefully.**
+**Closed in 2.0.0. This section describes the history because the shape of the
+fix only makes sense against the shape of the bug; jump to "Where it stands" for
+the current state.**
 
-`wrap_to` still requires only a recipient public key, still carries no
-signature, and `safety_number` still digests only member ids and public keys —
-so a relay can mint its own vault key, wrap it correctly to every genuine
-member, overwrite both blobs, and every member decrypts successfully with an
-unchanged safety number.
+**The bug.** `wrap_to` required only a recipient public key and carried no
+signature, and `safety_number` digested only member ids and public keys — so a
+relay could mint its own vault key, wrap it correctly to every genuine member,
+overwrite both blobs, and every member decrypted successfully with an unchanged
+safety number.
 
-**What changed:** the client now pins a fingerprint of the vault key it has
-accepted (`vaultKeyPins`). On any later load where the unwrapped key differs, it
-refuses to decrypt entries, refuses to re-seal anything, and surfaces the change
+**First mitigation (1.42.0), detection only:** the client pinned a fingerprint
+of the vault key it had accepted (`vaultKeyPins`). On any later load where the
+unwrapped key differed, it
 for an explicit human decision. Previously the substitution was completely
 invisible — nothing anywhere noticed, and the first subsequent save re-sealed
 every shared credential under the attacker's key.
@@ -163,7 +165,9 @@ benign explanation and asks the user to confirm out of band that someone was
 removed. A user conditioned to click through will hand over the vault. Rotation
 being an ordinary event is what makes this weaker than a cryptographic control.
 
-### The signature half is now implemented (F2)
+### Where it stands
+
+**Forgery and rollback are both closed.** 
 
 Wrapped-key sets are **signed**. A member holds an Ed25519 key alongside their
 X25519 one, signs the set on every write (share, grant, revoke), and a reader

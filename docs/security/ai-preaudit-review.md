@@ -11,6 +11,39 @@ is a correlated-failure condition, not a hypothetical.
 -->
 
 # PRE-AUDIT HARDENING REPORT — Keyward
+
+> ## ⚠ THIS IS A SNAPSHOT, NOT THE CURRENT STATE
+>
+> This report was produced against **1.41.0** and is preserved unedited, because
+> a review package rewritten after the fact stops being evidence of what was
+> found and becomes marketing. **Do not read any finding here as describing the
+> software today.**
+>
+> Most of it is fixed. Verified closed since, with the release that did it:
+>
+> | | Finding | Closed in |
+> |---|---|---|
+> | **F1** | `loadFamily` auto-wraps `K_vault` to any relay-supplied key | 1.42.0 — TOFU key pinning |
+> | **F2** | Wraps carry no sender authentication | 1.42.0 detection → **2.0.0** signed wraps + epochs |
+> | **F3** | Mitigation runs after the key has already left | 1.42.0 |
+> | **F5** | Recovery contact seals a 2SKD factor to a relay-supplied key | 1.42.0 — hard-gated on a pinned contact |
+> | **F6** | Invite redemption orphans the group | 1.42.0 |
+> | **F7** | `member_id` uniqueness unenforced | 1.42.0 — enforced in the shared policy layer |
+> | **F9** | Passphrase entropy overstated 3–5× | 1.42.0 — EFF wordlist, structure-aware scoring |
+> | **F12** | `shuffle()` spins forever for length ≥ 257 | 1.42.0 — 16-bit rejection sampling |
+>
+> For the findings not listed above, and for what remains open, the current
+> state is [`known-limitations.md`](known-limitations.md) and the
+> [CHANGELOG](../../CHANGELOG.md) — not this file. Where the two disagree,
+> this file is wrong by construction.
+>
+> One correction the report itself earned: it identified stale security docs as
+> the highest-leverage thing to fix, on the grounds that an auditor would
+> otherwise be paid to chase a hole that was already closed. Publishing this
+> snapshot without the table above would have reproduced exactly that mistake at
+> a larger scale.
+
+
 **Scope:** `crates/passbook`, `crates/crypto`, `crates/sync-server`, `crates/sync`, `crates/sync-postgres`, `app/src/lib`, `deploy/`
 **Method:** source read against HEAD; every claim below was re-verified in the file, not taken from docs or from the candidate write-ups.
 **Purpose:** ensure a paid auditor's hours go to novel findings. This is not a substitute for that audit.
