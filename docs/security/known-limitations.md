@@ -183,18 +183,33 @@ everyone, because it cannot produce a signature any member's pin accepts.
    at epoch 1 and let the relay replay the higher-ranked pre-revocation set. The
    client pins the highest VERIFIED epoch per group and refuses anything lower.
 
-   Residual: two members writing concurrently can produce the same epoch, and
-   the client cannot distinguish a legitimate race from a fork. The relay's
-   `If-Match` versioning makes one of those writes lose, so it should not arise
-   — but "should not" is not "cannot", and equal-epoch sets are accepted.
+   Equal epochs are now treated as a **fork**, not a duplicate: the client pins
+   the accepted set's digest alongside its epoch, and refuses a same-epoch set
+   with a different digest. Without that, a relay could serve different members
+   different sets at the same epoch and split the family onto two vault keys
+   while every signature and epoch check passed.
 
-   Second residual: the floor lives in `localStorage`. Clearing site data resets
-   it to 0, and that device will then accept any epoch. This is the same
-   exposure as the key pins beside it — a device whose local state an attacker
-   can rewrite has already lost — but it is worth naming rather than implying
-   the floor is durable.
+   Residual: a fork is *detected*, not resolved. The user is told to reload and
+   to compare the safety number if it persists.
 
-2. **First contact — partly closed.** The signing key is pinned
+2. **Trust-state durability — detected, not fixed.** Every protection here
+   (member pins, vault-key pin, epoch floor, the "this group is signed" flag)
+   lives in `localStorage`. Clearing site data wipes all of it while the account
+   and group membership survive on the relay, so the device comes back looking
+   new, silently trusts on first use again, and every warning is disarmed.
+
+   This is not an attack — an attacker who can write `localStorage` already
+   holds the member secret and the device Secret Key stored beside it. It is
+   worse in a duller way: it happens by accident and shows nothing. The client
+   now reports a group it belongs to for which it holds no trust state at all,
+   and asks the user to re-check the safety number instead of re-TOFU'ing
+   silently.
+
+   **The durable fix is to keep trust state in the synced, encrypted vault**
+   rather than `localStorage`, so it survives a wipe and propagates to new
+   devices. That is a vault-format change and was deliberately not bolted on.
+
+3. **First contact — partly closed.** The signing key is pinned
    trust-on-first-use, same as the X25519 key, so a relay hostile from the very
    first sight of a member can substitute both at once. The safety number now
    covers signing keys as well (context label bumped to v2), so a family
@@ -203,7 +218,12 @@ everyone, because it cannot produce a signature any member's pin accepts.
    matched everyone else's exactly.
 
    What remains is that this depends on humans actually comparing the number.
-   It is detection contingent on a manual step, not prevention. Note also that
+   It is detection contingent on a manual step, not prevention. Approving a
+   member now requires ticking an explicit "I compared the safety number with
+   them directly" confirmation, which resets whenever the directory changes —
+   instructions alone were not enough, because the buttons worked whether or not
+   anyone read them. A tick is not proof, but it makes approving without
+   checking a deliberate act rather than the default one. Note also that
    the number changed for every existing group; the UI says so, because a family
    comparing against one they wrote down earlier would otherwise read a benign
    version bump as an attack.

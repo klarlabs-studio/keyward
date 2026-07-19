@@ -4,7 +4,7 @@
 // read shared logins, and remove members (which rotates the vault key). Sharing
 // rides on cloud sync, so it prompts to enable that first if it is off.
 
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useShareStore } from '@/stores/share';
 import { generatePassword } from '@/lib/passbook';
 import { copyText } from '@/composables/useToast';
@@ -15,6 +15,26 @@ const emit = defineEmits<{ (e: 'close'): void }>();
 const yourName = ref(s.identity?.name ?? '');
 const vaultName = ref('Family vault');
 const inviteInput = ref('');
+
+/**
+ * Whether the user has confirmed they compared the safety number out of band.
+ *
+ * Resets on every load rather than persisting: it attests to a check performed
+ * against the members shown RIGHT NOW. A remembered tick would carry a past
+ * confirmation onto a directory that has since changed, which is precisely the
+ * case it exists to catch.
+ */
+const oobConfirmed = ref(false);
+
+// Clear the confirmation whenever the directory it referred to changes. The
+// safety number is a digest of exactly that directory, so if it moves, whatever
+// the user checked against is no longer what they would be approving.
+watch(
+  () => s.active?.safety,
+  () => {
+    oobConfirmed.value = false;
+  },
+);
 
 // Add-login mini form for the open shared vault.
 const addTitle = ref('');
@@ -266,6 +286,49 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
             is why it gets its own state rather than folding into the signature
             warning.
           -->
+          <!--
+            Trust state gone. Not an attack, but it disarms every other warning
+            here, so it must not pass silently.
+          -->
+          <div v-if="s.active.trustWiped" class="section pending">
+            <div class="lbl">This device forgot what it knew about your family</div>
+            <p class="pending-why">
+              Proctor keeps a record of which keys it has already trusted, so it can warn
+              you if they change. That record is gone on this device — most likely your
+              browser data was cleared.
+            </p>
+            <p class="pending-why">
+              Nothing is wrong with the vault itself, but until you check, this device
+              can't tell you whether anything changed while it wasn't looking. Compare the
+              safety number below with your family before you share anything new.
+            </p>
+          </div>
+
+          <!--
+            Fork. Two sets at the same epoch, both genuinely signed. Either a
+            concurrent write the relay failed to serialize, or the relay handing
+            different members different keys to split the family. Benign case
+            first, because the benign case is the likely one.
+          -->
+          <div v-if="s.active.keysTrust === 'forked'" class="section keychanged">
+            <div class="lbl">Two versions of this vault's keys</div>
+            <p class="kc-body">
+              Two different sets of keys both claim to be the current one.
+              <b>Usually that means two people changed this vault at the same moment</b>
+              and the server didn't settle which came first.
+            </p>
+            <p class="kc-body">
+              Reloading normally resolves it. If it keeps happening, the server may be
+              showing different family members different keys — which would quietly split
+              you onto two separate vaults.
+            </p>
+            <p class="kc-check">
+              Nothing has been read. Reload first; if it persists, compare the safety
+              number with your family out of band before sharing anything.
+            </p>
+            <button class="approve" :disabled="s.busy" @click="s.reloadActive()">Reload</button>
+          </div>
+
           <div v-if="s.active.keysTrust === 'rolled-back'" class="section keychanged">
             <div class="lbl">These shared keys are out of date</div>
             <p class="kc-body">
@@ -352,6 +415,20 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
               Nothing has been shared with them yet. Check the safety number below with them
               directly — in person or by phone, not through this app — before approving.
             </p>
+            <!--
+              The safety number is the ONLY thing that closes first contact: keys
+              are trusted on first sight, so a server hostile from the start can
+              substitute at that moment and nothing else here would notice.
+              Instructions alone were not enough — the buttons worked whether or
+              not anyone read them. Confirming is now a gate, so approving without
+              checking is at least a deliberate act rather than the default one.
+            -->
+            <label class="confirm-oob">
+              <input v-model="oobConfirmed" type="checkbox" />
+              <span>
+                I compared the safety number below with them directly — not through this app
+              </span>
+            </label>
             <div v-for="p in s.active.pendingApproval" :key="p.memberId" class="member pending-row">
               <span class="dot" :class="{ warn: p.state === 'changed' }"></span>
               <span class="m-name">{{ p.name }}</span>
@@ -360,7 +437,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
               <button
                 class="approve"
                 :class="{ danger: p.state === 'changed' }"
-                :disabled="s.busy"
+                :disabled="s.busy || !oobConfirmed"
                 @click="s.approveMember(p.memberId, p.publicKey)"
               >
                 Approve
@@ -828,6 +905,21 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
   font-size: 0.8rem;
   line-height: 1.6;
 }
+.confirm-oob {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin: 0.6rem 0;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.confirm-oob input {
+  margin-top: 0.15rem;
+  flex: none;
+}
+
 .safety {
   margin-top: 0.35rem;
   border: 1px solid var(--line);

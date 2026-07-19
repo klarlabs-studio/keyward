@@ -2,7 +2,12 @@
 # backend. Unlike the file-backed self-host path, this backs the API with a shared
 # database so it can run stateless behind a load balancer (many replicas, one DB).
 #
-#   docker compose -f deploy/docker-compose.pg.yml up --build
+#   cp deploy/.env.example deploy/.env   # then edit it — there is no default
+#   docker compose --env-file deploy/.env -f deploy/docker-compose.pg.yml up --build
+#
+# The database password has no fallback value on purpose. A working default in a
+# public repository is the one that ends up in production: it reads as
+# configuration rather than as a placeholder, and nothing fails to remind you.
 #
 # In production the database is a managed instance (Cloud SQL / RDS / a Postgres
 # operator) and the server runs from deploy/k8s with PROCTOR_SYNC_PG set from a
@@ -14,7 +19,10 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: proctor
-      POSTGRES_PASSWORD: proctor
+      # No default. `docker compose` fails with the message below if it is unset,
+      # rather than silently starting with a password that is public knowledge in
+      # an open-source repository. See deploy/.env.example.
+      POSTGRES_PASSWORD: ${PROCTOR_DB_PASSWORD:?set PROCTOR_DB_PASSWORD (see deploy/.env.example)}
       POSTGRES_DB: proctor
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -32,7 +40,7 @@ services:
       PROCTOR_SYNC_ADDR: 0.0.0.0:8787
       # The Postgres backend takes precedence over the file store; the server
       # applies the schema on startup.
-      PROCTOR_SYNC_PG: postgres://proctor:proctor@db:5432/proctor
+      PROCTOR_SYNC_PG: postgres://proctor:${PROCTOR_DB_PASSWORD:?set PROCTOR_DB_PASSWORD (see deploy/.env.example)}@db:5432/proctor
       PROCTOR_SYNC_PG_POOL: "8"
       PROCTOR_SYNC_TOKEN_TTL: "2592000"
       PROCTOR_SYNC_RATELIMIT_PER_MIN: "30"

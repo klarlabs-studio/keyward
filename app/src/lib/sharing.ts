@@ -97,6 +97,37 @@ export async function safetyNumber(members: GroupMemberView[]): Promise<string> 
   return group_safety_number(recipients(members));
 }
 
+// ----- Detecting a wiped trust state ----------------------------------------
+//
+// Every protection in this file — member pins, the vault-key pin, the epoch
+// floor, the "this group has been signed" flag — lives in localStorage. Clearing
+// site data wipes all of it while leaving the account and the group membership
+// intact, because those live on the relay.
+//
+// That is not an attack (an attacker who can write localStorage already holds
+// the member secret and the device Secret Key stored beside it, and has won).
+// It is worse in a duller way: the device comes back looking brand new, silently
+// trusts on first use again, and every warning this file can raise is disarmed
+// — with nothing shown to the user.
+//
+// So a group we are joined to, with content on the relay, but no local trust
+// state at all is reported. The user is told their device forgot, and asked to
+// re-check the safety number rather than being quietly re-TOFU'd.
+//
+// The durable fix is to keep trust state in the SYNCED, ENCRYPTED vault instead
+// of localStorage, so it survives a wipe and propagates to new devices. That is
+// a vault-format change and is deliberately not bolted on here.
+
+/** True if we are joined to this group but hold no trust state for it at all. */
+function trustStateWiped(groupId: string, members: GroupMemberView[]): boolean {
+  const pins = pinnedKeys(groupId);
+  if (Object.keys(pins).length > 0) return false;
+  if (epochFloor(groupId) > 0) return false;
+  if (requiresSignature(groupId)) return false;
+  // A single-member group is genuinely new — there is nothing to have forgotten.
+  return members.length > 1;
+}
+
 /** A loaded family vault: its members, decrypted entries, and my access state. */
 export interface FamilyVault {
   groupId: string;
@@ -135,6 +166,12 @@ export interface FamilyVault {
    * `'bad-signature'` for an alarm.
    */
   keysTrust?: KeysTrust;
+  /**
+   * This device holds no trust state for a group it is a member of — typically
+   * browser data was cleared. Every pin and floor is gone, so first-use trust
+   * is about to be re-established silently unless the user is told.
+   */
+  trustWiped?: boolean;
   keysVersion: string | null;
   contentVersion: string | null;
 }
@@ -372,18 +409,36 @@ function rememberSigned(groupId: string): void {
 // edited without breaking the signature. This device records the highest epoch
 // it has VERIFIED for a group and refuses anything lower.
 //
-// Residual: two members writing concurrently can both produce the same epoch,
-// and this cannot tell a legitimate race from a fork. The relay's If-Match
-// versioning makes one of those writes lose, so it should not arise in practice
-// — but "should not" is not "cannot", and equal-epoch sets are accepted.
+// Equal epochs are a fork, not a duplicate. Two members writing concurrently can
+// both produce epoch N, and a relay can serve whichever it prefers — or serve
+// different ones to different members, splitting the family onto two vault keys
+// while every signature and every epoch check passes. So the floor pins the
+// accepted set's DIGEST alongside its epoch, and a set at the same epoch with a
+// different digest is refused rather than silently taken.
 
-const EPOCH_FLOOR = 'proctor.passbook.epochfloor.v1';
+const EPOCH_FLOOR = 'proctor.passbook.epochfloor.v2';
 
-function epochFloors(): Record<string, number> {
+/** What this device has accepted for a group: how far, and exactly which set. */
+interface EpochPin {
+  epoch: number;
+  /** Truncated SHA-256 of the accepted wrapped-key set. */
+  digest: string;
+}
+
+/** A stable fingerprint of a wrapped-key set, for telling forks apart. */
+async function keysDigest(sharedJson: string): Promise<string> {
+  const bytes = new TextEncoder().encode(sharedJson);
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(hash).slice(0, 8))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function epochPins(): Record<string, EpochPin> {
   const raw = localStorage.getItem(EPOCH_FLOOR);
   if (raw === null) return {};
   try {
-    const v = JSON.parse(raw) as Record<string, number>;
+    const v = JSON.parse(raw) as Record<string, EpochPin>;
     return v && typeof v === 'object' ? v : {};
   } catch {
     return {};
@@ -392,18 +447,41 @@ function epochFloors(): Record<string, number> {
 
 /** The highest verified epoch this device has accepted for a group. */
 export function epochFloor(groupId: string): number {
-  return epochFloors()[groupId] ?? 0;
+  return epochPins()[groupId]?.epoch ?? 0;
 }
 
 /**
- * Raise the floor to `epoch`. Never lowers it — a floor that could be walked
- * back is not a floor, and the relay controls what we are shown.
+ * How a verified set ranks against what this device has already accepted.
+ *
+ * Only meaningful for a set whose SIGNATURE has already been checked — the
+ * epoch lives inside the signed payload, so it means nothing until then.
  */
-function raiseEpochFloor(groupId: string, epoch: number): void {
-  if (epoch <= epochFloor(groupId)) return;
-  const floors = epochFloors();
-  floors[groupId] = epoch;
-  localStorage.setItem(EPOCH_FLOOR, JSON.stringify(floors));
+type EpochVerdict = 'current' | 'rolled-back' | 'forked';
+
+async function rankEpoch(
+  groupId: string,
+  sharedJson: string,
+  epoch: number,
+): Promise<EpochVerdict> {
+  const pin = epochPins()[groupId];
+  if (pin === undefined) return 'current';
+  if (epoch < pin.epoch) return 'rolled-back';
+  if (epoch > pin.epoch) return 'current';
+  // Same epoch. Identical set is just a re-read; a DIFFERENT one at the same
+  // epoch means two sets claim to be the same version of the truth.
+  return (await keysDigest(sharedJson)) === pin.digest ? 'current' : 'forked';
+}
+
+/**
+ * Record `sharedJson` as accepted. Never lowers the epoch — a floor that can be
+ * walked back is not a floor, and the relay controls what we are shown.
+ */
+async function acceptEpoch(groupId: string, sharedJson: string, epoch: number): Promise<void> {
+  const pins = epochPins();
+  const pin = pins[groupId];
+  if (pin !== undefined && epoch < pin.epoch) return;
+  pins[groupId] = { epoch, digest: await keysDigest(sharedJson) };
+  localStorage.setItem(EPOCH_FLOOR, JSON.stringify(pins));
 }
 
 // ----- Vault-key pinning ----------------------------------------------------
@@ -700,7 +778,12 @@ export type KeysTrust =
   /** Verified, but OLDER than a set this device already accepted — the relay
    *  served a stale set. Nothing is forged, which is exactly why the epoch,
    *  not the signature, is what catches it. */
-  | 'rolled-back';
+  | 'rolled-back'
+  /** Verified and at the SAME epoch as one already accepted, but a different
+   *  set. Two writes claim to be the same version of the truth — a concurrent
+   *  write the relay failed to serialize, or the relay splitting the family
+   *  onto two vault keys deliberately. */
+  | 'forked';
 
 /**
  * Create a new family vault owned by this device. Generates a fresh vault key,
@@ -729,7 +812,7 @@ export async function createFamilyVault(memberName: string, vaultName: string): 
     authorOf(member),
   );
   rememberSigned(groupId);
-  raiseEpochFloor(groupId, shared_vault_epoch(shared));
+  await acceptEpoch(groupId, shared, shared_vault_epoch(shared));
   const content = seal_group_content(JSON.stringify([]), vaultKey);
   const kv = await putKeys(groupId, shared, null);
   await putContent(groupId, content, null);
@@ -971,6 +1054,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     // Computed from the directory the relay just served us — comparing it
     // out of band is what catches a substituted key.
     safety: await safetyNumber(group.members),
+    trustWiped: trustStateWiped(groupId, group.members),
     keysVersion: keys?.version ?? null,
     contentVersion: null,
   };
@@ -1022,10 +1106,11 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
     // Check it BEFORE using the key: a replayed set decrypts perfectly, since
     // nothing about it was forged.
     const epoch = shared_vault_epoch(keys.json);
-    if (epoch < epochFloor(groupId)) {
-      return { ...base, keysTrust: 'rolled-back' };
+    const verdict = await rankEpoch(groupId, keys.json, epoch);
+    if (verdict !== 'current') {
+      return { ...base, keysTrust: verdict === 'forked' ? 'forked' : 'rolled-back' };
     }
-    raiseEpochFloor(groupId, epoch);
+    await acceptEpoch(groupId, keys.json, epoch);
     base.keysTrust = 'verified';
   }
 
@@ -1127,7 +1212,7 @@ export async function loadFamily(groupId: string, name: string): Promise<FamilyV
       grantedNames.push(m.name || m.member_id);
     }
     const newVersion = await putKeys(groupId, updated, keys.version);
-    raiseEpochFloor(groupId, shared_vault_epoch(updated));
+    await acceptEpoch(groupId, updated, shared_vault_epoch(updated));
     keys = { json: updated, version: newVersion };
     base.keysVersion = newVersion;
   }
@@ -1232,7 +1317,7 @@ export async function approveMember(
     signed?.signer ?? selfSigner(member),
   );
   await putKeys(groupId, updated, keys.version);
-  raiseEpochFloor(groupId, shared_vault_epoch(updated));
+  await acceptEpoch(groupId, updated, shared_vault_epoch(updated));
   rememberSigned(groupId);
   // Pin only AFTER the grant lands, so a failed upload does not leave us
   // trusting a key we never actually shared to.
@@ -1262,14 +1347,22 @@ export async function acceptRotatedVaultKey(groupId: string): Promise<void> {
   }
   if (signed !== null) {
     const epoch = shared_vault_epoch(keys.json);
-    if (epoch < epochFloor(groupId)) {
+    const verdict = await rankEpoch(groupId, keys.json, epoch);
+    if (verdict === 'rolled-back') {
       throw new Error(
         'These shared keys are older than ones this device already accepted. ' +
           'That is a stale copy being served back to you, not a normal change. ' +
           'Nothing was read. Check with your family before continuing.',
       );
     }
-    raiseEpochFloor(groupId, epoch);
+    if (verdict === 'forked') {
+      throw new Error(
+        'Two different versions of this vault\u2019s keys claim to be the same one. ' +
+          'Nothing was read. Reload, and if it persists, check with your family ' +
+          'before sharing anything.',
+      );
+    }
+    await acceptEpoch(groupId, keys.json, epoch);
   }
   const vaultKey =
     signed === null
@@ -1296,14 +1389,22 @@ export async function saveFamilyEntries(
   }
   if (signed !== null) {
     const epoch = shared_vault_epoch(keys.json);
-    if (epoch < epochFloor(groupId)) {
+    const verdict = await rankEpoch(groupId, keys.json, epoch);
+    if (verdict === 'rolled-back') {
       throw new Error(
         'These shared keys are older than ones this device already accepted. ' +
           'That is a stale copy being served back to you, not a normal change. ' +
           'Nothing was read. Check with your family before continuing.',
       );
     }
-    raiseEpochFloor(groupId, epoch);
+    if (verdict === 'forked') {
+      throw new Error(
+        'Two different versions of this vault\u2019s keys claim to be the same one. ' +
+          'Nothing was read. Reload, and if it persists, check with your family ' +
+          'before sharing anything.',
+      );
+    }
+    await acceptEpoch(groupId, keys.json, epoch);
   }
   const vaultKey =
     signed === null
@@ -1378,7 +1479,7 @@ export async function revokeMember(
   // than not having it.
   await pinVaultKey(groupId, newKey);
   rememberSigned(groupId);
-  raiseEpochFloor(groupId, shared_vault_epoch(shared));
+  await acceptEpoch(groupId, shared, shared_vault_epoch(shared));
 }
 
 /**
@@ -1410,7 +1511,7 @@ export async function adoptUnsignedKeys(groupId: string): Promise<void> {
   const vaultKey = unwrap_vault_key_unsigned(keys.json, member.secret, member.id);
   const signed = sign_shared_vault(keys.json, authorOf(member));
   await putKeys(groupId, signed, keys.version);
-  raiseEpochFloor(groupId, shared_vault_epoch(signed));
+  await acceptEpoch(groupId, signed, shared_vault_epoch(signed));
   await pinVaultKey(groupId, vaultKey);
   pinKey(groupId, member.id, member.public_key, member.signing_key ?? '');
   rememberSigned(groupId);

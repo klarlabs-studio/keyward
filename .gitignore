@@ -12,3 +12,7 @@ rollops.db
 
 # nox scan output — regenerated per scan, not source.
 findings.json
+
+# Local compose credentials (deploy/.env.example is the template).
+deploy/.env
+.env
