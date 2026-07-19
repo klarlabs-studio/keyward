@@ -69,7 +69,7 @@ let hk = Hkdf::<Sha256>::new(None, shared_secret);
 hk.expand(HKDF_INFO, okm.as_mut())
 ```
 
-`HKDF_INFO` is the fixed byte string `b"proctor-passbook family-share v1"`
+`HKDF_INFO` is the fixed byte string `b"keyward-passbook family-share v1"`
 (`sharing.rs:39`). The `info` parameter does **not** include the ephemeral
 public key, the recipient's public key, the `member_id`, or the group id, and
 the salt is `None`.
@@ -423,9 +423,9 @@ level as the device:
 
 | Key | Contents | Source |
 |---|---|---|
-| `proctor.passbook.secretkey.v1` | The 128-bit device Secret Key (2SKD factor) | `app/src/lib/passbook.ts:29, 80-95` |
-| `proctor.passbook.member.v1` | The member **X25519 secret** (hex) | `app/src/lib/sharing.ts:29, 101-132` |
-| `proctor.passbook.sync.v1` | The device bearer token | `app/src/lib/sync.ts:13, 48, 77` |
+| `keyward.passbook.secretkey.v1` | The 128-bit device Secret Key (2SKD factor) | `app/src/lib/passbook.ts:29, 80-95` |
+| `keyward.passbook.member.v1` | The member **X25519 secret** (hex) | `app/src/lib/sharing.ts:29, 101-132` |
+| `keyward.passbook.sync.v1` | The device bearer token | `app/src/lib/sync.ts:13, 48, 77` |
 
 This is deliberate and documented (`app/src/lib/sharing.ts:8-10`: *"consistent
 with how that 2SKD factor is already held on-device (a device compromise is

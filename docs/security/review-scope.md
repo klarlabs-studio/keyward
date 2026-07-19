@@ -54,7 +54,7 @@ The core question. `crates/passbook/src/sharing.rs:310-375`:
 ```
 esk, epk ← X25519 keygen (fresh per recipient per wrap)
 ss       ← X25519(esk, recipient_pub)          # recipient_pub comes from the relay
-K_wrap   ← HKDF-SHA256(ikm = ss, salt = None, info = "proctor-passbook family-share v1", L = 32)
+K_wrap   ← HKDF-SHA256(ikm = ss, salt = None, info = "keyward-passbook family-share v1", L = 32)
 ct       ← XChaCha20-Poly1305(K_wrap, random_24B_nonce, K_vault)
 stored   ← { member_id, epk, nonce, ct }
 ```
@@ -128,7 +128,7 @@ Three labels/derivations exist:
 
 | Derivation | Label | Location |
 |---|---|---|
-| Wrapping key | `b"proctor-passbook family-share v1"` (HKDF `info`, salt `None`) | `sharing.rs:39, 403-409` |
+| Wrapping key | `b"keyward-passbook family-share v1"` (HKDF `info`, salt `None`) | `sharing.rs:39, 403-409` |
 | Safety number | `b"keyward-passbook group-safety-number v1"` (SHA-256 prefix) | `sharing.rs:77, 93-115` |
 | 2SKD fold | *no label* — bare `SHA-256(argon2_out ‖ secret_key)` | `sealing.rs:30-38` |
 

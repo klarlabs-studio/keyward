@@ -35,7 +35,9 @@ const LEGACY_PINS = 'proctor.passbook.keypins.v1';
 const LEGACY_VAULT = 'proctor.passbook.vaultkeypins.v1';
 const LEGACY_SIGNED = 'proctor.passbook.signedgroups.v1';
 const LEGACY_EPOCH2 = 'proctor.passbook.epochfloor.v2';
-const CACHE = 'proctor.passbook.trust.v1';
+// The four LEGACY_* keys above intentionally keep the `proctor.` prefix: they
+// name pre-rename bytes on disk, and trust.ts still migrates from them.
+const CACHE = 'keyward.passbook.trust.v1';
 
 // Seed the pre-vault localStorage layout BEFORE importing the module: it
 // migrates at load time, which is the behaviour under test.

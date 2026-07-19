@@ -46,7 +46,7 @@ const TRUST_TITLE = '__trust__';
  * re-TOFU that `knowsNothingAbout` exists to catch. The prefix records what the
  * product was called when the key was written, which is what a storage key is
  * supposed to do. */
-const CACHE = 'proctor.passbook.trust.v1';
+const CACHE = 'keyward.passbook.trust.v1';
 
 /** What we have accepted for one member: their X25519 and Ed25519 public keys. */
 export interface PinnedKeys {
@@ -114,6 +114,13 @@ export function clearPersister(): void {
  * re-trusting on first use, with every warning disarmed. That is precisely the
  * wipe `knowsNothingAbout` exists to detect, and shipping it deliberately would
  * be worse than the bug it reports.
+ *
+ * These keep the `proctor.` prefix ON PURPOSE, and are the one place the
+ * Keyward rename does not reach. They name bytes that are already sitting in
+ * real localStorage, written before the rename; renaming them here would not
+ * rename anything on disk, it would just make this migration look for keys that
+ * were never written and silently find nothing — which is exactly the wiped-
+ * state bug the comment above says shipping would be worse than.
  */
 const LEGACY = {
   pins: 'proctor.passbook.keypins.v1',

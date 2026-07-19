@@ -45,15 +45,16 @@ use zeroize::Zeroizing;
 // payload, so every existing shared vault stops decrypting and every signature
 // stops verifying, with no error that points here.
 //
-// They say "keyward-passbook" because that is what the product was called when
-// the format was fixed. That is the correct spelling of a wire format's
-// history. If they ever must change, it is a versioned format migration with a
-// re-wrap path — never a find-and-replace.
-const HKDF_INFO: &[u8] = b"proctor-passbook family-share v1";
+// They were rewritten from "proctor-passbook" to "keyward-passbook" on
+// 2026-07-19, while the product was still pre-GA with no external installs and
+// the only vault was a developer's. That was the last moment this was a rename
+// rather than a migration. From here the labels are FROZEN: changing one is a
+// versioned format migration with a re-wrap path — never a find-and-replace.
+const HKDF_INFO: &[u8] = b"keyward-passbook family-share v1";
 
 /// Separate label for the general-purpose [`SealedBox`] (recovery payloads). Two
 /// protocols carrying different plaintext types must never share one derivation.
-const SEALED_BOX_INFO: &[u8] = b"proctor-passbook sealed-box v1";
+const SEALED_BOX_INFO: &[u8] = b"keyward-passbook sealed-box v1";
 
 /// The length of a Passbook vault key, in bytes.
 pub const VAULT_KEY_LEN: usize = 32;
@@ -110,13 +111,13 @@ pub struct ContentBlob {
 /// Domain label for the wrapped-key-set signature. Distinct from every other
 /// label here so a signature over this structure can never be replayed as a
 /// signature over something else.
-const WRAP_SIGNATURE_CONTEXT: &[u8] = b"proctor-passbook shared-vault-wraps v1";
+const WRAP_SIGNATURE_CONTEXT: &[u8] = b"keyward-passbook shared-vault-wraps v1";
 
 /// Bumped to v2 when the safety number began covering signing keys. The label is
 /// part of the digest, so v1 and v2 numbers differ for the same directory — which
 /// is the point: a silently-changed derivation under the same label would look
 /// like a substituted directory to every family at once.
-const SAFETY_NUMBER_INFO: &[u8] = b"proctor-passbook group-safety-number v2";
+const SAFETY_NUMBER_INFO: &[u8] = b"keyward-passbook group-safety-number v2";
 
 /// A short, human-comparable fingerprint of a group's **public** membership —
 /// the mitigation for the key-substitution / directory-trust risk named in
