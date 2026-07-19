@@ -60,6 +60,52 @@ fn app_package_json_matches_the_workspace_version() {
     );
 }
 
+/// The Tauri desktop shell must carry the current version too — in BOTH its
+/// tauri.conf.json (the version the built .app reports to the OS) and its
+/// Cargo.toml.
+///
+/// This is the one the parent workspace could not see on its own: app/src-tauri
+/// is a STANDALONE cargo workspace (an empty `[workspace]` table detaches it),
+/// so it is invisible to `cargo test --workspace` compilation and to the release
+/// workflow's version check. It drifted to 1.19.0 — a PRE-RENAME version — while
+/// everything else moved to 2.x, and nothing caught it because nothing looked.
+/// A test that reads the file by path, not by workspace membership, is the only
+/// thing that spans the boundary.
+#[test]
+fn tauri_desktop_shell_matches_the_workspace_version() {
+    let want = workspace_version();
+    let mut wrong = Vec::new();
+
+    let conf = read("app/src-tauri/tauri.conf.json");
+    let conf_ver = conf
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("\"version\": \""))
+        .and_then(|rest| rest.split('"').next())
+        .expect("version in tauri.conf.json");
+    if conf_ver != want {
+        wrong.push(format!("tauri.conf.json is {conf_ver}"));
+    }
+
+    let cargo = read("app/src-tauri/Cargo.toml");
+    let cargo_ver = cargo
+        .lines()
+        .find_map(|l| l.strip_prefix("version = \""))
+        .and_then(|rest| rest.split('"').next())
+        .expect("version in src-tauri/Cargo.toml");
+    if cargo_ver != want {
+        wrong.push(format!("src-tauri/Cargo.toml is {cargo_ver}"));
+    }
+
+    assert!(
+        wrong.is_empty(),
+        "the desktop shell disagrees with the workspace version {want}:\n  {}\n\n\
+         app/src-tauri is a standalone workspace, so only a path-based check like \
+         this one spans the boundary — the release workflow's version guard does \
+         not reach it.",
+        wrong.join("\n  ")
+    );
+}
+
 /// Every `ghcr.io/klarlabs-studio/keyward-*` image in the PORTABLE base must be
 /// tagged with the current version. The base is what OSS self-hosters apply
 /// directly; a stale tag there is broken for them and invisible to us.
