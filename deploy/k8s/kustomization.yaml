@@ -8,12 +8,24 @@ namespace: keyward
 resources:
   - namespace.yaml
   - postgres.yaml
+  # --- sync API tier -------------------------------------------------------
   - deployment.yaml
   - service.yaml
   - ingress.yaml
   - hpa.yaml
-  - networkpolicy.yaml
   - pdb.yaml
+  # --- web vault tier (the built SPA, served by nginx) ---------------------
+  # Its own Deployment/Service/Ingress rather than extra paths on the API's,
+  # because it is served from a SEPARATE HOSTNAME on purpose. See the rationale
+  # at the top of web-ingress.yaml and deploy/README.md § "Which origin serves
+  # the vault". There is no web HPA by design (static files never hit a CPU
+  # target; an HPA that can never trigger is just a misleading object).
+  - web-deployment.yaml
+  - web-service.yaml
+  - web-ingress.yaml
+  - web-pdb.yaml
+  # --- shared --------------------------------------------------------------
+  - networkpolicy.yaml
 # NOTE: no Secret manifest is committed — create the `keyward-sync-secrets`
 # Secret out-of-band with `kubectl create secret` (see deploy/README.md § Secrets).
 
@@ -46,3 +58,10 @@ labels:
 images:
   - name: ghcr.io/klarlabs-studio/keyward-sync-server
     newTag: "1.42.0"
+  # The web image is versioned from the SAME git tag as the server (both are
+  # built by .github/workflows/release.yml on a v* tag, which refuses to publish
+  # unless the tag, Cargo.toml and app/package.json all agree). Keep these two
+  # newTag values in step: a web bundle and a relay from different releases are
+  # not a combination anything tests.
+  - name: ghcr.io/klarlabs-studio/keyward-web
+    newTag: "2.0.0"

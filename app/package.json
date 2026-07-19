@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "tsx scripts/roundtrip.test.ts && tsx scripts/trust.test.ts",
+    "test": "tsx scripts/roundtrip.test.ts && tsx scripts/trust.test.ts && tsx scripts/keymaterial.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

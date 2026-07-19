@@ -132,6 +132,50 @@ pub fn account_store_contract(store: &dyn AccountStore) {
     assert_eq!(store.get_plan(&acct.account_id).unwrap(), Plan::Family);
     assert!(!store.set_plan("no-such-account", Plan::Individual).unwrap());
     assert_eq!(store.get_plan("no-such-account").unwrap(), Plan::Free);
+
+    // ---- Account deletion (GDPR Art. 17) ---------------------------------
+    //
+    // Deleting an account must take EVERY device with it. A surviving device row
+    // is a live bearer token for an account that no longer exists.
+    let doomed = store
+        .register(Some("bye@example.com"), "Laptop", 20_000, None)
+        .unwrap();
+    let doomed2 = store
+        .add_device(&doomed.device_token, "Phone", 20_000, None)
+        .unwrap()
+        .unwrap();
+    let survivor = store.register(None, "Laptop", 20_000, None).unwrap();
+    assert_eq!(store.list_devices(&doomed.account_id).unwrap().len(), 2);
+
+    assert!(store.delete_account(&doomed.account_id).unwrap());
+    // Both tokens are dead, not just the one that asked.
+    assert!(store
+        .resolve_token(&doomed.device_token, 20_001)
+        .unwrap()
+        .is_none());
+    assert!(store
+        .resolve_token(&doomed2.device_token, 20_001)
+        .unwrap()
+        .is_none());
+    assert!(store.list_devices(&doomed.account_id).unwrap().is_empty());
+    // The account record is gone, not merely emptied: re-planning it fails.
+    assert!(!store.set_plan(&doomed.account_id, Plan::Family).unwrap());
+    assert_eq!(store.get_plan(&doomed.account_id).unwrap(), Plan::Free);
+    // A dead token cannot mint a new device to climb back in.
+    assert!(store
+        .add_device(&doomed.device_token, "Sneaky", 20_002, None)
+        .unwrap()
+        .is_none());
+    // Idempotent, and an unknown account is simply false.
+    assert!(!store.delete_account(&doomed.account_id).unwrap());
+    assert!(!store.delete_account("no-such-account").unwrap());
+
+    // BLAST RADIUS: another account is completely untouched.
+    assert!(store
+        .resolve_token(&survivor.device_token, 20_002)
+        .unwrap()
+        .is_some());
+    assert_eq!(store.list_devices(&survivor.account_id).unwrap().len(), 1);
 }
 
 /// Contract for a [`ShareGroupStore`]: membership directory, single-use TTL'd
@@ -453,4 +497,202 @@ pub fn share_group_store_contract(store: &dyn ShareGroupStore, group_id: &str) {
     store.delete(group_id).unwrap();
     assert!(store.get(group_id).unwrap().is_none());
     store.delete(group_id).unwrap();
+
+    account_erasure_contract(store, group_id);
+}
+
+/// Contract for [`ShareGroupStore::erase_account`] — the group half of account
+/// deletion. Split out only for length; it is part of the group contract and is
+/// called at the end of [`share_group_store_contract`].
+///
+/// The through-line of every case: erasing one account must leave NOTHING of that
+/// account behind, and must leave the group usable for everyone else.
+fn account_erasure_contract(store: &dyn ShareGroupStore, group_id: &str) {
+    let member = |mid: &str, acct: &str, role: Role, epoch: u64| GroupMember {
+        member_id: mid.into(),
+        account_id: acct.into(),
+        name: mid.into(),
+        public_key: format!("{mid}-pub"),
+        signing_key: String::new(),
+        role,
+        added_epoch: epoch,
+    };
+    let open_invite = |h: &str| GroupInvite {
+        code_hash: h.into(),
+        created_epoch: 100,
+        expires_epoch: u64::MAX,
+        redeemed_by: None,
+    };
+    /// Add `m` to `g` via a fresh invite (the only path membership has).
+    fn join(store: &dyn ShareGroupStore, gid: &str, code: &str, m: GroupMember) {
+        assert!(store
+            .add_invite(
+                gid,
+                GroupInvite {
+                    code_hash: code.into(),
+                    created_epoch: 100,
+                    expires_epoch: u64::MAX,
+                    redeemed_by: None,
+                },
+            )
+            .unwrap());
+        assert_eq!(
+            store.redeem_invite(gid, code, m, 200).unwrap(),
+            RedeemOutcome::Added
+        );
+    }
+
+    // ---- Case 1: a plain Member erases themselves ------------------------
+    // The group survives with its Owner intact.
+    let g1 = format!("{group_id}-erase-member");
+    store
+        .create(&g1, member("m-o1", "acct-o1", Role::Owner, 100))
+        .unwrap();
+    join(
+        store,
+        &g1,
+        "c1",
+        member("m-b1", "acct-b1", Role::Member, 200),
+    );
+    assert_eq!(store.erase_account("acct-b1").unwrap(), 1);
+    let g = store.get(&g1).unwrap().unwrap();
+    assert!(
+        !g.is_member("acct-b1"),
+        "erased account must not remain a member"
+    );
+    assert!(
+        g.is_owner("acct-o1"),
+        "erasing a member must not disturb the owner"
+    );
+    assert_eq!(g.members.len(), 1);
+    // No tombstone: `remove_member` records one, erasure must NOT — it would be a
+    // retained identifier of an account that no longer exists.
+    assert!(
+        !g.removed_accounts.iter().any(|a| a == "acct-b1"),
+        "erasure must leave no removed-account record"
+    );
+    // Idempotent, and an account in no group is a no-op.
+    assert_eq!(store.erase_account("acct-b1").unwrap(), 0);
+    assert_eq!(store.erase_account("nobody-at-all").unwrap(), 0);
+
+    // ---- Case 2: the last OWNER erases themselves ------------------------
+    // `remove_member` refuses this (it would leave the group unadministrable
+    // forever). Erasure cannot refuse, so it promotes a successor instead.
+    let g2 = format!("{group_id}-erase-owner");
+    store
+        .create(&g2, member("m-o2", "acct-o2", Role::Owner, 100))
+        .unwrap();
+    join(
+        store,
+        &g2,
+        "c2a",
+        member("m-b2", "acct-b2", Role::Member, 300),
+    );
+    join(
+        store,
+        &g2,
+        "c2b",
+        member("m-c2", "acct-c2", Role::Member, 200),
+    );
+    // Sanity: ordinary removal of the last owner is still refused.
+    assert!(!store.remove_member(&g2, "m-o2").unwrap());
+
+    assert_eq!(store.erase_account("acct-o2").unwrap(), 1);
+    let g = store.get(&g2).unwrap().unwrap();
+    assert!(!g.is_member("acct-o2"));
+    assert_eq!(g.members.len(), 2);
+    // The longest-standing remaining member (added_epoch 200) becomes Owner, so
+    // roles can still be changed and members still managed.
+    assert!(
+        g.is_owner("acct-c2"),
+        "erasing the last owner must promote a successor, not orphan the group"
+    );
+    assert!(g.can_change_roles("acct-c2"));
+    assert_eq!(g.role_of("acct-b2"), Some(Role::Member));
+
+    // ---- Case 3: the SOLE member erases themselves -----------------------
+    // Nothing is left to preserve, so the group goes too — a memberless group is
+    // exactly the orphaned row account deletion exists to remove.
+    let g3 = format!("{group_id}-erase-sole");
+    store
+        .create(&g3, member("m-o3", "acct-o3", Role::Owner, 100))
+        .unwrap();
+    assert!(store.add_invite(&g3, open_invite("c3")).unwrap());
+    assert_eq!(store.erase_account("acct-o3").unwrap(), 1);
+    assert!(
+        store.get(&g3).unwrap().is_none(),
+        "a group whose last member erased their account must be deleted"
+    );
+    // Its invites went with it — the code cannot resurrect anything.
+    assert_eq!(
+        store
+            .redeem_invite(&g3, "c3", member("m-x", "acct-x", Role::Member, 400), 200)
+            .unwrap(),
+        RedeemOutcome::NoSuchGroup
+    );
+
+    // ---- Case 4: a previously REMOVED account erases itself --------------
+    // The removed-account tombstone carries the account id, so erasure has to
+    // scrub it even though the account is no longer a member.
+    let g4 = format!("{group_id}-erase-tombstone");
+    store
+        .create(&g4, member("m-o4", "acct-o4", Role::Owner, 100))
+        .unwrap();
+    join(
+        store,
+        &g4,
+        "c4",
+        member("m-b4", "acct-b4", Role::Member, 200),
+    );
+    assert!(store.remove_member(&g4, "m-b4").unwrap());
+    assert!(
+        store
+            .get(&g4)
+            .unwrap()
+            .unwrap()
+            .removed_accounts
+            .iter()
+            .any(|a| a == "acct-b4"),
+        "removal is expected to leave a tombstone"
+    );
+    assert_eq!(store.erase_account("acct-b4").unwrap(), 1);
+    let g = store.get(&g4).unwrap().unwrap();
+    assert!(
+        g.removed_accounts.is_empty(),
+        "erasure must scrub the removed-account tombstone"
+    );
+    assert!(g.is_owner("acct-o4"), "the surviving owner is untouched");
+
+    // ---- Case 5: pending invites are cancelled ---------------------------
+    // Same reasoning as `apply_remove`: an invite names no recipient, so there is
+    // no way to tell which pending code the departing member was holding.
+    let g5 = format!("{group_id}-erase-invites");
+    store
+        .create(&g5, member("m-o5", "acct-o5", Role::Owner, 100))
+        .unwrap();
+    join(
+        store,
+        &g5,
+        "c5",
+        member("m-b5", "acct-b5", Role::Member, 200),
+    );
+    assert!(store.add_invite(&g5, open_invite("c5-pending")).unwrap());
+    assert_eq!(store.erase_account("acct-b5").unwrap(), 1);
+    assert_eq!(
+        store
+            .redeem_invite(
+                &g5,
+                "c5-pending",
+                member("m-d5", "acct-d5", Role::Member, 500),
+                200
+            )
+            .unwrap(),
+        RedeemOutcome::InvalidOrUsed,
+        "erasure must invalidate pending invites"
+    );
+
+    store.delete(&g1).unwrap();
+    store.delete(&g2).unwrap();
+    store.delete(&g4).unwrap();
+    store.delete(&g5).unwrap();
 }

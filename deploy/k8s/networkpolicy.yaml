@@ -1,10 +1,16 @@
 # Network hardening for the `keyward` namespace (GA / CONT-001).
 #
 # Strategy: DEFAULT-DENY INGRESS for the whole namespace, then explicit allows
-# for the only two flows that must exist:
+# for the only flows that must exist:
 #   1. ingress-controller  ─▶ app pods    :8787
 #   2. Prometheus          ─▶ app pods     :8787 (/metrics scrape)
 #   3. app pods            ─▶ Postgres     :5432   (enforced on the Postgres side)
+#   4. ingress-controller  ─▶ web pods     :8080  (the static vault SPA)
+#
+# NOTE THAT THERE IS NO web ─▶ app RULE, and that is not an omission. The web
+# pods never call the sync server: the SPA is served to the BROWSER, and the
+# browser then talks to the API directly from the user's machine, cross-origin.
+# The web tier is not in the API request path at all.
 #
 # EGRESS IS LEFT PERMISSIVE on purpose. A too-tight egress policy silently breaks
 # DNS (kube-dns), cert-manager's ACME calls, and the app's outbound HTTPS to
@@ -141,6 +147,47 @@ spec:
       ports:
         - protocol: TCP
           port: 8089
+---
+# 2c) Allow inbound to the WEB pods on TCP 8080 from the ingress-controller
+#     namespace.
+#
+#     REQUIRED — without this the vault UI is simply unreachable. Rule (1)
+#     default-denies every pod in the namespace, and rule (2) selects only
+#     `app.kubernetes.io/name: keyward-sync-server`, so the web pods inherit the
+#     deny and match no allow. The symptom is an ingress controller that answers
+#     with 502/504 while `kubectl get pods` shows keyward-web perfectly Ready,
+#     which is a genuinely confusing place to start debugging.
+#
+#     Port 8080, NOT 8787 — the nginx-unprivileged image cannot bind a
+#     privileged port and listens on 8080 (see web-deployment.yaml).
+#
+#     Only the ingress controller is allowed. There is deliberately no
+#     monitoring rule: this image exposes no Prometheus endpoint, so a scraper
+#     would only ever retrieve index.html.
+#
+#     PER-CLUSTER: same adjustment as rule (2) — change the namespaceSelector to
+#     wherever your ingress controller actually runs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-web
+  namespace: keyward
+  labels:
+    app.kubernetes.io/part-of: keyward
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: keyward-web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
 ---
 # 3) Allow inbound to POSTGRES pods on TCP 5432 ONLY from the app pods. Nothing
 #    else in (or out of) the namespace may reach the database. Combined with the

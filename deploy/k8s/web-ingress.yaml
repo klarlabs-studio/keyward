@@ -1,0 +1,71 @@
+# Ingress for the WEB VAULT — a SEPARATE Ingress on a SEPARATE HOSTNAME from
+# the sync API (k8s/ingress.yaml).
+#
+# THE SEPARATE HOST IS THE POINT. It would be less work to add a second path to
+# the existing Ingress and serve the app and the API from one origin. That is
+# deliberately not what this does, and the reasoning is written up in full in
+# deploy/README.md § "Which origin serves the vault". In short:
+#
+#   localStorage is per-ORIGIN, and on the vault's origin it holds the device
+#   Secret Key, the member X25519 secret and the device bearer token as
+#   PLAINTEXT strings (docs/security/known-limitations.md §10, which states
+#   plainly: "Any XSS or malicious browser extension on the app origin is total
+#   compromise"). So the origin that holds those secrets should serve nothing
+#   but static bytes we authored and froze at release time. The sync server is
+#   where user-controlled data, error pages, billing redirects and /metrics
+#   live; a single HTML-reflecting bug anywhere in that surface would, on a
+#   shared origin, become vault key theft.
+#
+#   The app already commits to exactly this reasoning in development:
+#   app/vite.config.ts pins a dedicated port 5183 with the comment "SECURITY,
+#   not preference … a dedicated port gives the vault an origin of its own,"
+#   after a real localhost:5173 was found holding another app's tokens beside a
+#   Keyward vault. Sharing an origin with the API in production would contradict
+#   a decision this repo has already made and documented for dev.
+#
+# COST OF THE SPLIT: the browser's calls to the sync API become cross-origin and
+# need CORS. The sync server already sends `Access-Control-Allow-Origin: *`
+# (docs/security/known-limitations.md, final section), so this works today with
+# no server change. That wildcard is safe here specifically because
+# authentication is a bearer HEADER and not a cookie — there is no ambient
+# credential for another origin to ride, so CORS is not the control protecting
+# the API. See deploy/README.md § CORS before "tightening" it; narrowing it to
+# this one host would break self-hosters pointing their own vault at your relay.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keyward-web
+  namespace: keyward
+  labels:
+    app.kubernetes.io/name: keyward-web
+    app.kubernetes.io/part-of: keyward
+  annotations:
+    # cert-manager issues + renews the TLS cert for the host below. Replace with
+    # your ClusterIssuer name (must already exist in the cluster).
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # NOTE: deliberately no proxy-body-size override here. The sync Ingress
+    # raises it to 16m because sealed-vault blobs are POSTed to it; this origin
+    # only ever serves GETs of static files, so the stock 1m cap is correct and
+    # is one less way to absorb a large-body flood.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        # CHANGE ME to your real vault hostname. Keep it DISTINCT from the sync
+        # API host in k8s/ingress.yaml — that separation is the security
+        # property described above, and collapsing the two hostnames silently
+        # discards it.
+        - app.keyward.example
+      secretName: keyward-web-tls
+  rules:
+    # CHANGE ME to match the host above.
+    - host: app.keyward.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: keyward-web
+                port:
+                  name: http

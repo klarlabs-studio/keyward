@@ -25,6 +25,33 @@ jobs:
   rust:
     name: Rust (fmt, clippy, test)
     runs-on: ubuntu-latest
+
+    # The Postgres contract tests SKIP SILENTLY when KEYWARD_TEST_PG is unset,
+    # and the first version of this workflow did not set it. That is not a
+    # missing nice-to-have: Postgres is the backend the managed instance runs,
+    # and while CI was green over it, `load_group` read added_epoch from column
+    # index 5 — which is `role`, a TEXT column — as i64, panicking on EVERY
+    # group load, and `insert_member` bound 8 parameters into VALUES ($1..$7).
+    # Family sharing could not work at all on the only backend that ships, and
+    # nothing in the suite could say so. A skipped test that reports success is
+    # worse than an absent one.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: keyward
+          POSTGRES_PASSWORD: keyward
+          POSTGRES_DB: keyward_test
+        ports:
+          - 5432:5432
+        # Without this the job races the container and fails on connection
+        # refused rather than on anything real.
+        options: >-
+          --health-cmd "pg_isready -U keyward"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +66,32 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+      # Against the real backend. Separate step so a Postgres-specific failure
+      # is distinguishable at a glance from a logic failure in the line above.
+      - name: Postgres contract tests (real backend)
+        env:
+          KEYWARD_TEST_PG: postgres://keyward:keyward@localhost:5432/keyward_test
+        run: cargo test -p keyward-sync-postgres --features keyward-sync/testkit
+
+      # Guard the guard. The contract tests skip when KEYWARD_TEST_PG is unset,
+      # so a typo in the variable name above would restore the exact blind spot
+      # this job exists to close — silently, and looking green. Assert the
+      # database is genuinely reachable rather than trusting that it was.
+      - name: Assert the contract tests did not silently skip
+        env:
+          KEYWARD_TEST_PG: postgres://keyward:keyward@localhost:5432/keyward_test
+        run: |
+          out="$(cargo test -p keyward-sync-postgres --features keyward-sync/testkit -- --nocapture 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -qiE 'skip|KEYWARD_TEST_PG not set'; then
+            echo "::error::Postgres contract tests skipped — the real backend was NOT exercised"
+            exit 1
+          fi
+          if ! echo "$out" | grep -qE '^test result: ok\. [1-9]'; then
+            echo "::error::Postgres contract tests ran zero tests"
+            exit 1
+          fi
 
   web:
     name: Web vault (TypeScript)

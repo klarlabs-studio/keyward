@@ -10,6 +10,32 @@
 // (If-Match) so two devices editing at once produce a 409 rather than a silent
 // clobber.
 
+// WHY THE DEVICE TOKEN IS NOT A NON-EXTRACTABLE CryptoKey EITHER.
+//
+// Unlike the two WASM-bound secrets (see passbook.ts and sharing.ts), this one
+// never touches the crypto core. It is used in exactly one way, everywhere:
+//
+//     Authorization: Bearer <deviceToken>
+//
+// A bearer token is by definition a value the SERVER compares against a stored
+// copy, so it has to leave this machine as a plaintext string on every request.
+// There is no `CryptoKey` shape that can be sent over the wire without being
+// extracted, because being sent IS being extracted. A non-extractable key could
+// only help if the credential stopped being a bearer token and became a proof —
+// request signing, HMAC over a nonce, DPoP-style — where the key stays local and
+// only a per-request signature travels. That is a change to the wire protocol
+// and to the server that verifies it (`crates/`, `deploy/`), not something the
+// web client can adopt unilaterally.
+//
+// Worth naming honestly: because the token is a bearer credential, wrapping it
+// at rest is even more pointless here than for the other two. Script on this
+// origin does not need to read the token at all — it can simply issue requests
+// and let this module attach the header, or monkey-patch `fetch` and read the
+// header off the way out. Storage hardening cannot touch that.
+//
+// The mitigation that IS in place is transport-level and lives in
+// `normalizeUrl` below: plain HTTP is refused outright for non-loopback hosts,
+// so the token is not handed to anyone sitting on the path.
 const SYNC_STORAGE = 'keyward.passbook.sync.v1';
 const VERSION_HEADER = 'X-Vault-Version';
 
