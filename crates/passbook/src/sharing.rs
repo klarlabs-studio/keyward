@@ -100,7 +100,11 @@ pub struct ContentBlob {
 /// signature over something else.
 const WRAP_SIGNATURE_CONTEXT: &[u8] = b"proctor-passbook shared-vault-wraps v1";
 
-const SAFETY_NUMBER_INFO: &[u8] = b"proctor-passbook group-safety-number v1";
+/// Bumped to v2 when the safety number began covering signing keys. The label is
+/// part of the digest, so v1 and v2 numbers differ for the same directory — which
+/// is the point: a silently-changed derivation under the same label would look
+/// like a substituted directory to every family at once.
+const SAFETY_NUMBER_INFO: &[u8] = b"proctor-passbook group-safety-number v2";
 
 /// A short, human-comparable fingerprint of a group's **public** membership —
 /// the mitigation for the key-substitution / directory-trust risk named in
@@ -127,6 +131,10 @@ pub fn safety_number(members: &[MemberPublic]) -> String {
         hasher.update((m.id.len() as u32).to_be_bytes());
         hasher.update(m.id.as_bytes());
         hasher.update(m.public_key);
+        // Fixed 32 bytes, so no length prefix is needed. An absent key is
+        // all-zero and still contributes: "this member has no signing key" is
+        // itself a fact the family should be comparing.
+        hasher.update(m.signing_key);
     }
     let digest = hasher.finalize();
 
@@ -724,6 +732,30 @@ mod tests {
         // Bob has a Secret Key but not Alice's master password.
         assert!(crate::sealing::open(&vault, b"bob-guesses", Some(&sk)).is_err());
         assert!(!recovered.is_empty());
+    }
+
+    #[test]
+    fn safety_number_detects_a_substituted_signing_key() {
+        // The first-contact gap. A relay hostile from the very first sight of a
+        // member can hand a newcomer a fabricated SIGNING key; that newcomer
+        // then verifies the relay's forged wrapped-key sets as genuine. Before
+        // the safety number covered signing keys, this was invisible -- the
+        // number digested only the X25519 halves, so it matched everyone
+        // else's exactly.
+        let alice = Member::generate("alice", "Alice");
+        let bob = Member::generate("bob", "Bob");
+        let genuine = vec![alice.public(), bob.public()];
+
+        // Same ids, same X25519 keys -- only Bob's signing key is swapped.
+        let relay = Member::generate("bob", "Bob");
+        let mut forged_bob = bob.public();
+        forged_bob.signing_key = relay.signing_public();
+        assert_eq!(forged_bob.public_key, bob.public().public_key);
+
+        assert_ne!(
+            safety_number(&genuine),
+            safety_number(&[alice.public(), forged_bob])
+        );
     }
 
     #[test]

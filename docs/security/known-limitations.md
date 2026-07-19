@@ -179,11 +179,19 @@ everyone, because it cannot produce a signature any member's pin accepts.
    say who wrote a set, not which is current. This needs key epochs and a
    monotonic floor the client pins — the second half of Q2a, still unbuilt.
 
-2. **First contact.** The signing key is pinned trust-on-first-use, same as the
-   X25519 key. A relay hostile from the very first sight of a member can still
-   substitute both at once. The safety number is what closes that, and it now
-   covers only the X25519 keys — extending it to the signing key is
-   straightforward and not yet done.
+2. **First contact — partly closed.** The signing key is pinned
+   trust-on-first-use, same as the X25519 key, so a relay hostile from the very
+   first sight of a member can substitute both at once. The safety number now
+   covers signing keys as well (context label bumped to v2), so a family
+   comparing it out of band WILL see a fabricated signing key — previously that
+   was invisible, because the number digested only the X25519 halves and so
+   matched everyone else's exactly.
+
+   What remains is that this depends on humans actually comparing the number.
+   It is detection contingent on a manual step, not prevention. Note also that
+   the number changed for every existing group; the UI says so, because a family
+   comparing against one they wrote down earlier would otherwise read a benign
+   version bump as an attack.
 
 3. **The legacy path.** Vaults created before signing have unsigned sets. They
    stay readable, flagged, with an explicit "sign these" action, because

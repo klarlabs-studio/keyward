@@ -384,6 +384,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey));
                 call. If everyone sees the same number, no one has been secretly added
                 — if it differs, stop and don't share anything.
               </p>
+              <p class="hint">
+                This number <b>changed in this version</b> — it now also covers the keys
+                that prove who changed your shared items. If it doesn't match one you
+                wrote down before, that's expected. Compare a fresh one with your family:
+                what matters is that you all see the same number today.
+              </p>
             </div>
           </div>
 

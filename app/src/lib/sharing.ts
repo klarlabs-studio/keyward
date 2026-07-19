@@ -84,14 +84,15 @@ export function canManageMembers(role: Role): boolean {
  * Family members compare it **out of band**; a mismatch means the relay showed
  * someone a different member directory (a substituted or extra public key), which
  * is the one attack the ciphertext alone cannot reveal. See ADR-0004.
+ *
+ * Covers signing keys as well as X25519 keys, so comparing it also confirms the
+ * keys that AUTHENTICATE wrapped-key sets. Note that this changed the number:
+ * a family that wrote theirs down before will see a different one now, and the
+ * UI must not present that as a mismatch.
  */
 export async function safetyNumber(members: GroupMemberView[]): Promise<string> {
   await ensureReady();
-  return group_safety_number(
-    JSON.stringify(
-      members.map((m) => ({ id: m.member_id, name: m.name, public_key: m.public_key })),
-    ),
-  );
+  return group_safety_number(recipients(members));
 }
 
 /** A loaded family vault: its members, decrypted entries, and my access state. */
