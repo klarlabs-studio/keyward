@@ -34,8 +34,8 @@ import * as trust from './trust';
 import { syncConfig } from './sync';
 import type { Entry } from './passbook-types';
 
-const MEMBER_STORAGE = 'proctor.passbook.member.v1';
-const GROUPS_STORAGE = 'proctor.passbook.groups.v1';
+const MEMBER_STORAGE = 'keyward.passbook.member.v1';
+const GROUPS_STORAGE = 'keyward.passbook.groups.v1';
 const VERSION_HEADER = 'X-Vault-Version';
 
 /** This device's member identity (public half published; secret stays local). */
