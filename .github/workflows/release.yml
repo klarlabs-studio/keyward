@@ -1,0 +1,78 @@
+# Builds and publishes the sync-server image on a version tag.
+#
+# WHY THIS EXISTS: deploy/Dockerfile compiles inside the container and is the
+# canonical reproducible build, but it cannot be driven from an Apple Silicon
+# workstation — rustc segfaults compiling linux/amd64 under QEMU. The documented
+# workaround (deploy/Dockerfile.static + cargo-zigbuild) is a hand-run local
+# path. This workflow is the intended one: an amd64 runner builds natively, so
+# the released image comes from the canonical Dockerfile every time.
+#
+# Trigger:
+#   git tag -a v2.0.0 -m 'Keyward 2.0.0' && git push origin v2.0.0
+#
+# The tag drives the image tag: v2.0.0 -> ghcr.io/<owner>/keyward-sync-server:2.0.0
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    name: Build & push sync-server image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Guard against a tag that disagrees with the workspace version. Pushing
+      # v2.0.0 from a tree that says 2.0.1 would publish an image whose /version
+      # endpoint contradicts its own tag, and the cluster pins by tag.
+      - name: Check tag matches workspace version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          app_version="$(node -p "require('./app/package.json').version")"
+          echo "tag=$tag_version cargo=$cargo_version app=$app_version"
+          if [ "$tag_version" != "$cargo_version" ] || [ "$tag_version" != "$app_version" ]; then
+            echo "::error::tag $tag_version does not match Cargo.toml ($cargo_version) / app ($app_version)"
+            exit 1
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Lowercased owner: ghcr rejects uppercase path segments, and the org name
+      # is only lowercase by convention today.
+      - name: Resolve image reference
+        id: ref
+        run: |
+          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=ghcr.io/$owner/keyward-sync-server" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # Build context is the repository ROOT (the Cargo workspace), matching the
+      # invocation documented in deploy/README.md. linux/amd64 only: the cluster
+      # is x86 Hetzner, and adding arm64 would reintroduce an emulated rustc.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report the digest to pin
+        run: |
+          echo "Published ${{ steps.ref.outputs.image }}:${{ steps.ref.outputs.version }}"
+          echo "Update images[].newTag in the keyward-cloud overlay to match."
