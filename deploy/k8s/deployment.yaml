@@ -96,7 +96,7 @@ spec:
       containers:
         - name: keyward-sync-server
           # Parameterize this image ref for your registry / release tag.
-          image: ghcr.io/klarlabs-studio/keyward-sync-server:1.42.0
+          image: ghcr.io/klarlabs-studio/keyward-sync-server:2.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

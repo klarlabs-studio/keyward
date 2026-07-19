@@ -81,7 +81,7 @@ spec:
         - name: keyward-web
           # Parameterize this image ref for your registry / release tag. The tag
           # is overridden centrally in kustomization.yaml (images[].newTag).
-          image: ghcr.io/klarlabs-studio/keyward-web:2.0.0
+          image: ghcr.io/klarlabs-studio/keyward-web:2.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

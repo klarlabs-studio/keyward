@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-broker"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hmac 0.12.1",
  "serde",
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "keyward-broker",
  "keyward-profiles",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-crypto"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-mcp"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-mint"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "async-trait",
  "jsonwebtoken",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-passbook"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "base32",
  "chacha20poly1305",
@@ -1064,7 +1064,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-profiles"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "regex",
  "serde",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-sync"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "rand 0.8.7",
  "serde",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-sync-postgres"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "keyward-sync",
  "keyward-sync-queries",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-sync-server"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "hmac 0.12.1",
  "keyward-sync",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "keyward-vault"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "keyward-crypto",
  "serde",
@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-cli"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "keyward-passbook",
  "serde_json",
@@ -1306,7 +1306,7 @@ dependencies = [
 
 [[package]]
 name = "passbook-wasm"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "getrandom 0.2.17",
  "keyward-passbook",

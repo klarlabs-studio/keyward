@@ -3,6 +3,52 @@
 All notable changes to Keyward are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions use SemVer.
 
+## [2.1.0] — 2026-07-19
+
+Ships the fix for a defect that made family sharing impossible on the managed
+instance, plus account erasure and the first hosted build of the web vault.
+
+### Fixed
+
+- **Family sharing could not work on PostgreSQL at all.** `load_group` read
+  `added_epoch` from column index 5 — which is `role`, a TEXT column — as an
+  i64. That does not yield a wrong number; it PANICS, on every group load.
+  `insert_member` separately bound 8 parameters into `VALUES ($1..$7)`. Both
+  shipped in 2.0.0. The in-memory and file backends were unaffected, so the
+  default test suite stayed green: the PostgreSQL contract tests skip silently
+  unless `KEYWARD_TEST_PG` is set, and CI did not set it.
+- **The portable deploy base pinned `keyward-sync-server:1.42.0`**, a tag that
+  has never existed under the `keyward` name — only the pre-rename
+  `proctor-sync-server` was published at 1.42.0. Every OSS self-hoster running
+  `kubectl apply -k deploy/k8s` got ImagePullBackOff. Invisible to us because
+  the managed overlay overrides the tag. Now covered by a test.
+
+### Added
+
+- **`DELETE /v1/account`** — full cascade across groups, vault and identity.
+  Closes a GDPR Art. 17 (right to erasure) gap: neither a user nor an operator
+  could previously delete an account. The endpoint takes no account parameter,
+  so cross-account deletion is structurally impossible rather than checked for.
+- **Hosted web vault.** The client was previously deployed nowhere — `GET /` on
+  the managed instance returned a literal "not found", and the only way to use
+  Keyward was to clone the repo. Now served from its own origin, separate from
+  the API, because localStorage is per-origin and holds the device Secret Key.
+- **CI, and a Postgres service in it.** The repository had never had a workflow
+  despite the release docs describing one.
+- **Cornucopia codegen** with a drift gate. `AccountStore` now runs on
+  database-checked queries; 10 positional row reads eliminated. The construct
+  that caused the outage above is no longer expressible there.
+
+### Known limitations
+
+- 17 positional row reads remain in `ShareGroupStore` and `SyncStore`,
+  including the line that caused the outage. Fixed, but still written in the
+  form that produced it. Converting them is the next slice.
+- Browser key material is still plaintext in localStorage. Investigated and
+  documented as structurally unavoidable at the app layer — the secrets cross a
+  string-typed WASM boundary, and WebCrypto has no Argon2. See
+  `docs/security/known-limitations.md` §10.
+
 ## [2.0.0] — 2026-07-19
 
 **Renamed: Proctor → Keyward.** Breaking, hence the major bump — every crate,
