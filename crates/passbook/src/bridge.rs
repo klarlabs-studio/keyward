@@ -23,6 +23,7 @@
 use crate::{totp, Content, Entry};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
+use zeroize::Zeroize;
 
 /// Matches Chrome's 1 MiB per-message cap; a larger frame is a protocol error.
 pub const MAX_MSG: u32 = 1024 * 1024;
@@ -105,6 +106,118 @@ pub fn handle_request(req: &Value, entries: &[Entry], now: u64, version: &str) -
     }
 }
 
+/// A held autofill session — the desktop agent's view of the vault (ADR-0007).
+///
+/// The CLI host answers from a fixed `&[Entry]` and is always "unlocked". The
+/// desktop agent is different: the decrypted vault lives in the WebView, so the
+/// frontend *feeds* the agent its logins at unlock (`unlock`) and clears them at
+/// lock (`lock`). Between those, the plaintext logins are held here, in the
+/// running app's memory — the "held session" ADR-0007 §3 describes.
+///
+/// Locked is the default and the safe state: a live agent socket that is bound
+/// but locked answers `ping` (so the extension can prompt for unlock) but hands
+/// out nothing — `list` is empty and `get` is refused. This is why binding the
+/// socket at startup, before any unlock, is inert rather than a leak.
+pub struct Session {
+    entries: Vec<Entry>,
+    locked: bool,
+}
+
+/// Locked, holding nothing — the only safe default for a bag of plaintext logins.
+/// A derived `Default` would give `locked: false` (bool's default), i.e. an *open*
+/// empty vault, which is exactly the footgun a password manager must not have.
+impl Default for Session {
+    fn default() -> Self {
+        Session::locked()
+    }
+}
+
+impl Session {
+    /// A locked session holding no secrets — the startup state.
+    pub fn locked() -> Self {
+        Session {
+            entries: Vec::new(),
+            locked: true,
+        }
+    }
+
+    /// An unlocked session serving `entries`.
+    pub fn unlocked(entries: Vec<Entry>) -> Self {
+        Session {
+            entries,
+            locked: false,
+        }
+    }
+
+    pub fn is_locked(&self) -> bool {
+        self.locked
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Replace the held logins and mark the session unlocked. Any previously held
+    /// secrets are wiped first, so re-unlocking never leaves an old password
+    /// lingering in the freed capacity.
+    pub fn unlock(&mut self, entries: Vec<Entry>) {
+        self.wipe();
+        self.entries = entries;
+        self.locked = false;
+    }
+
+    /// Drop and best-effort-zeroize the held secrets, returning to the locked
+    /// state. Called when the user locks the vault or the app shuts down.
+    pub fn lock(&mut self) {
+        self.wipe();
+        self.locked = true;
+    }
+
+    /// Zeroize the plaintext passwords and TOTP seeds before the backing `String`s
+    /// are freed. Best-effort — it cannot cover copies the allocator or the OS may
+    /// have made, a limit ADR-0007 documents — but it removes the standing copy
+    /// this process controls.
+    fn wipe(&mut self) {
+        for e in &mut self.entries {
+            if let Content::Login(l) = &mut e.content {
+                l.password.zeroize();
+                if let Some(secret) = &mut l.totp_secret {
+                    secret.zeroize();
+                }
+            }
+        }
+        self.entries.clear();
+    }
+}
+
+/// Handle one request against a held `Session` — the desktop agent's entry point,
+/// wrapping the shared `handle_request` with ADR-0007 §3's locked-by-default rule.
+///
+/// Locked: `ping` still answers (advertising `locked:true` so the extension can
+/// offer an unlock), `list` returns no items, and `get` is refused. Unlocked: it
+/// delegates to the same `handle_request` the CLI host uses — so the two hosts
+/// cannot drift — and annotates `ping` with `locked:false`.
+pub fn handle_request_for(req: &Value, session: &Session, now: u64, version: &str) -> Value {
+    let ty = req.get("type").and_then(Value::as_str);
+    if session.locked {
+        return match ty {
+            Some("ping") => json!({ "ok": true, "version": version, "locked": true }),
+            Some("list") => json!({ "items": [], "locked": true }),
+            Some("get") => json!({ "error": "locked" }),
+            _ => json!({ "error": "unknown request" }),
+        };
+    }
+    let mut reply = handle_request(req, &session.entries, now, version);
+    if ty == Some("ping") {
+        reply["locked"] = json!(false);
+    }
+    reply
+}
+
 /// Read one native-messaging frame. `Ok(None)` on a clean EOF at a frame boundary.
 pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];
@@ -139,15 +252,28 @@ pub fn write_frame(w: &mut impl Write, payload: &[u8]) -> io::Result<()> {
 /// will pass whatever channel Chrome hands its native-messaging process. `now`
 /// is injected so tests are deterministic and the caller owns the clock.
 pub fn serve(
-    mut r: impl Read,
-    mut w: impl Write,
+    r: impl Read,
+    w: impl Write,
     entries: &[Entry],
     version: &str,
     now: impl Fn() -> u64,
 ) -> io::Result<()> {
+    serve_frames(r, w, |req| handle_request(req, entries, now(), version))
+}
+
+/// The transport loop, parameterized over how each request is answered. Both the
+/// CLI host (`serve`, over a fixed entry set) and the desktop agent (over a held,
+/// lockable `Session`) drive it, so the framing and error handling exist once and
+/// the two hosts cannot diverge on it. `respond` is called once per frame with
+/// the parsed request; the loop owns the wire format, it owns the answer.
+fn serve_frames(
+    mut r: impl Read,
+    mut w: impl Write,
+    respond: impl Fn(&Value) -> Value,
+) -> io::Result<()> {
     while let Some(frame) = read_frame(&mut r)? {
         let reply = match serde_json::from_slice::<Value>(&frame) {
-            Ok(req) => handle_request(&req, entries, now(), version),
+            Ok(req) => respond(&req),
             Err(e) => json!({ "error": format!("invalid json: {e}") }),
         };
         let bytes = serde_json::to_vec(&reply).unwrap_or_else(|_| b"{}".to_vec());
@@ -167,10 +293,14 @@ pub fn serve(
 /// slice and deliberately not stubbed here rather than faked.
 #[cfg(unix)]
 pub mod ipc {
-    use super::{read_frame, serve, write_frame, Entry};
+    use super::{handle_request_for, read_frame, serve, serve_frames, write_frame, Entry, Session};
     use std::io::{self, Read, Write};
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{fs, thread};
 
     /// Wall-clock seconds, the unit TOTP wants. Its own fn so the agent loop
     /// reads clearly and the closure passed to `serve` stays trivial.
@@ -232,6 +362,90 @@ pub mod ipc {
             }
         }
         Ok(())
+    }
+
+    /// Answer one connection from a **held, lockable** `Session` (the desktop app),
+    /// rather than a fixed entry set (the CLI host's `serve_connection`). The
+    /// session is read under its lock **once per request**, not once per
+    /// connection — so if the user locks the vault while Chrome holds the
+    /// native-messaging pipe open, the very next `get` on that same pipe is
+    /// refused. Locked-by-default (ADR-0007 §3) lives entirely in
+    /// `handle_request_for`; this function only supplies the current session.
+    pub fn serve_connection_session(
+        stream: UnixStream,
+        session: &Mutex<Session>,
+        version: &str,
+    ) -> io::Result<()> {
+        let reader = stream.try_clone()?;
+        serve_frames(reader, stream, |req| {
+            // A poisoned lock still holds a valid Session; recover it rather than
+            // panic the agent thread and take the bridge down.
+            let held = session.lock().unwrap_or_else(|e| e.into_inner());
+            handle_request_for(req, &held, now_unix(), version)
+        })
+    }
+
+    /// Agent: accept connections on `listener` and serve each from the shared
+    /// `session`. Serial by design, like `run_agent` — one desktop user is not
+    /// driving concurrent autofill, and serial keeps the held-session access free
+    /// of data races beyond the `Mutex` itself. Runs until the listener errors;
+    /// the caller typically spawns it on its own thread (`spawn_agent`).
+    pub fn run_agent_session(
+        listener: &UnixListener,
+        session: Arc<Mutex<Session>>,
+        version: &str,
+    ) -> io::Result<()> {
+        for conn in listener.incoming() {
+            // One misbehaving connection must not kill the agent for the next.
+            if let Err(e) = serve_connection_session(conn?, &session, version) {
+                eprintln!("keyward agent: connection ended with error: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Ensure a user-private `0700` directory for the agent socket under
+    /// `runtime_dir` and return the socket path inside it. ADR-0007 §1: the `0700`
+    /// directory borrows the kernel's same-user isolation — another user on the
+    /// box cannot even traverse into it, so cross-user access is denied for free.
+    /// `runtime_dir` is the caller's choice (`$XDG_RUNTIME_DIR` on Linux, the
+    /// per-user temp dir on macOS), kept out of the library so it stays portable.
+    pub fn agent_socket_path(runtime_dir: &Path) -> io::Result<PathBuf> {
+        let dir = runtime_dir.join("keyward");
+        fs::create_dir_all(&dir)?;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+        Ok(dir.join("agent.sock"))
+    }
+
+    /// Bind the agent listener at `path`, clearing any stale socket a previous run
+    /// left behind (which would otherwise fail the bind with `EADDRINUSE`), and
+    /// tighten the socket node itself to `0600`.
+    pub fn bind_agent_socket(path: &Path) -> io::Result<UnixListener> {
+        let _ = fs::remove_file(path);
+        let listener = UnixListener::bind(path)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        Ok(listener)
+    }
+
+    /// Bind the agent socket under `runtime_dir` and run its accept loop on a
+    /// background thread, serving from `session`. Returns the bound socket path so
+    /// the caller can advertise it to the connector and unlink it on shutdown. The
+    /// one call a host needs: the desktop app invokes this once at startup with a
+    /// freshly-`locked` session, then flips the session to unlocked on user
+    /// unlock — no secret has to exist for the socket to come up.
+    pub fn spawn_agent(
+        runtime_dir: &Path,
+        session: Arc<Mutex<Session>>,
+        version: &'static str,
+    ) -> io::Result<PathBuf> {
+        let path = agent_socket_path(runtime_dir)?;
+        let listener = bind_agent_socket(&path)?;
+        thread::spawn(move || {
+            if let Err(e) = run_agent_session(&listener, session, version) {
+                eprintln!("keyward agent: listener stopped: {e}");
+            }
+        });
+        Ok(path)
     }
 }
 
@@ -323,6 +537,75 @@ mod tests {
     fn unknown_request_is_rejected() {
         let resp = handle_request(&json!({ "type": "wat" }), &sample(), 0, "test");
         assert_eq!(resp["error"], "unknown request");
+    }
+
+    #[test]
+    fn unlocked_session_answers_like_the_shared_handler() {
+        let session = Session::unlocked(sample());
+        let resp = handle_request_for(
+            &json!({ "type": "get", "id": "e1" }),
+            &session,
+            1_700_000_000,
+            "test",
+        );
+        assert_eq!(resp["password"], "s3cr3t!pw");
+        // ping is annotated so the extension knows the agent is unlocked.
+        let ping = handle_request_for(&json!({ "type": "ping" }), &session, 0, "2.1.0");
+        assert_eq!(ping["ok"], true);
+        assert_eq!(ping["locked"], false);
+    }
+
+    #[test]
+    fn locked_session_refuses_get_and_empties_list() {
+        let session = Session::locked();
+        // get: no secret crosses a locked session.
+        let get = handle_request_for(&json!({ "type": "get", "id": "e1" }), &session, 0, "test");
+        assert_eq!(get["error"], "locked");
+        // list: nothing, but flagged locked so the extension can offer an unlock.
+        let list = handle_request_for(
+            &json!({ "type": "list", "origin": "https://github.com" }),
+            &session,
+            0,
+            "test",
+        );
+        assert!(list["items"].as_array().unwrap().is_empty());
+        assert_eq!(list["locked"], true);
+        // ping still answers while locked — that is how the extension learns to prompt.
+        let ping = handle_request_for(&json!({ "type": "ping" }), &session, 0, "2.1.0");
+        assert_eq!(ping["ok"], true);
+        assert_eq!(ping["locked"], true);
+        assert_eq!(ping["version"], "2.1.0");
+    }
+
+    #[test]
+    fn locking_a_session_refuses_afterwards_and_unlocking_restores() {
+        let mut session = Session::unlocked(sample());
+        assert!(!session.is_locked());
+        assert_eq!(session.len(), 2);
+
+        session.lock();
+        assert!(session.is_locked());
+        assert!(session.is_empty());
+        let after_lock =
+            handle_request_for(&json!({ "type": "get", "id": "e1" }), &session, 0, "test");
+        assert_eq!(after_lock["error"], "locked");
+
+        session.unlock(sample());
+        assert!(!session.is_locked());
+        let after_unlock = handle_request_for(
+            &json!({ "type": "get", "id": "e1" }),
+            &session,
+            1_700_000_000,
+            "test",
+        );
+        assert_eq!(after_unlock["password"], "s3cr3t!pw");
+    }
+
+    #[test]
+    fn a_default_session_is_locked() {
+        // The desktop agent binds its socket from a default session at startup,
+        // before any unlock; that default must be locked, not an open vault.
+        assert!(Session::default().is_locked());
     }
 
     #[test]
@@ -419,6 +702,94 @@ mod tests {
 
             drop(connector_side);
             agent.join().unwrap();
+        }
+
+        /// The desktop agent serves from a HELD, shared session over a socket —
+        /// the desktop side of ADR-0007, distinct from the CLI's fixed entry set.
+        #[test]
+        fn agent_session_answers_get_from_a_held_unlocked_session() {
+            use super::super::Session;
+            use std::sync::{Arc, Mutex};
+
+            let session = Arc::new(Mutex::new(Session::unlocked(sample())));
+            let (client, server) = UnixStream::pair().unwrap();
+            let held = Arc::clone(&session);
+            let agent = thread::spawn(move || {
+                ipc::serve_connection_session(server, &held, "2.1.0").unwrap();
+            });
+
+            let mut c = client;
+            write_frame(&mut c, br#"{"type":"get","id":"e1"}"#).unwrap();
+            let reply = read_frame(&mut c).unwrap().unwrap();
+            let v: Value = serde_json::from_slice(&reply).unwrap();
+            assert_eq!(v["password"], "s3cr3t!pw");
+
+            drop(c);
+            agent.join().unwrap();
+        }
+
+        /// Locking the vault mid-connection refuses the NEXT `get` on the same
+        /// open pipe — proving the session is read per-request, not snapshotted
+        /// once when Chrome connected. This is the property that makes "lock the
+        /// vault" actually stop autofill immediately (ADR-0007 §3).
+        #[test]
+        fn locking_mid_connection_refuses_the_next_get() {
+            use super::super::Session;
+            use std::sync::{Arc, Mutex};
+
+            let session = Arc::new(Mutex::new(Session::unlocked(sample())));
+            let (client, server) = UnixStream::pair().unwrap();
+            let held = Arc::clone(&session);
+            let agent = thread::spawn(move || {
+                ipc::serve_connection_session(server, &held, "2.1.0").unwrap();
+            });
+
+            let mut c = client;
+            // First get, while unlocked: the real secret comes back.
+            write_frame(&mut c, br#"{"type":"get","id":"e1"}"#).unwrap();
+            let first = read_frame(&mut c).unwrap().unwrap();
+            let v: Value = serde_json::from_slice(&first).unwrap();
+            assert_eq!(v["password"], "s3cr3t!pw");
+
+            // The user locks the vault while Chrome still holds the pipe open.
+            session.lock().unwrap().lock();
+
+            // Same connection, next get: refused, no secret.
+            write_frame(&mut c, br#"{"type":"get","id":"e1"}"#).unwrap();
+            let second = read_frame(&mut c).unwrap().unwrap();
+            let v: Value = serde_json::from_slice(&second).unwrap();
+            assert_eq!(v["error"], "locked");
+            assert!(v.get("password").is_none());
+
+            drop(c);
+            agent.join().unwrap();
+        }
+
+        /// The socket helpers put the socket in a `0700` directory and the socket
+        /// node at `0600` — ADR-0007 §1's same-user isolation, asserted on the
+        /// real filesystem bits rather than assumed.
+        #[test]
+        fn agent_socket_lands_in_a_0700_dir_with_a_0600_node() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let base = std::env::temp_dir().join(format!("kw-sock-perms-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).unwrap();
+
+            let path = ipc::agent_socket_path(&base).unwrap();
+            let dir_mode = std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(dir_mode, 0o700);
+
+            let listener = ipc::bind_agent_socket(&path).unwrap();
+            let node_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(node_mode, 0o600);
+
+            drop(listener);
+            let _ = std::fs::remove_dir_all(&base);
         }
 
         /// The agent bound to a REAL filesystem socket (as it runs in production),
