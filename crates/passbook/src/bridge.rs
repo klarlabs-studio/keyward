@@ -222,7 +222,12 @@ mod tests {
 
     #[test]
     fn get_missing_is_an_error_not_a_panic() {
-        let resp = handle_request(&json!({ "type": "get", "id": "nope" }), &sample(), 0, "test");
+        let resp = handle_request(
+            &json!({ "type": "get", "id": "nope" }),
+            &sample(),
+            0,
+            "test",
+        );
         assert_eq!(resp["error"], "not found");
     }
 
