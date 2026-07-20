@@ -156,6 +156,85 @@ pub fn serve(
     Ok(())
 }
 
+/// The local IPC that separates the process Chrome launches from the process
+/// holding the unlocked vault — see ADR-0007. Chrome launches a short-lived
+/// **connector**; the unlocked session lives in a long-running **agent** (the
+/// desktop app). They speak the same framed protocol over a user-private Unix
+/// socket, so `serve` above is reused verbatim on the agent side and this module
+/// adds only the socket plumbing.
+///
+/// Unix-only for now (macOS/Linux). Windows uses a named pipe; that is a later
+/// slice and deliberately not stubbed here rather than faked.
+#[cfg(unix)]
+pub mod ipc {
+    use super::{read_frame, serve, write_frame, Entry};
+    use std::io::{self, Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Wall-clock seconds, the unit TOTP wants. Its own fn so the agent loop
+    /// reads clearly and the closure passed to `serve` stays trivial.
+    fn now_unix() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Answer one already-accepted connection with the bridge protocol. Split out
+    /// from `run_agent` so it can be tested over a `UnixStream::pair()` with no
+    /// filesystem socket.
+    pub fn serve_connection(
+        stream: UnixStream,
+        entries: &[Entry],
+        version: &str,
+    ) -> io::Result<()> {
+        // `serve` needs an independent reader and writer; a socket is full-duplex,
+        // so a cloned handle to the same fd gives both without buffering surprises.
+        let reader = stream.try_clone()?;
+        serve(reader, stream, entries, version, now_unix)
+    }
+
+    /// Agent: accept connections on `listener` and serve each. One connection per
+    /// Chrome native-messaging session, matching how the connector holds the
+    /// socket open for the life of that session. Serial by design — a single
+    /// desktop user is not driving concurrent autofill, and serial keeps the
+    /// held-session access trivially free of data races. Caller owns socket
+    /// permissions (ADR-0007: a 0700 dir) before binding.
+    pub fn run_agent(listener: &UnixListener, entries: &[Entry], version: &str) -> io::Result<()> {
+        for conn in listener.incoming() {
+            // One misbehaving connection must not kill the agent for the next.
+            if let Err(e) = serve_connection(conn?, entries, version) {
+                eprintln!("keyward agent: connection ended with error: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Connector: the dumb relay Chrome launches. Pumps each framed request from
+    /// Chrome (`chrome_in`) to the agent socket and each framed reply back to
+    /// Chrome (`chrome_out`). Holds no secrets and never parses the JSON — it
+    /// only moves length-prefixed frames, so a protocol change needs no connector
+    /// change. Returns when either side hits a clean EOF at a frame boundary.
+    pub fn run_connector(
+        agent_socket: &UnixStream,
+        mut chrome_in: impl Read,
+        mut chrome_out: impl Write,
+    ) -> io::Result<()> {
+        let mut to_agent = agent_socket.try_clone()?;
+        let mut from_agent = agent_socket.try_clone()?;
+        while let Some(frame) = read_frame(&mut chrome_in)? {
+            write_frame(&mut to_agent, &frame)?;
+            match read_frame(&mut from_agent)? {
+                Some(reply) => write_frame(&mut chrome_out, &reply)?,
+                // Agent closed mid-exchange: stop rather than spin.
+                None => break,
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +363,98 @@ mod tests {
         let v: Value = serde_json::from_slice(&reply).unwrap();
         assert_eq!(v["ok"], true);
         assert_eq!(v["version"], "2.1.0");
+    }
+
+    #[cfg(unix)]
+    mod ipc_tests {
+        use super::super::ipc;
+        use super::super::{read_frame, write_frame};
+        use super::sample;
+        use serde_json::Value;
+        use std::io::Cursor;
+        use std::os::unix::net::{UnixListener, UnixStream};
+        use std::thread;
+
+        /// The agent, run over a socket pair (no filesystem), answers the protocol
+        /// from a held entry set — the desktop-app side of ADR-0007's relay.
+        #[test]
+        fn agent_answers_get_over_a_socket_with_the_real_secret() {
+            let (client, server) = UnixStream::pair().unwrap();
+            let agent = thread::spawn(move || {
+                ipc::serve_connection(server, &sample(), "2.1.0").unwrap();
+            });
+
+            let mut c = client;
+            write_frame(&mut c, br#"{"type":"get","id":"e1"}"#).unwrap();
+            let reply = read_frame(&mut c).unwrap().unwrap();
+            let v: Value = serde_json::from_slice(&reply).unwrap();
+            assert_eq!(v["password"], "s3cr3t!pw");
+            let code = v["totp"].as_str().unwrap();
+            assert_eq!(code.len(), 6);
+
+            drop(c); // EOF → serve_connection returns → thread joins
+            agent.join().unwrap();
+        }
+
+        /// The FULL relay: fake-Chrome frames → connector → agent socket → back.
+        /// Proves the two-process shape works, not just `serve` in isolation.
+        #[test]
+        fn connector_relays_chrome_frames_to_the_agent_and_back() {
+            let (agent_side, connector_side) = UnixStream::pair().unwrap();
+            let agent = thread::spawn(move || {
+                ipc::serve_connection(agent_side, &sample(), "2.1.0").unwrap();
+            });
+
+            // Fake Chrome: one framed ping in, capture the framed reply out.
+            let mut chrome_in = Vec::new();
+            write_frame(&mut chrome_in, br#"{"type":"ping"}"#).unwrap();
+            let mut chrome_out = Vec::new();
+            ipc::run_connector(&connector_side, Cursor::new(chrome_in), &mut chrome_out).unwrap();
+
+            let mut cur = Cursor::new(chrome_out);
+            let reply = read_frame(&mut cur).unwrap().unwrap();
+            let v: Value = serde_json::from_slice(&reply).unwrap();
+            assert_eq!(v["ok"], true);
+            assert_eq!(v["version"], "2.1.0");
+
+            drop(connector_side);
+            agent.join().unwrap();
+        }
+
+        /// The agent bound to a REAL filesystem socket (as it runs in production),
+        /// answering a client that connects by path. Covers `run_agent`'s accept
+        /// loop, which the socket-pair tests bypass.
+        #[test]
+        fn agent_serves_over_a_real_bound_socket() {
+            let dir = std::env::temp_dir().join(format!("kw-agent-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("agent.sock");
+            let _ = std::fs::remove_file(&path);
+            let listener = UnixListener::bind(&path).unwrap();
+
+            let entries = sample();
+            let agent = thread::spawn(move || {
+                // Serve exactly one connection, then stop (test-scoped).
+                let conn = listener.incoming().next().unwrap().unwrap();
+                ipc::serve_connection(conn, &entries, "2.1.0").unwrap();
+            });
+
+            let mut client = UnixStream::connect(&path).unwrap();
+            write_frame(
+                &mut client,
+                br#"{"type":"list","origin":"https://github.com/login"}"#,
+            )
+            .unwrap();
+            let reply = read_frame(&mut client).unwrap().unwrap();
+            let v: Value = serde_json::from_slice(&reply).unwrap();
+            assert_eq!(v["items"].as_array().unwrap().len(), 1);
+            // The list still carries no password across the socket.
+            assert!(v["items"][0].get("password").is_none());
+
+            drop(client);
+            agent.join().unwrap();
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&dir);
+        }
     }
 }
