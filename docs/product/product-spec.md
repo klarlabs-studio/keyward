@@ -42,7 +42,9 @@ Families do **not** switch as independent rational actors, and **no feature in K
 
 ## 3. Positioning & category
 
-- **Category:** consumer **credential manager** (passwords + passkeys + TOTP + email aliases + identities + secure documents) — not a "password vault."
+- **Category:** consumer **credential manager** — not a "password vault." Target
+  credential types: passwords, TOTP, secure notes, cards, identities (all
+  shipped) plus passkeys, email aliases, and secure documents (planned).
 - **Model:** **open-core** — fully open-source clients + server (self-host free forever); revenue from managed cloud, family/premium features, and the broker.
 - **Primary market:** B2C — **developers first (wedge), families second (mainstream).** Not enterprise PAM.
 - **Positioning statement:**
@@ -84,7 +86,10 @@ Users do not switch *for* "choose your storage backend." The value of choosabili
 - **KDF:** Argon2id (tuned, upgradeable). **AEAD:** XChaCha20-Poly1305 (fast on mobile; AES-256-GCM where HW favors it).
 - **On-device-only:** may run master-password-only (no server to breach), optional keyfile/YubiKey.
 - **Sharing:** per-recipient public-key envelope encryption; server never sees shared plaintext.
-- **Passkeys/WebAuthn:** first-class encrypted items, sync-fabric-agnostic.
+- **Passkeys/WebAuthn (PLANNED, not yet built):** first-class encrypted items,
+  sync-fabric-agnostic. The vault reserves a `has_passkey` field and the UI
+  renders a passkey line, but no WebAuthn create/get path exists yet — nothing
+  can currently create or use a passkey. Tracked as its own work item.
 
 ### 5.4 Seamless migration — and the honest caveat
 The vault is E2E-encrypted client-side *before* it touches any backend, so changing where it lives is a **re-point + key-rewrap**, never a destructive re-encrypt. CRDT/oplog vault model for conflict-free merges.
@@ -150,7 +155,7 @@ Mint for the top services (GitHub, cloud) · origin-bound injection for password
 
 ### Phase B — wedge (developer-first)
 - **Broker MVP** (§6.7) as the headline — MCP server + CLI, first-class.
-- **Good-enough vault:** passwords, passkeys, TOTP, secure notes, API keys/dev secrets; managed-cloud + on-device storage; Secret Key crypto; Emergency Kit.
+- **Good-enough vault:** passwords, TOTP, secure notes, cards, identities, API keys/dev secrets; managed-cloud + on-device storage; Secret Key crypto; Emergency Kit. (Passkeys are a separate, not-yet-built work item — see above.)
 - **Chromium extension** meeting the connectivity/latency bar (see §8); web + macOS + iOS (founder's ecosystem).
 - **Import:** CXP/CXF where available + CSV/1PUX/Bitwarden JSON.
 - **Security dashboard** (weak/reused/breached/2FA-available).
