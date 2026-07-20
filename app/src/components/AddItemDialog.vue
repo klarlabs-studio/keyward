@@ -66,7 +66,7 @@ async function save(): Promise<void> {
       password: password.value,
       urls: url.value.trim() ? [url.value.trim()] : [],
       totp_secret: totp.value.trim() ? totp.value.trim() : null,
-      has_passkey: false,
+      passkeys: [],
     },
     tags: [],
     favorite: favorite.value,

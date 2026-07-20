@@ -320,7 +320,7 @@ fn cmd_add_login(rest: &[String]) {
         password,
         urls: url.map(|u| vec![u.clone()]).unwrap_or_default(),
         totp_secret,
-        has_passkey: false,
+        passkeys: Vec::new(),
     };
     entries.push(Entry {
         id: id.clone(),
@@ -419,7 +419,7 @@ fn cmd_show(rest: &[String]) {
                     "none"
                 }
             );
-            println!("passkey  : {}", l.has_passkey);
+            println!("passkeys : {}", l.passkeys.len());
         }
         Content::SecureNote(note) => {
             if reveal {

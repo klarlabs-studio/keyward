@@ -52,7 +52,8 @@ const weakCount = computed(() => vault.issues.filter((i) => i.kind === 'weak').l
 const reusedCount = computed(() => vault.issues.filter((i) => i.kind === 'reused').length);
 
 const passkeyCount = computed(
-  () => vault.entries.filter((e) => 'Login' in e.content && e.content.Login.has_passkey).length,
+  () =>
+    vault.entries.filter((e) => 'Login' in e.content && e.content.Login.passkeys.length > 0).length,
 );
 
 function titleOf(id: string): string {

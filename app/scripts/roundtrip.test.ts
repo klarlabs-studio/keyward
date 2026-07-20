@@ -17,7 +17,15 @@ const entries: Entry[] = [
         password: 'p@ss,w"rd\nx',
         urls: ['https://github.com'],
         totp_secret: 'JBSWY3DPEHPK3PXP',
-        has_passkey: false,
+        passkeys: [
+          {
+            credential_id: 'Y3JlZC1pZA',
+            rp_id: 'github.com',
+            user_handle: 'dXNlci1oYW5kbGU',
+            created_epoch: now,
+            private_key: 'cHJpdmF0ZS1rZXktYnl0ZXM',
+          },
+        ],
       },
     },
   },
@@ -59,6 +67,18 @@ function check(name: string, cond: boolean, detail = '') {
   const login = r.entries.find((e) => 'Login' in e.content);
   const pw = login && 'Login' in login.content ? login.content.Login.password : '';
   check('keyward preserves tricky password', pw === 'p@ss,w"rd\nx', JSON.stringify(pw));
+  const passkeys = login && 'Login' in login.content ? login.content.Login.passkeys : [];
+  check('keyward preserves passkey count', passkeys.length === 1, `got ${passkeys.length}`);
+  check(
+    'keyward preserves passkey fields',
+    passkeys.length === 1 &&
+      passkeys[0].credential_id === 'Y3JlZC1pZA' &&
+      passkeys[0].rp_id === 'github.com' &&
+      passkeys[0].user_handle === 'dXNlci1oYW5kbGU' &&
+      passkeys[0].created_epoch === now &&
+      passkeys[0].private_key === 'cHJpdmF0ZS1rZXktYnl0ZXM',
+    JSON.stringify(passkeys[0]),
+  );
   const cats = r.entries.map((e) => Object.keys(e.content)[0]).sort();
   check('keyward all categories', cats.join(',') === 'Card,Identity,Login,SecureNote', cats.join(','));
 }
