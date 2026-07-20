@@ -31,6 +31,11 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The shared autofill bridge protocol (ADR-0007): the desktop agent answers the
+# browser extension from the same `keyward_passbook::bridge` implementation the
+# CLI host uses, so the two hosts cannot drift. Path dep across the standalone
+# workspace boundary — Cargo resolves it regardless of workspace membership.
+keyward-passbook = { path = "../../crates/passbook" }
 
 [profile.release]
 lto = true

@@ -129,3 +129,46 @@ We document it rather than pretend otherwise.
   browser-facing side stays native-messaging, not HTTP.
 - **Keep the master-password-file bridge.** Rejected — it is the status quo this
   ADR exists to end.
+
+## Addendum (agent-host slice) — where the held session actually lives
+
+> Added when the desktop-app agent host landed (the first `#13` code slice after
+> the IPC primitives). It resolves a question the original decision glossed.
+
+The ADR above says the agent "holds an unlocked session in memory." That framing
+assumed the session and the agent sit in the same process. In Keyward they do
+**not**: the crypto core is `passbook-wasm` running **in the WebView**, so the
+decrypted vault lives in the browser process, and the Rust core process — where
+the agent listener must run — has no entries of its own.
+
+Resolution, as implemented:
+
+- The frontend **feeds** the agent. On unlock it calls a Tauri command
+  (`bridge_set_session`) with the decrypted logins; on lock / sign-out / idle it
+  calls `bridge_lock`. Between those, the plaintext logins are held in a
+  `Mutex<Session>` in the core process and the agent serves from it.
+- **Locked by default.** The socket binds at startup from a `Session::locked()`
+  (empty, locked), so the listener is **inert** until the first unlock — it
+  answers `ping` (so the extension can prompt for unlock) but lists nothing and
+  refuses `get`. Standing up the socket therefore adds no exposure on its own.
+- The session is read **per request**, under its lock, not snapshotted per
+  connection. Locking the vault while Chrome holds the native-messaging pipe open
+  refuses the **very next** `get` — "lock" stops autofill immediately.
+- On lock the held passwords and TOTP seeds are **zeroized** before the backing
+  strings are freed. Best-effort — it cannot chase copies the allocator or OS may
+  have made (the same residual the "out of scope" section already concedes) — but
+  it removes the standing copy this process controls.
+
+**The security-relevant consequence, stated plainly:** while the vault is
+unlocked, plaintext logins now exist in the **core process** memory as well as
+the WebView's. That is a real widening of where secrets sit, accepted as the cost
+of a held-session agent that never touches a plaintext master-password file — the
+property this whole ADR trades *up* to. It is bounded by locked-by-default and by
+zeroize-on-lock, and it is strictly better than the prototype's standing
+plaintext master password at rest.
+
+**Not yet wired (next slice, needs the running GUI to verify):** the frontend
+callers of `bridge_set_session` / `bridge_lock` at the real unlock/lock/idle
+lifecycle points. Until they land, the agent is present and correct but always
+locked. This is called out because a green `cargo test` proves the Rust side, not
+the frontend integration — the latter is GUI-only and must be clicked.
