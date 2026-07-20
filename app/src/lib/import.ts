@@ -183,7 +183,7 @@ function parseBitwarden(text: string, now: number): ImportResult {
           password: l.password ?? '',
           urls: (l.uris ?? []).map((u) => u.uri ?? '').filter(Boolean),
           totp_secret: l.totp ? l.totp : null,
-          has_passkey: false,
+          passkeys: [],
         };
         entries.push({ ...base, content: { Login: login } });
         break;
@@ -254,7 +254,7 @@ function parseLastpass(rows: string[][], now: number): ImportResult {
         password: cell(iPass),
         urls: cell(iUrl) ? [cell(iUrl)] : [],
         totp_secret: cell(iTotp) || null,
-        has_passkey: false,
+        passkeys: [],
       };
       entries.push({ ...base, content: { Login: login } });
     }
@@ -289,7 +289,7 @@ function parseCsvLogins(rows: string[][], format: ImportFormat, now: number): Im
       password: cell(iPass),
       urls: cell(iUrl) ? [cell(iUrl)] : [],
       totp_secret: cell(iTotp) || null,
-      has_passkey: false,
+      passkeys: [],
     };
     entries.push({
       id: makeId(now),

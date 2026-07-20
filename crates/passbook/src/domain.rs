@@ -18,6 +18,35 @@ pub enum Category {
     Identity,
 }
 
+/// A synced passkey (WebAuthn credential) held by a [`Login`].
+///
+/// This is the *data model* for a multi-device ("synced") passkey the vault
+/// stores and syncs across a user's devices. The WebAuthn create/get ceremony
+/// that actually generates `private_key` needs a browser and lives in a
+/// separate slice — this value object only defines *where* that result lives.
+/// `private_key` is secret key material, so it zeroizes on drop exactly like
+/// [`Login::password`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PasskeyCredential {
+    /// The WebAuthn credential id (base64url, unpadded).
+    pub credential_id: String,
+    /// The relying-party id — the origin/domain this passkey authenticates to.
+    pub rp_id: String,
+    /// The user handle the relying party knows this credential by (base64url).
+    pub user_handle: String,
+    /// Unix epoch seconds at which the credential was created.
+    pub created_epoch: u64,
+    /// Opaque private-key material produced by the ceremony slice (e.g. a
+    /// PKCS#8/COSE key encoded base64url). Secret — zeroized on drop.
+    pub private_key: String,
+}
+
+impl Drop for PasskeyCredential {
+    fn drop(&mut self) {
+        self.private_key.zeroize();
+    }
+}
+
 /// A website/app login — the most common entry.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Login {
@@ -28,9 +57,12 @@ pub struct Login {
     /// TOTP shared secret (base32), if the account has 2FA.
     #[serde(default)]
     pub totp_secret: Option<String>,
-    /// Whether a passkey (WebAuthn credential) is stored for this login.
+    /// Synced passkeys stored for this login (a login may have a password
+    /// and/or one or more passkeys). `#[serde(default)]` so vaults sealed
+    /// before this field existed — which lack the key entirely — still open,
+    /// deserializing to an empty vec rather than failing.
     #[serde(default)]
-    pub has_passkey: bool,
+    pub passkeys: Vec<PasskeyCredential>,
 }
 
 impl Drop for Login {
@@ -39,6 +71,8 @@ impl Drop for Login {
         if let Some(s) = self.totp_secret.as_mut() {
             s.zeroize();
         }
+        // Each PasskeyCredential zeroizes its own private_key on drop; the
+        // `passkeys` vec is dropped automatically after this runs.
     }
 }
 
@@ -114,7 +148,7 @@ impl Entry {
                 password: password.into(),
                 urls: Vec::new(),
                 totp_secret: None,
-                has_passkey: false,
+                passkeys: Vec::new(),
             }),
         }
     }
@@ -187,5 +221,43 @@ mod tests {
             Category::SecureNote
         );
         assert_eq!(Entry::login("i", "t", "u", "p").category(), Category::Login);
+    }
+
+    #[test]
+    fn login_with_passkey_serde_roundtrips() {
+        let login = Login {
+            username: "octo".into(),
+            password: "s3cr3t".into(),
+            urls: Vec::new(),
+            totp_secret: None,
+            passkeys: vec![PasskeyCredential {
+                credential_id: "Y3JlZC1pZA".into(),
+                rp_id: "github.com".into(),
+                user_handle: "dXNlci1oYW5kbGU".into(),
+                created_epoch: 1_700_000_000,
+                private_key: "cHJpdmF0ZS1rZXktYnl0ZXM".into(),
+            }],
+        };
+
+        let json = serde_json::to_string(&login).unwrap();
+        let back: Login = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.passkeys.len(), 1);
+        let pk = &back.passkeys[0];
+        assert_eq!(pk.credential_id, "Y3JlZC1pZA");
+        assert_eq!(pk.rp_id, "github.com");
+        assert_eq!(pk.user_handle, "dXNlci1oYW5kbGU");
+        assert_eq!(pk.created_epoch, 1_700_000_000);
+        assert_eq!(pk.private_key, "cHJpdmF0ZS1rZXktYnl0ZXM");
+    }
+
+    #[test]
+    fn old_login_blob_without_passkeys_opens_to_empty_vec() {
+        // A vault sealed before passkeys existed has no `passkeys` key. The
+        // `#[serde(default)]` migration must let it deserialize to an empty vec
+        // rather than failing — never break opening an existing sealed vault.
+        let legacy = r#"{"username":"octo","password":"pw","urls":[],"totp_secret":null}"#;
+        let login: Login = serde_json::from_str(legacy).unwrap();
+        assert!(login.passkeys.is_empty());
     }
 }

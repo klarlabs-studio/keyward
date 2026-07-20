@@ -177,7 +177,7 @@ function strengthLabel(b: number): string {
             </div>
           </div>
 
-          <div v-if="login.has_passkey" class="field">
+          <div v-if="login.passkeys.length > 0" class="field">
             <div class="lbl">Passkey</div>
             <div class="val">
               <span style="color: var(--strong); font-weight: 600">✓ Passkey saved</span> · phishing-resistant

@@ -98,7 +98,7 @@ async function addItem(): Promise<void> {
       password: addPass.value,
       urls: [],
       totp_secret: null,
-      has_passkey: false,
+      passkeys: [],
     },
   });
   if (ok) {

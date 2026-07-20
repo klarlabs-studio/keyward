@@ -2,12 +2,26 @@
 // round-trip byte-for-byte through `seal_vault` / `open_vault`, so they mirror
 // the Rust `Entry` / `Content` derives exactly (Content is externally tagged).
 
+// Mirror of the Rust `PasskeyCredential` value object. A synced (multi-device)
+// passkey the vault stores for a login. `private_key` is opaque secret material
+// filled by the WebAuthn ceremony slice — this shape only defines where it goes.
+export interface PasskeyCredential {
+  credential_id: string;
+  rp_id: string;
+  user_handle: string;
+  created_epoch: number;
+  private_key: string;
+}
+
 export interface Login {
   username: string;
   password: string;
   urls: string[];
   totp_secret: string | null;
-  has_passkey: boolean;
+  // A login may have a password and/or one or more synced passkeys. Optional so
+  // vaults sealed before this field existed (which lack the key) still parse —
+  // mirrors `#[serde(default)]` on the Rust side.
+  passkeys: PasskeyCredential[];
 }
 
 export interface Card {
