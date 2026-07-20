@@ -22,6 +22,7 @@
 //! SECURITY NOTE: prototype crypto of the *shape* (Argon2id + XChaCha20-Poly1305
 //! + Secret Key). Needs a formal review before real use — see the threat model.
 
+pub mod bridge;
 pub mod domain;
 pub mod generate;
 pub mod ports;
