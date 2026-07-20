@@ -1,6 +1,6 @@
 # ADR-0007 — Desktop autofill bridge (extension ↔ app)
 
-> **Status:** Proposed · **Date:** July 2026
+> **Status:** Accepted (design; implementation pending) · **Date:** July 2026
 > **Context:** [#13](https://github.com/klarlabs-studio/keyward/issues/13) · **Builds on:** `keyward_passbook::bridge` (the shared protocol, extracted in #14)
 
 ## Context
