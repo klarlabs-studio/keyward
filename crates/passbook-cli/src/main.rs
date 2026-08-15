@@ -18,7 +18,8 @@
 //!   passbook generate [len] | generate -p [words]
 //!   passbook watchtower
 //!   passbook emergency-kit
-//!   passbook bridge              (Chrome native-messaging host)
+//!   passbook bridge              (Chrome native-messaging host, master-file unlock)
+//!   passbook connect             (Chrome native-messaging host, desktop-app session)
 
 use keyward_passbook::{
     generate_passphrase, generate_password, open, seal, totp, watchtower, Category, Clock, Content,
@@ -47,6 +48,7 @@ fn main() {
         "emergency-kit" => cmd_emergency_kit(),
         "generate" => cmd_generate(&args[1..]),
         "bridge" => cmd_bridge(),
+        "connect" => cmd_connect(),
         "" => {
             eprintln!("{USAGE}");
             exit(2);
@@ -69,7 +71,8 @@ const USAGE: &str = "usage: passbook <command> [args]\n\
     \x20 generate [len] | generate -p [words]             print a random password (or passphrase)\n\
     \x20 watchtower                                       security report (weak / reused / no-2fa)\n\
     \x20 emergency-kit                                    print the Secret Key (Emergency-Kit format)\n\
-    \x20 bridge                                           run the browser native-messaging host (stdio)";
+    \x20 connect                                          browser host via the desktop app (preferred)\n\
+    \x20 bridge                                           browser host, unlocked here from a master file";
 
 // ---------------------------------------------------------------------------
 // Config helpers (env + ~ expansion)
@@ -578,6 +581,67 @@ fn cmd_emergency_kit() {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Chrome native-messaging host that relays to the **desktop app's** agent
+/// socket, instead of unlocking a vault here from a master-password file.
+///
+/// This is the production path (#13, ADR-0007). `passbook bridge` opens the
+/// vault in this process, which means the master password has to reach it —
+/// today from a file on disk, which the bridge's own comment calls prototype-only
+/// and which is the weakest link across all three surfaces. `connect` holds no
+/// secret and no key: it moves length-prefixed frames between Chrome's stdio and
+/// a socket the running app owns, and the app decides whether it is unlocked.
+///
+/// It parses nothing, so a protocol change needs no change here.
+#[cfg(unix)]
+fn cmd_connect() {
+    use keyward_passbook::bridge::ipc;
+    use std::os::unix::net::UnixStream;
+
+    let path = match ipc::agent_socket_path(&runtime_dir()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: cannot resolve the agent socket path: {e}");
+            exit(1);
+        }
+    };
+    let sock = match UnixStream::connect(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            // The overwhelmingly common cause is that the app simply is not
+            // running, and "connection refused" on a path nobody recognises is a
+            // poor way to learn that.
+            eprintln!(
+                "error: no Keyward agent at {} ({e}).\nThe desktop app holds the unlocked session — start Keyward and try again.",
+                path.display()
+            );
+            exit(1);
+        }
+    };
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    if let Err(e) = ipc::run_connector(&sock, stdin.lock(), stdout.lock()) {
+        eprintln!("error: agent relay failed: {e}");
+        exit(1);
+    }
+}
+
+#[cfg(not(unix))]
+fn cmd_connect() {
+    eprintln!("error: `connect` needs a unix socket; not supported on this platform.");
+    exit(2);
+}
+
+/// Where the desktop app binds its agent socket. Must match
+/// `app/src-tauri/src/lib.rs::runtime_dir` exactly — the connector and the agent
+/// have to agree on the path or the extension silently finds nothing.
+#[cfg(unix)]
+fn runtime_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(std::env::temp_dir)
+}
 
 #[cfg(test)]
 mod tests {

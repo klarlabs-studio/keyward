@@ -1,7 +1,9 @@
 {
   "name": "com.klarlabs.keyward.passbook",
-  "description": "Keyward Passbook native bridge",
-  "path": "/ABSOLUTE/PATH/TO/keyward-passbook-bridge.sh",
+  "description": "Keyward Passbook native host (relays to the desktop app's agent session)",
+  "path": "/ABSOLUTE/PATH/TO/keyward-passbook-connect.sh",
   "type": "stdio",
-  "allowed_origins": ["chrome-extension://EXTENSION_ID_HERE/"]
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID_HERE/"
+  ]
 }
